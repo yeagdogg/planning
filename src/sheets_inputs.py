@@ -136,16 +136,16 @@ def build_lists(ctx: Ctx):
 # (D43) so they still cross-reference Methodology and the named ranges.
 
 
-def lr_headers(p: int) -> list[str]:
+def lr_headers() -> list[str]:
     return [
         "BU", "State", "Projected loss ratio", "LR basis",
         "Indication selected chg (s)", "Mod assumed in indication (M_ind)",
         "Current avg written mod (M_0)", "Current mod as-of date",
-        f"Projected mod at 12/31/{p} (M_1)", "Mod ~1 yr before as-of (M_prior, opt)",
-        f"Projected mod at 12/31/{p + 1} (M_2, opt)", "Adj plan EP (000s)",
-        f"Net trend for {p + 1} (opt)", "Other adj factor (A_other)",
+        "Projected mod, end of plan yr (M_1)", "Mod ~1 yr before as-of (M_prior, opt)",
+        "Projected mod, end plan yr+1 (M_2, opt)", "Adj plan EP (000s)",
+        "Net trend, plan yr+1 (opt)", "Other adj factor (A_other)",
         "Reason for other adj", "Apply mod adjustment?",
-        f"Net rate selection {p} (opt)", f"Net rate selection {p + 1} (opt)",
+        "Net rate selection, plan yr (opt)", "Net rate selection, plan yr+1 (opt)",
     ]
 
 
@@ -177,7 +177,7 @@ def build_inputs(ctx: Ctx):
     section(ws, L.LR_HDR - 1, "A",
             "tbl_LR — one row per BU x state (projected LR and mod inputs). "
             "Columns A:R are one contiguous paste block.")
-    header_row(ws, L.LR_HDR, 1, lr_headers(p),
+    header_row(ws, L.LR_HDR, 1, lr_headers(),
                widths=[9, 8, 11, 10, 12, 13, 12, 11, 12, 13, 12, 12, 11, 10, 18, 11, 12, 12])
     ws.row_dimensions[L.LR_HDR].height = 44
     put(ws, f"T{L.LR_HDR}", "Key", fnt=font(GREY_DARK, bold=True, size=9), fill=FILL_GREY)
@@ -421,6 +421,13 @@ def build_control(ctx: Ctx):
     link(ws, "F8", "=nr_TermMonths", fmt="0")
     label(ws, "E9", "Line of business")
     put(ws, "F9", ctx.lob.name, fnt=font(NAVY, bold=True))
+    # stale-year banner (D44): calculations always follow the plan year above;
+    # this flags that sample data / prose still describe the generated year
+    formula(ws, "B10",
+            f'=IF(nr_PlanYear={p},"","NOTE: plan year differs from the generated {p}. '
+            'All CALCULATIONS follow the plan year entered above; sample data and some '
+            'printed notes still describe the generated book. Regenerate for a clean copy.")')
+    ws["B10"].font = font("BF8F00", bold=True, size=9)
 
     ctx.define("nr_PlanYear", "Control", "$C$6", "Plan year P")
     ctx.define("nr_SelBU", "Control", "$C$7", "Selected business unit")

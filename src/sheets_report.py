@@ -60,7 +60,7 @@ def build_flow_dashboard(ctx: Ctx):
     ws = ctx.wb["Flow Dashboard"]
     p = ctx.p
     title(ws, "B2", "Flow Dashboard — rate and price flow through the plan",
-          f"Selected BU x state. Plan year CY {p} is shaded in the index chart. All series "
+          "Selected BU x state. The plan year is shaded in the index chart. All series "
           "trace to the Rate Engine and Mod Engine sheets via the chart-data block below.")
     link(ws, "J2", "=nr_SelKey", bold=True)
 
@@ -114,7 +114,7 @@ def build_flow_dashboard(ctx: Ctx):
     lines.y_axis.title = "Rate index"
     band.set_categories(cats)
     band += lines
-    _chart(band, f"Cumulative written vs earned rate index (CY {p} shaded)", height=8.5, width=16)
+    _chart(band, "Cumulative written vs earned rate index (plan year shaded)", height=8.5, width=16)
     ws.add_chart(band, "B4")
 
     # (c) written vs earned mod path
@@ -144,7 +144,7 @@ def build_flow_dashboard(ctx: Ctx):
     # ---- (e) quarterly table + (b) YoY chart ----
     qt = 48
     section(ws, qt - 1, "B",
-            f"Quarterly earned rate and price change, and unearned runway — CY {p} and CY {p + 1}")
+            "Quarterly earned rate and price change, and unearned runway — plan year and next")
     header_row(ws, qt, 2, ["Quarter", "Earned rate level (E_Q)", "Prior-year E_Q",
                            "YoY earned rate chg", "Written level at qtr end",
                            "Unearned runway", "Earned price level (P_Q)", "Prior-year P_Q",
@@ -197,7 +197,7 @@ def build_flow_dashboard(ctx: Ctx):
     yoy.series[0].graphicalProperties.solidFill = STEEL
     yoy.series[1].graphicalProperties.solidFill = NAVY
     yoy.y_axis.number_format = "0.0%"
-    _chart(yoy, f"YoY earned RATE vs PRICE change by quarter — CY {p} and CY {p + 1}",
+    _chart(yoy, "YoY earned RATE vs PRICE change by quarter — plan year and next",
            height=8.5, width=16, y_title="YoY earned change")
     ws.add_chart(yoy, "K4")
 
@@ -434,9 +434,13 @@ def build_checks(ctx: Ctx):
         if kind == "IDENTITY":
             formula(ws, f"D{r}", "=me_identity", fmt=FMT_MOD, align=ALIGN_C)
             formula(ws, f"E{r}", "=nr_MEarned_P", fmt=FMT_MOD, align=ALIGN_C)
-            put(ws, f"F{r}", 0.0002, fnt=font(GREY_DARK, size=9), align=ALIGN_C)
+            # the monthly-discretization residual scales with the mod path's
+            # daily slope; 0.0002 is the floor from §3.3.5 (D44)
+            formula(ws, f"F{r}", "=MAX(0.0002,ABS('Mod Engine'!$H$7)*2)",
+                    fmt="0.00000", align=ALIGN_C)
+            ws[f"F{r}"].font = font(GREY_DARK, size=9)
             formula(ws, f"G{r}",
-                    '=IF(NOT(me_identity_ok),"N/A",IF(ABS(nr_MEarned_P-me_identity)<=0.0002,'
+                    f'=IF(NOT(me_identity_ok),"N/A",IF(ABS(nr_MEarned_P-me_identity)<=$F{r},'
                     '"PASS","FAIL"))', align=ALIGN_C, bold=True)
         elif kind == "ATTR":
             formula(ws, f"D{r}", "=N(att_actlr)", fmt=FMT_PCT, align=ALIGN_C)

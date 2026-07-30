@@ -635,6 +635,30 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
               str(wb["Checks"]["C3"].value))
     run("plan year change", {("Control", "C6"): p2}, a10)
 
+    # 10b. plan year set BACK a year (the "reproduce last year" test, D44):
+    # values AND the live year labels must both follow the Control input
+    pm1 = p - 1
+    m_pm1 = engine.run_bridge(pm1, base_combo, "monthly")
+
+    def a10b(wb):
+        check(f"[plan year {pm1}] CY LR ties oracle computed for {pm1}",
+              approx(nval(wb, "nr_CYLR_P"), m_pm1.cy_lr_p, 1e-9),
+              f"wb={nval(wb, 'nr_CYLR_P')} oracle={m_pm1.cy_lr_p}")
+        check(f"[plan year {pm1}] E_CY ties oracle",
+              approx(nval(wb, "nr_ECY_P"), m_pm1.e_cy[pm1], 1e-9))
+        ss_hdr = wb["State Summary"].cell(row=7, column=21).value
+        check(f"[plan year {pm1}] State Summary header relabels live",
+              ss_hdr == f"CY {pm1} plan LR", str(ss_hdr))
+        pf_hdr = wb["Portfolio"].cell(row=L.PF_HDR, column=7).value
+        check(f"[plan year {pm1}] Portfolio header relabels live",
+              pf_hdr == f"CY {pm1} plan LR", str(pf_hdr))
+        banner = wb["Control"]["B10"].value
+        check(f"[plan year {pm1}] Control stale-year banner appears",
+              isinstance(banner, str) and banner.startswith("NOTE"), str(banner)[:60])
+        check(f"[plan year {pm1}] Checks still ALL PASS",
+              wb["Checks"]["C3"].value == "ALL CHECKS PASS")
+    run(f"plan year back to {pm1}", {("Control", "C6"): pm1}, a10b)
+
 
 # ---------------------------------------------------------------------------
 

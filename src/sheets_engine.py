@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 from .build_workbook import Ctx, Layout as L
 from .xlstyle import (
-    ALIGN_C, BORDER_THIN, F_HEADER, F_SMALL_IT, FILL_GREY, FILL_NAVY, FILL_PANEL,
+    ALIGN_C, BORDER_THIN, F_HEADER, F_LABEL, F_SMALL_IT, FILL_GREY, FILL_NAVY, FILL_PANEL,
     FMT_DATE, FMT_GEN, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT, GREY_DARK, STEEL,
     col, font, formula, header_row, label, link, note, presentation_setup,
     print_setup, put, section, set_widths, title,
@@ -213,21 +213,21 @@ def build_rate_engine(ctx: Ctx):
         ("Indication rate level, fully earned (CRL_ind)",
          '=EXP(SUMPRODUCT((rl_key=nr_SelKey)*(rl_cons="Y")*rl_ln1p))', FMT_IDX,
          "nr_CRLind", "Cumulative rate level in the indication: product over considered rows"),
-        (f"CY {p - 1} earned rate level  E_CY({p - 1})", None, FMT_IDX,
+        ('="CY "&(nr_PlanYear-1)&" earned rate level  E_CY(P-1)"', None, FMT_IDX,
          "nr_ECY_Pm1", "Calendar-year earned rate index, plan year minus 1"),
-        (f"CY {p} earned rate level  E_CY({p})", None, FMT_IDX,
+        ('="CY "&nr_PlanYear&" earned rate level  E_CY(P)"', None, FMT_IDX,
          "nr_ECY_P", "Calendar-year earned rate index, plan year"),
-        (f"CY {p + 1} earned rate level  E_CY({p + 1})", None, FMT_IDX,
+        ('="CY "&(nr_PlanYear+1)&" earned rate level  E_CY(P+1)"', None, FMT_IDX,
          "nr_ECY_P1", "Calendar-year earned rate index, plan year + 1"),
-        (f"Rate earn-in factor  A_rate({p}) = CRL / E_CY", "=nr_CRLind/nr_ECY_P", FMT_IDX,
+        ('="Rate earn-in factor  A_rate("&nr_PlanYear&") = CRL / E_CY"', "=nr_CRLind/nr_ECY_P", FMT_IDX,
          "nr_Arate_P", "Rate adjustment factor for the plan year"),
-        (f"Rate earn-in factor  A_rate({p + 1})", "=nr_CRLind/nr_ECY_P1", FMT_IDX,
+        ('="Rate earn-in factor  A_rate("&(nr_PlanYear+1)&")"', "=nr_CRLind/nr_ECY_P1", FMT_IDX,
          "nr_Arate_P1", "Rate adjustment factor for plan year + 1"),
         ("CY earned rate chg vs indication", "=nr_ECY_P/nr_CRLind-1", "+0.0%;-0.0%;0.0%",
          "nr_EChgVsInd", "E_CY(P)/CRL_ind - 1"),
-        (f"Earned rate chg {p - 1}->{p}", "=nr_ECY_P/nr_ECY_Pm1-1", "+0.0%;-0.0%;0.0%",
+        ('="Earned rate chg "&(nr_PlanYear-1)&" -> "&nr_PlanYear', "=nr_ECY_P/nr_ECY_Pm1-1", "+0.0%;-0.0%;0.0%",
          "nr_YoY_P", "Year-over-year earned rate change into P"),
-        (f"Earned rate chg {p}->{p + 1} (carryover + new)", "=nr_ECY_P1/nr_ECY_P-1",
+        ('="Earned rate chg "&nr_PlanYear&" -> "&(nr_PlanYear+1)&" (carryover + new)"', "=nr_ECY_P1/nr_ECY_P-1",
          "+0.0%;-0.0%;0.0%", "nr_YoY_P1", "Year-over-year earned rate change into P+1"),
     ]
     cf, cl = L.RE_COH_FIRST, L.RE_COH_LAST
@@ -240,7 +240,11 @@ def build_rate_engine(ctx: Ctx):
     }
     for i, (lbl, f, fmt, name, desc) in enumerate(hdr):
         r = 5 + i
-        label(ws, f"A{r}", lbl)
+        if lbl.startswith("="):
+            formula(ws, f"A{r}", lbl)
+            ws[f"A{r}"].font = F_LABEL
+        else:
+            label(ws, f"A{r}", lbl)
         formula(ws, f"C{r}", f if f else ecy[name], fmt=fmt, border=BORDER_THIN,
                 bold=name in ("nr_ECY_P", "nr_Arate_P"))
         ctx.define(name, "Rate Engine", f"$C${r}", desc)
@@ -425,8 +429,8 @@ def build_mod_engine(ctx: Ctx):
         ("A0: backward (as-of - 12 mo)", "=EDATE(nr_M0Asof,-12)+1",
          "=IF(N(nr_MPrior)=0,$G$7-($G$8-$G$7)/($F$8-$F$7)*($F$7-$F$6),nr_MPrior)"),
         ("A1: M_0 as-of", "=nr_M0Asof+1", "=nr_M0"),
-        (f"A2: M_1 at 12/31/{p}", "=DATE(nr_PlanYear,12,31)+1", "=nr_M1"),
-        (f"A3: M_2 at 12/31/{p + 1}", "=DATE(nr_PlanYear+1,12,31)+1",
+        ("A2: M_1 at plan-yr end", "=DATE(nr_PlanYear,12,31)+1", "=nr_M1"),
+        ("A3: M_2 at plan-yr+1 end", "=DATE(nr_PlanYear+1,12,31)+1",
          "=IF(N(nr_M2)=0,nr_M1,nr_M2)"),
     ]
     for i, (lbl, fx, fm) in enumerate(anchor_rows):
@@ -447,9 +451,9 @@ def build_mod_engine(ctx: Ctx):
     hdr = [("Mod assumed in indication (M_ind)", "=nr_MInd", FMT_MOD),
            ("Current avg written mod (M_0)", "=nr_M0", FMT_MOD),
            ("Current mod as-of date", "=nr_M0Asof", FMT_DATE),
-           (f"Projected mod at 12/31/{p} (M_1)", "=nr_M1", FMT_MOD),
+           ("Projected mod, end of plan yr (M_1)", "=nr_M1", FMT_MOD),
            ("Mod ~1 yr before as-of (M_prior, opt)", "=nr_MPrior", FMT_MOD),
-           (f"Projected mod at 12/31/{p + 1} (M_2, opt)", "=nr_M2", FMT_MOD)]
+           ("Projected mod, end plan yr+1 (M_2, opt)", "=nr_M2", FMT_MOD)]
     section(ws, 4, "A", "Inputs (from tbl_LR via Bridge)")
     for i, (lbl, f, fmt) in enumerate(hdr):
         r = 5 + i
@@ -457,18 +461,19 @@ def build_mod_engine(ctx: Ctx):
         link(ws, f"C{r}", f, fmt=fmt, border=BORDER_THIN)
 
     out = [
-        (f"Earned mod CY {p - 1}", "F", FMT_MOD, "nr_MEarned_Pm1",
-         f"Exposure-weighted CY {p - 1} earned schedule mod"),
-        (f"Earned mod CY {p}", "G", FMT_MOD, "nr_MEarned_P",
+        ('="Earned mod CY "&(nr_PlanYear-1)', "F", FMT_MOD, "nr_MEarned_Pm1",
+         "Exposure-weighted CY P-1 earned schedule mod"),
+        ('="Earned mod CY "&nr_PlanYear', "G", FMT_MOD, "nr_MEarned_P",
          "Exposure-weighted CY P earned schedule mod"),
-        (f"Earned mod CY {p + 1}", "H", FMT_MOD, "nr_MEarned_P1",
+        ('="Earned mod CY "&(nr_PlanYear+1)', "H", FMT_MOD, "nr_MEarned_P1",
          "Exposure-weighted CY P+1 earned schedule mod"),
     ]
     section(ws, 4, "J", "Earned mod and adjustment factors")
     cf, cl = L.ME_COH_FIRST, L.ME_COH_LAST
     for i, (lbl, ecL, fmt, name, desc) in enumerate(out):
         r = 5 + i
-        label(ws, f"J{r}", lbl)
+        formula(ws, f"J{r}", lbl)
+        ws[f"J{r}"].font = F_LABEL
         formula(ws, f"L{r}",
                 f"=SUMPRODUCT($D${cf}:$D${cl},${ecL}${cf}:${ecL}${cl},$E${cf}:$E${cl})"
                 f"/SUMPRODUCT($D${cf}:$D${cl},${ecL}${cf}:${ecL}${cl})",
