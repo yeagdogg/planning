@@ -514,6 +514,122 @@ def build_state_summary(ctx: Ctx):
     for i, text in enumerate(notes):
         note(ws, f"A{tot + 2 + i}", text)
 
+    # ------------------------------------------------------------------
+    # Documentation panel (D41): this is most readers' first stop, so the
+    # calculations are explained in place — plain language for actuaries
+    # and product managers, with a LIVE worked example driven by the
+    # Control selection (it stays correct after sample data is replaced).
+    # ------------------------------------------------------------------
+    d = tot + 2 + len(notes) + 2
+
+    def _doc_head(row_, text):
+        section(ws, row_, "A", text)
+        return row_ + 1
+
+    def _doc_line(row_, term, definition):
+        put(ws, f"A{row_}", term, fnt=font(NAVY, bold=True, size=10))
+        put(ws, f"E{row_}", definition, fnt=font(GREY_DARK, size=10))
+        return row_ + 1
+
+    d = _doc_head(d, "How this exhibit is calculated")
+    put(ws, f"A{d}",
+        "Every figure below the headers is calculated, never typed. Each state row is the "
+        "adjusted-EP-weighted combination of its BU x state calculations for the business "
+        "units in view; pick any single combo on the Control sheet to walk the full audit "
+        "trail (Rate Engine -> Mod Engine -> Bridge).", fnt=font(GREY_DARK, size=10))
+    d += 2
+
+    put(ws, f"A{d}", f"THE BRIDGE IN ONE LINE      CY {p} plan LR  =  Projected LR (current "
+                     "level)  x  A_rate  x  A_mod  x  A_other",
+        fnt=font(NAVY, bold=True, size=11), fill=FILL_PANEL)
+    for cc in range(2, 26):
+        put(ws, ws.cell(row=d, column=cc).coordinate, None, fill=FILL_PANEL)
+    d += 1
+    put(ws, f"A{d}", f"CY {p + 1} (indicative) additionally applies one year of net trend and "
+                     f"uses {p + 1}'s earn-in factors.", fnt=F_SMALL_IT)
+    d += 2
+
+    d = _doc_head(d, "Column guide")
+    guide = [
+        ("Adj plan EP", "Adjusted plan earned premium (000s) — the weight used to combine "
+                        "business units and to build the TOTAL row."),
+        ("M_ind  /  M_0  /  M_1", f"Average schedule mod assumed in the indication; the current "
+                                  f"written average; the projected average at 12/31/{p}. Drift "
+                                  "in the average mod is a price change that earns in exactly "
+                                  "like rate."),
+        ("Rate change history", "Effective changes (filed % x achievement for planned rows) in "
+                                "date order for the business unit in view."),
+        ("CRL_ind", "The cumulative rate level the indication assumed FULLY EARNED — the "
+                    "product of all rate changes it considered. This is the 'assumed rate in "
+                    "the indication'."),
+        (f"E_CY({p})", f"The rate level calendar-year {p} ACTUALLY earns. Policies written "
+                       f"last year carry older rates into early {p}, and new actions earn in "
+                       "only gradually as the book turns over — so the earned level rarely "
+                       "matches the indication's."),
+        ("A_rate", f"CRL_ind / E_CY({p}). Above 1.000: {p} earns less rate than the "
+                   "indication assumed, pushing the plan LR up. Below 1.000: extra rate the "
+                   "indication never counted earns in, pushing it down."),
+        ("Earned mod  /  A_mod", f"The average schedule mod {p} earns, and M_ind / that value "
+                                 "— the identical earn-in logic applied to the price (mod) "
+                                 "lever."),
+        ("LR current", "The projected LR restated to current rate level (multiplied by (1+s) "
+                       "when the indication quoted it at the proposed level)."),
+        (f"CY {p} plan LR", "LR current  x  A_rate  x  A_mod  x  A_other."),
+        (f"Net trend  /  CY {p + 1}", f"The {p + 1} view holds the indication fixed, applies "
+                                      "the net loss-over-premium trend once, and swaps in "
+                                      f"{p + 1}'s earn-in factors. Indicative only — it "
+                                      "assumes no new indication."),
+        ("Net sel", "States planned on a NET RATE SELECTION: a combined rate + price "
+                    f"year-over-year target from 1/1/{p} replaces the planned program for "
+                    "business written from that date. The A_rate column then carries the "
+                    "combined factor and A_mod shows 1.000."),
+    ]
+    for term, definition in guide:
+        d = _doc_line(d, term, definition)
+    d += 1
+
+    section(ws, d, "A", "Worked example — live from the Control selection")
+    link(ws, f"E{d}", '="Currently showing:  "&nr_SelKey', bold=True)
+    d += 1
+    example = [
+        ("1.  Projected loss ratio (indication)", "=nr_LRproj", FMT_PCT,
+         '="the indication\'s loss pick — already centered on CY "&nr_PlanYear&'
+         '" losses, so no additional loss trend applies"'),
+        ("2.  x  basis normalization",
+         '=IF(nr_Basis="proposed",1+nr_SelS,1)', FMT_IDX,
+         '=IF(nr_Basis="proposed","input LR was at proposed level: x (1+s)",'
+         '"input LR already at current level: x 1.000")'),
+        ("3.  x  rate earn-in  A_rate", "=nr_Arate_P", FMT_IDX,
+         '=IF(nr_NetMode,"combined rate + price factor A_net = CRL_ind "&TEXT(nr_CRLind,'
+         '"0.0000")&" / net earned "&TEXT(nr_ECY_P,"0.0000"),"CRL_ind "&TEXT(nr_CRLind,'
+         '"0.0000")&" / earned "&TEXT(nr_ECY_P,"0.0000")&" — carryover plus partly-earned '
+         'actions")'),
+        ("4.  x  schedule-mod drift  A_mod", "=nr_Amod_P", FMT_IDX,
+         '=IF(nr_NetMode,"1.000 — merged into the net factor above",'
+         '"M_ind "&TEXT(nr_MInd,"0.000")&" / earned mod "&TEXT(nr_MEarned_P,"0.000"))'),
+        ("5.  x  other adjustment  A_other", "=nr_AOther", FMT_IDX,
+         '=IF(nr_AOtherLbl="","no manual adjustment",nr_AOtherLbl)'),
+        (f"RESULT:  CY {p} plan loss ratio", "=nr_CYLR_P", FMT_PCT,
+         '="the value in this state\'s CY "&nr_PlanYear&" plan LR column when its BU is in view"'),
+        (f"CY {p + 1} plan LR (indicative)", "=nr_CYLR_P1", FMT_PCT,
+         '="x (1 + net trend "&TEXT(nr_Trend,"0.0%")&") with CY "&(nr_PlanYear+1)&'
+         '"\'s earn-in factors"'),
+    ]
+    for i, (lbl, val_f, fmt, expl_f) in enumerate(example):
+        r = d + i
+        bold_ = lbl.startswith("RESULT")
+        put(ws, f"A{r}", lbl, fnt=font(NAVY, bold=bold_, size=10),
+            fill=FILL_PANEL if bold_ else None)
+        link(ws, f"E{r}", val_f, fmt=fmt, align=ALIGN_C, bold=bold_,
+             border=BORDER_THIN)
+        link(ws, f"G{r}", expl_f)
+        ws[f"G{r}"].font = font(GREY_DARK, size=10, italic=True)
+    d += len(example) + 1
+    put(ws, f"A{d}",
+        "Full derivations, conventions, and every named range: see the Methodology sheet. "
+        "The engines behind every figure are visible on Rate Engine and Mod Engine.",
+        fnt=F_SMALL_IT)
+
     ws.column_dimensions["AA"].width = 6
     ws.column_dimensions["AB"].width = 10
     ws.column_dimensions["AC"].width = 6
