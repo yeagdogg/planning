@@ -227,6 +227,18 @@ def jump(ws, addr, target: str, text: str, size=10, bold=False):
     return c
 
 
+def nav_bar(ws, row: int, first_col: int, sheets, label_text="Go to:", size=9, step=1):
+    """One-row navigation bar: a small label followed by one jump per sheet.
+    ``step=2`` skips every other column so link text can overflow on
+    narrow-column sheets instead of clipping against its neighbor."""
+    if label_text:
+        put(ws, f"{get_column_letter(first_col)}{row}", label_text, fnt=F_SMALL)
+        first_col += step
+    for i, sheet in enumerate(sheets):
+        jump(ws, f"{get_column_letter(first_col + i * step)}{row}",
+             f"{quote_sheet(sheet)}!A1", sheet, size=size)
+
+
 def col(idx: int) -> str:
     return get_column_letter(idx)
 

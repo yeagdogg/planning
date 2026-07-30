@@ -14,8 +14,8 @@ from .xlstyle import (
     F_SMALL_IT, FAIL_RED, FILL_AMBER, FILL_GREEN, FILL_GREY, FILL_NAVY, FILL_PANEL,
     FILL_RED, FILL_REQ, FMT_DATE, FMT_GEN, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT,
     GREY_DARK, LINK_GREEN, NAVY, PASS_GREEN, STEEL, col, font, formula, header_row,
-    jump, label, link, note, presentation_setup, print_setup, prose, put, section,
-    set_widths, text_height, title,
+    jump, label, link, nav_bar, note, presentation_setup, print_setup, prose, put,
+    quote_sheet as _q, section, set_widths, text_height, title,
 )
 
 RE = "'Rate Engine'"
@@ -319,6 +319,7 @@ def build_checks(ctx: Ctx):
           "Live formulas versus structure, identities, and oracle constants baked at build "
           "time. FAIL = investigate before using results. WARN = review advisory.")
     label(ws, "A3", "Overall status", bold=True)
+    nav_bar(ws, 3, 9, ["Control", "Inputs", "Read Me"], step=2)
 
     rows: list[tuple] = []  # (category, description, expected_f, actual_f, tol, kind)
     A = rows.append
@@ -663,16 +664,84 @@ def build_methodology(ctx: Ctx):
          "index, changes after it never earn and affect only CRL_ind if flagged considered.",
          ]),
     ]
+    # widths set up-front so prose() reads the real host-column width
+    set_widths(ws, {"A": 2, "B": 30, "C": 30, "D": 90})
+
+    # ---- sections (rows 4..17 are reserved for the Contents block) ----
+    toc: list[tuple[str, int]] = []
+    r = 19
     for heading, paras in blocks:
+        toc.append((heading, r))
         section(ws, r, "B", heading)
         r += 1
         for t in paras:
-            put(ws, f"B{r}", t, fnt=font(GREY_DARK, size=10), align=ALIGN_WRAP)
-            ws.row_dimensions[r].height = max(26.0, text_height(t, 30, size=10))
+            prose(ws, f"D{r}", t, size=10)
             r += 1
         r += 1
 
-    section(ws, r, "B", "10. Named-range dictionary (every defined name in this workbook)")
+    # ---- 9b. Engine column dictionary (the Rate Engine cohort block) ----
+    toc.append(("9b. Rate Engine column dictionary", r))
+    section(ws, r, "B", "9b. Rate Engine column dictionary — the cohort block, column by column")
+    r += 1
+    prose(ws, f"D{r}",
+          "The 48-row cohort block appears on the Rate Engine and (same formulas) in every "
+          "hidden _calc combo block. Each row is one monthly writing cohort, Jan (P-2) "
+          "through Dec (P+1).", size=10)
+    r += 1
+    coldict = [
+        ("A", "#", "Cohort number, 1..48."),
+        ("B-D", "Written month / Month end / Days",
+         "The month this cohort of policies is written, plus calendar helpers for the "
+         "mid-month split."),
+        ("E", "Mo#", "Calendar month number — drives the seasonality weight lookup."),
+        ("F", "Mid-month", "The serial date at the middle of the writing month; the cohort "
+                           "writes there and its mod is sampled there."),
+        ("G", "Abs mo#", "Absolute month index (year x 12 + month - 1); the earning matrix "
+                         "is keyed on it."),
+        ("H", "Weight w", "Written-exposure weight: 1.00 under uniform writings, or the "
+                          "state's normalized seasonality weight."),
+        ("I", "Index before mo (W_pre)", "Cumulative rate index from changes effective "
+                                         "strictly before the month."),
+        ("J", "Index at mo end (W_post)", "Cumulative rate index including changes through "
+                                          "month end."),
+        ("K", "# chgs in mo", "Count of this combo's rate changes effective inside the month."),
+        ("L", "Days after 1st chg", "Days in the month on/after the first in-month change "
+                                    "date."),
+        ("M", "Split p", "Day-weighted share of the month's writings at the post-change "
+                         "level: p = L / days in month."),
+        ("N", "Written rate index (W)", "The cohort's blended written index: "
+                                        "(1 - p) x W_pre + p x W_post."),
+        ("O", "Written mod (M_w)", "The written-mod path sampled at the cohort's mid-month "
+                                   "(computed on the Mod Engine)."),
+        ("P-R", "Earned in P-1 / P / P+1 (ec)",
+         "The share of the cohort's premium each calendar year earns: ec = C(end) - "
+         "C(start - 1) with C(o) = MIN(1, MAX(0, (o + 0.5) / T))."),
+        ("S", "Hist net price (q)", "W x M_w / M_ind — the cohort's combined net price as "
+                                    "modeled (used under a net rate selection)."),
+        ("T", "Net path (Q)", "Equals q before 1/1/P; from 1/1/P each cohort renews at "
+                              "Q(k - 12) x (1 + net selection)."),
+        ("U", "Index in force", "What the aggregates actually read: the net path Q under a "
+                                "net selection, the written index W otherwise."),
+        ("rows 66-73", "Aggregate strip",
+         "Per earned month: numerator SUM w-e-W, denominator SUM w-e, earned index E_m, "
+         "min/max W bounds with a violation check, earned mod by month, and the mod "
+         "numerator behind the price series."),
+    ]
+    for letter, hdr_txt, meaning in coldict:
+        put(ws, f"B{r}", letter, fnt=font(NAVY, bold=True, size=9))
+        put(ws, f"C{r}", hdr_txt, fnt=font(GREY_DARK, bold=True, size=9), align=ALIGN_WRAP)
+        prose(ws, f"D{r}", meaning, size=9)
+        r += 1
+    r += 1
+
+    # ---- 10. named ranges, demoted behind a technical-appendix divider ----
+    toc.append(("10. Technical appendix — named ranges", r))
+    section(ws, r, "B", "10. Technical appendix — named-range dictionary (auto-generated)")
+    r += 1
+    prose(ws, f"D{r}",
+          "Every defined name in the workbook, for auditors and formula readers. Nothing "
+          "below is needed to USE the workbook — the exhibits and the sections above are "
+          "self-contained.", size=9)
     r += 1
     for j, h in enumerate(["Name", "Refers to", "Description"]):
         put(ws, f"{col(2 + j)}{r}", h, fnt=F_HEADER, fill=FILL_NAVY)
@@ -682,7 +751,11 @@ def build_methodology(ctx: Ctx):
         put(ws, f"C{r}", ref, fnt=font(GREY_DARK, size=9))
         put(ws, f"D{r}", desc or "", fnt=font(GREY_DARK, size=9))
         r += 1
-    set_widths(ws, {"A": 2, "B": 30, "C": 30, "D": 90})
+
+    # ---- Contents (written last, into the reserved rows) ----
+    section(ws, 4, "B", "Contents")
+    for i, (heading, row_) in enumerate(toc):
+        jump(ws, f"B{5 + i}", f"Methodology!B{row_}", heading, size=10)
     presentation_setup(ws, gridlines_off=True, tab_color="D9D9D9")
     print_setup(ws)
 
@@ -692,60 +765,166 @@ def build_methodology(ctx: Ctx):
 # ---------------------------------------------------------------------------
 
 
+READ_ME_GUIDE = [
+    ("Control", "Pick the plan year, BU and state; global toggles; the six headline KPIs."),
+    ("Inputs", "Enter or paste the book: loss ratios and mods (tbl_LR), rate changes, "
+               "seasonality, policy term."),
+    ("Portfolio", "Every BU x state combo at once — heatmapped, with EP-weighted totals."),
+    ("State Summary", "One row per state with a BU filter ('All' = EP-weighted) — the "
+                      "leadership exhibit."),
+    ("Bridge", "The selected combo's answer: projected LR -> CY plan LR, factor by factor."),
+    ("Rate Engine", "Audit trail: 48 writing cohorts x earning matrix behind the earned "
+                    "rate level."),
+    ("Mod Engine", "Audit trail: the written schedule-mod path and the earned mod."),
+    ("Flow Dashboard", "When rate and price actually earn in — monthly flow charts and the "
+                       "runway table."),
+    ("Scenarios", "Four what-if lever sets side by side against Base."),
+    ("Solver", "Inverse planning: the required change for a target CY LR, and timing "
+               "sensitivity."),
+    ("Attribution", "After the year closes: decompose actual vs plan into rate, timing, "
+                    "mod, and loss."),
+    ("Checks", "The trust panel — must show ALL CHECKS PASS."),
+    ("Methodology", "The full writeup: formulas as implemented, conventions, named ranges."),
+]
+
+# Canonical glossary (D43). The State Summary column guide retired here; every
+# symbol used on any exhibit gets its one plain-English home.
+READ_ME_GLOSSARY = [
+    ("Indication rate level (CRL_ind)",
+     "The cumulative rate level the indication assumed FULLY EARNED — the product of all "
+     "rate changes flagged 'in indication'. This is the 'assumed rate in the indication'."),
+    ("Earned rate level (E_CY)",
+     "The rate level the plan calendar year ACTUALLY earns. Policies written last year carry "
+     "older rates into its early months, and new actions earn in only gradually as the book "
+     "turns over — so the earned level rarely matches the indication's."),
+    ("Rate earn-in (A_rate)",
+     "Indication rate level / earned rate level. Above 1.000: the plan year earns less rate "
+     "than the indication assumed, pushing the plan LR up. Below 1.000: extra rate the "
+     "indication never counted earns in, pushing it down."),
+    ("Schedule mods (M_ind / M_0 / M_1)",
+     "The average schedule mod assumed in the indication; the current written average; the "
+     "projected average at plan-year end. Optional anchors: M_prior (~a year before the "
+     "as-of) and M_2 (end of the following year). Drift in the average mod is a price "
+     "change that earns in exactly like rate."),
+    ("Earned mod / mod drift (A_mod)",
+     "The average schedule mod the plan year's premium actually carries, and "
+     "A_mod = M_ind / earned mod — the identical earn-in logic applied to the price lever."),
+    ("Written vs earned",
+     "'Written' = the level at which new policies go on the books each month. 'Earned' = "
+     "what the calendar year's premium actually carries, once each policy's term spreads it "
+     "across months. Every factor in this workbook is an earned-basis answer."),
+    ("Achievement %",
+     "For PLANNED rate changes only: the share of the filed change you expect to realize "
+     "(80% of a +5% filing = +4.0% effective). Once a change is TAKEN, enter the achieved "
+     "rate directly in Filed % — achievement is ignored on taken rows."),
+    ("In indication? (Y/N)",
+     "Marks the rate changes the indication already counted in its projected loss ratio. "
+     "They form CRL_ind; changes not counted there earn in as extra rate."),
+    ("Carryover",
+     "E_CY(P+1) / E_CY(P) - 1: the earned rate change already locked in for the following "
+     "year by this year's actions, before any new ones."),
+    ("Unearned runway",
+     "Written level / earned level - 1 at a point in time: rate already on the books but "
+     "not yet visible in earned premium — it will earn in over the coming months."),
+    ("Net rate selection (optional)",
+     "Instead of an explicit program, a combo can target a combined rate + price "
+     "year-over-year change from 1/1 of the plan year; history still earns as modeled, and "
+     "planned rows plus the mod projection are superseded from that date (Methodology 6b). "
+     "The bridge then shows one combined factor with mod drift = 1.000."),
+    ("Adjusted plan EP",
+     "Adjusted plan earned premium (000s) — the weight behind every EP-weighted total on "
+     "Portfolio and State Summary."),
+    ("Other adjustment (A_other)",
+     "A manual factor for anything outside rate and mod earn-in; requires a written reason "
+     "when it differs from 1.000."),
+]
+
+
 def build_readme(ctx: Ctx):
     ws = ctx.wb["Read Me"]
     p = ctx.p
+    PROSE_W = 100  # column C hosts all paragraphs
     title(ws, "B2", f"Calendar-Year Plan Loss Ratio Workbook — {ctx.lob.name}",
           f"Plan year {p}  |  one workbook per LOB; rows are BU x state  |  version "
           f"{ctx.cfg.version}  |  built "
           f"{dt.date.today():%m/%d/%Y} by src/build_workbook.py (generator v{GENERATOR_VERSION})"
           f"  |  classic formula mode (Excel-2007-era functions only)")
+
+    def para(row, text, size=10, bold=False, color=None):
+        prose(ws, f"C{row}", text, size=size, bold=bold, color=color, width=PROSE_W)
+
     r = 5
-    section(ws, r, "B", "Purpose")
+    section(ws, r, "B", "Where to go")
     r += 1
-    put(ws, f"B{r}",
-        "Converts a projected loss ratio from a rate level indication (policy-year basis, "
-        "rate fully earned) into a calendar-year plan loss ratio at the plan year's average "
-        "earned rate level, for every business unit and line of business, with dashboards for "
-        "rate and price flow through the plan year and the following year. Method: standard "
-        "on-leveling (Werner & Modlin, Basic Ratemaking, Ch. 5) via a monthly written-index x "
-        "earning-matrix engine, extended with a schedule-mod adjustment. See Methodology for "
-        "the full writeup.", fnt=font(GREY_DARK, size=10), align=ALIGN_WRAP)
-    ws.row_dimensions[r].height = 66
+    for name, desc in READ_ME_GUIDE:
+        jump(ws, f"B{r}", f"{_q(name)}!A1", name, bold=True)
+        para(r, desc)
+        r += 1
+    put(ws, f"B{r}", "_lists / _calc / _oracle", fnt=font(GREY_DARK, size=9))
+    para(r, "Hidden machinery: validation lists, the per-combo engine blocks, and the baked "
+            "oracle constants. Nothing to edit there.", size=9)
     r += 2
 
-    section(ws, r, "B", "How to use")
+    section(ws, r, "B", "What this workbook does")
+    r += 1
+    purpose = [
+        "Converts the projected loss ratio from a rate level indication (policy-year basis, "
+        "rate fully earned) into a CALENDAR-YEAR plan loss ratio at the plan year's average "
+        "earned rate level — the number a plan is actually written against.",
+        "Method: standard on-leveling (Werner & Modlin, Basic Ratemaking, Ch. 5) through a "
+        "monthly written-index x earning-matrix engine, extended with a schedule-mod "
+        "adjustment, optional seasonality, and an optional net rate selection.",
+        "Every displayed figure is calculated, never typed, and ties to an independent "
+        "Python oracle at build time; the Checks sheet proves the workbook's integrity live.",
+    ]
+    for t in purpose:
+        para(r, t)
+        r += 1
+    r += 1
+
+    put(ws, f"B{r}", "THE BRIDGE IN ONE LINE", fnt=font(NAVY, bold=True, size=11),
+        fill=FILL_PANEL)
+    prose(ws, f"C{r}", "CY plan LR  =  projected LR (current level)  x  rate earn-in  x  "
+                       "mod drift  x  other adj", size=11, bold=True, color=NAVY,
+          width=PROSE_W)
+    ws[f"C{r}"].fill = FILL_PANEL
+    r += 1
+    para(r, "The following year (indicative) additionally applies one year of net trend and "
+            "uses that year's earn-in factors.", size=9)
+    r += 2
+
+    section(ws, r, "B", "Quick start")
     r += 1
     steps = [
-        "1.  Replace the SAMPLE rows on the Inputs sheet with your book: tbl_LR (one row per "
-        "BU x state), tbl_RateLog (one row per rate change per BU x state), tbl_Seasonality "
-        "(optional, by state), and the workbook policy term. Do not insert or delete rows — "
-        "spare rows are provided. Rename BUs and states directly in tbl_LR: every dropdown, "
-        "the Control selectors, and the State Summary follow the live roster automatically.",
-        "2.  On Control, pick the plan year, BU, and state (this workbook covers "
-        f"{ctx.lob.name} only). Toggles: seasonality, the mod-adjustment master switch, and "
-        "the Projected-LR display basis.",
-        "3.  Read the KPI row on Control; audit the full trail on Rate Engine -> Mod Engine "
-        "-> Bridge. Portfolio shows every combo at once.",
-        "4.  Scenarios: up to four lever sets (rate points, timing shift, achievement, mod "
+        "Replace the SAMPLE rows on the Inputs sheet with your book: tbl_LR (one row per "
+        "BU x state), the rate change log (one row per change), tbl_Seasonality (optional, "
+        "by state), and the policy term. Do not insert or delete rows — spare rows are "
+        "provided. Rename BUs and states directly in tbl_LR: every dropdown and exhibit "
+        "follows the live roster automatically.",
+        "On Control, pick the plan year, BU, and state, and set the global toggles "
+        "(seasonality, the mod-adjustment master switch, the default net trend).",
+        "Read the KPI row on Control; audit any figure through Rate Engine -> Mod Engine "
+        "-> Bridge.",
+        "State Summary is the per-state exhibit (BU filter; 'All' combines on adjusted-EP "
+        "weights). Portfolio shows every combo at once.",
+        "Scenarios: up to four lever sets (rate points, timing shift, achievement, mod "
         "path, net selection) side by side against Base.",
-        "4b. Optional NET RATE SELECTION per BU x state (tbl_LR): enter the year-over-year "
-        "combined rate + price target achieved from 1/1 of the plan year and leave the "
-        "specifics for later — history still earns as modeled; planned rows and the mod "
-        "projection are superseded from 1/1 (see Methodology 6b).",
-        "5.  Solver: Mode A returns the single planned change needed for a target CY LR at a "
-        "chosen date (it replaces the whole planned program — see the note on that sheet); "
-        "Mode B shows CY LR by effective month for a given change.",
-        "6.  Attribution (after the year closes): enter achieved changes, actual dates, "
+        "Optional NET RATE SELECTION per combo (tbl_LR): a combined rate + price "
+        "year-over-year target from 1/1 of the plan year — see Methodology 6b for exactly "
+        "what it supersedes.",
+        "Solver: Mode A returns the single change needed for a target CY LR at a chosen "
+        "date (it replaces the whole planned program — see the note there); Mode B shows "
+        "the full-year LR under each possible start month.",
+        "Attribution (after the year closes): enter achieved changes, actual dates, the "
         "actual mod path, and the actual CY LR for a plan-vs-actual waterfall.",
-        "7.  Checks must show ALL CHECKS PASS (also surfaced on Control). Oracle-tie rows "
-        "apply only while the seeded worked example is intact and report N/A afterward.",
-        "8.  To plan a new year: edit config/config.yaml, rerun the generator, and paste your "
-        "inputs into the fresh workbook (table schemas are stable).",
+        "Checks must show ALL CHECKS PASS (also surfaced on Control). Oracle-tie rows apply "
+        "only while the seeded sample is intact and report N/A afterward — regenerate the "
+        "workbook to re-bake them for your data. For a new plan year, regenerate from "
+        "config/config.yaml and paste inputs into the fresh copy (table schemas are stable).",
     ]
-    for s in steps:
-        put(ws, f"B{r}", s, fnt=font(GREY_DARK, size=10), align=ALIGN_WRAP)
-        ws.row_dimensions[r].height = text_height(s, 34, size=10)
+    for i, s in enumerate(steps):
+        put(ws, f"B{r}", f"{i + 1}.", fnt=font(NAVY, bold=True, size=10))
+        para(r, s)
         r += 1
     r += 1
 
@@ -760,30 +939,15 @@ def build_readme(ctx: Ctx):
     ]
     for lbl, desc, fnt_, fill_ in legend:
         put(ws, f"B{r}", lbl, fnt=fnt_, fill=fill_, border=BORDER_THIN)
-        put(ws, f"D{r}", desc, fnt=font(GREY_DARK, size=10))
+        put(ws, f"C{r}", desc, fnt=font(GREY_DARK, size=10))
         r += 1
     r += 1
 
-    section(ws, r, "B", "Sheet guide")
+    section(ws, r, "B", "Glossary — terms and symbols")
     r += 1
-    guide = [
-        ("Control", "Executive landing page: selectors, toggles, KPI cards, checks status"),
-        ("Inputs", f"All actuarial inputs (fixed capacity: {L.LR_ROWS} BU x state rows, "
-                   f"{L.RL_ROWS} rate changes, {L.SE_ROWS} seasonality rows)"),
-        ("Rate Engine", "Visible 48-cohort monthly engine for the selected combo"),
-        ("Mod Engine", "Written-mod path, earned mod, A_mod"),
-        ("Bridge", "The waterfall from projected LR to CY plan LR (P and indicative P+1)"),
-        ("Flow Dashboard", "Rate/mod/price flow charts and the quarterly runway table"),
-        ("Portfolio", "Every BU x state combo, heatmapped, with EP-weighted and simple totals"),
-        ("Scenarios / Solver / Attribution", "What-ifs, inverse solving, plan-vs-actual"),
-        ("Checks", "Live validation panel — must be ALL CHECKS PASS"),
-        ("Methodology", "Formulas as implemented, conventions, named-range dictionary"),
-        ("_lists / _calc / _oracle (hidden)", "Validation lists, per-combo engine blocks, "
-                                              "baked oracle constants"),
-    ]
-    for name, desc in guide:
-        put(ws, f"B{r}", name, fnt=font(NAVY, bold=True, size=10))
-        put(ws, f"D{r}", desc, fnt=font(GREY_DARK, size=10), align=ALIGN_WRAP)
+    for term, definition in READ_ME_GLOSSARY:
+        put(ws, f"B{r}", term, fnt=font(NAVY, bold=True, size=10), align=ALIGN_WRAP)
+        para(r, definition)
         r += 1
     r += 1
 
@@ -791,27 +955,25 @@ def build_readme(ctx: Ctx):
     r += 1
     notes_ = [
         "Percentages are stored as decimal fractions (5.0% = 0.05) and formatted as percents.",
-        "No VBA or macros anywhere. No merged cells (titles use center-across-selection). No "
-        "external links. No volatile functions. Automatic calculation.",
+        "No VBA or macros anywhere. No merged cells. No external links. No volatile "
+        "functions. Automatic calculation. Classic formula mode: only Excel-2007-era "
+        "functions, so the file recalculates in LibreOffice and any corporate Excel build.",
         "Sheets are NOT protected (an intentional choice — the Checks panel is the integrity "
         "mechanism; protection without passwords would add friction without security).",
-        "Classic formula mode: only Excel-2007-era functions, so the file recalculates in "
-        "LibreOffice and any corporate Excel build.",
         "First-open checklist: (1) open the file and let it calculate; (2) confirm Control "
         f"shows ALL CHECKS PASS; (3) confirm the Bridge shows {ctx.oracle_m.cy_lr_p:.2%} "
         f"for {ctx.we_key} while sample data is intact; (4) replace sample inputs with "
         "your book.",
     ]
     for s in notes_:
-        put(ws, f"B{r}", s, fnt=font(GREY_DARK, size=10), align=ALIGN_WRAP)
-        ws.row_dimensions[r].height = text_height(s, 34, size=10)
+        para(r, s)
         r += 1
     r += 1
     section(ws, r, "B", "Version log")
     r += 1
-    put(ws, f"B{r}", f"v{ctx.cfg.version} — {dt.date.today():%m/%d/%Y} — initial build from "
+    put(ws, f"C{r}", f"v{ctx.cfg.version} — {dt.date.today():%m/%d/%Y} — built from "
                      "config/config.yaml (see DECISIONS.md in the repo for every judgment call).",
         fnt=font(GREY_DARK, size=10))
-    set_widths(ws, {"A": 2, "B": 34, "C": 4, "D": 95})
+    set_widths(ws, {"A": 2, "B": 30, "C": PROSE_W})
     presentation_setup(ws, gridlines_off=True, tab_color="D9D9D9")
     print_setup(ws)

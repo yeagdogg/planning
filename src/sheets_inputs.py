@@ -18,7 +18,7 @@ from .xlstyle import (
     F_SUB, FAIL_RED, FILL_GREY, FILL_NAVY, FILL_PANEL, FILL_PANEL_2, FILL_RED,
     FILL_GREEN, FMT_DATE, FMT_EP, FMT_GEN, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT,
     FMT_PTS_SIGNED, GREY_DARK, NAVY, PASS_GREEN, STEEL, WARN_AMBER,
-    font, formula, header_row, input_cell, jump, label, link, note,
+    font, formula, header_row, input_cell, jump, label, link, nav_bar, note,
     presentation_setup, print_setup, put, rng, section, set_widths, title,
 )
 
@@ -164,6 +164,7 @@ def build_inputs(ctx: Ctx):
     title(ws, "A1", f"Inputs — {ctx.lob.name}",
           "All actuarial inputs live here — blue font = enter values; yellow fill = required. "
           "One row per BU x state. Structure is fixed; do not insert or delete rows.")
+    nav_bar(ws, 3, 1, ["Control", "Bridge", "State Summary", "Checks", "Read Me"], step=2)
     put(ws, "A4",
         "SAMPLE DATA: every populated row below is illustrative and should be replaced with "
         f"your book. {ctx.we_key} carries the documented worked example used by the Checks sheet.",
@@ -406,9 +407,9 @@ def build_control(ctx: Ctx):
     # One-click navigation back to the analysis sheets (D45): change the
     # selection below, then jump straight to the sheet you came from.
     label(ws, "B4", "Jump to:", bold=True)
-    for i, sheet in enumerate(["Rate Engine", "Mod Engine", "Bridge", "Flow Dashboard",
-                               "State Summary", "Portfolio", "Scenarios", "Solver",
-                               "Attribution", "Checks"]):
+    for i, sheet in enumerate(["Inputs", "Rate Engine", "Mod Engine", "Bridge",
+                               "Flow Dashboard", "State Summary", "Portfolio", "Scenarios",
+                               "Solver", "Attribution", "Checks", "Methodology", "Read Me"]):
         target = f"'{sheet}'!A1" if " " in sheet else f"{sheet}!A1"
         jump(ws, ws.cell(row=4, column=3 + i).coordinate, target, sheet, size=9)
 

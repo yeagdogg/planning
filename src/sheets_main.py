@@ -15,7 +15,7 @@ from .xlstyle import (
     FILL_NAVY, FILL_PANEL, FMT_DATE, FMT_EP_Z, FMT_GEN, FMT_IDX, FMT_IDX_Z,
     FMT_INT, FMT_MOD, FMT_PCT, FMT_PCT_Z, GREY_DARK, NAVY, STEEL, STEEL_LIGHT,
     TOTAL_BAR, UP_BAR, col, font, formula, header_row, input_cell, jump, label, link,
-    note, presentation_setup, print_setup, put, section, set_widths, title,
+    nav_bar, note, presentation_setup, print_setup, prose, put, section, set_widths, title,
 )
 
 PTS_Z = '+0.00 "pts";-0.00 "pts";""'
@@ -271,6 +271,7 @@ def build_portfolio(ctx: Ctx):
     title(ws, "A1", f"Portfolio — every BU x state ({ctx.lob.name})",
           "Computed simultaneously from the hidden _calc engine blocks (rows align 1:1 with tbl_LR). "
           "Heatmap: green = favorable vs projected.")
+    nav_bar(ws, 3, 1, ["Control", "Inputs", "State Summary", "Bridge", "Checks"], step=2)
     header_row(ws, L.PF_HDR, 1,
                ["BU", "State", "Key", "Projected LR (as input)", "Basis",
                 "Projected LR (current level)", "Plan LR",
@@ -380,6 +381,7 @@ def build_state_summary(ctx: Ctx):
           "Plan-year view with the indicative following year. One row per state; choose a "
           "business unit or view all combined (adjusted-EP weighted). Every figure traces to "
           "the hidden _calc engine blocks and the Inputs tables.")
+    nav_bar(ws, 3, 1, ["Control", "Inputs", "Portfolio", "Bridge", "Checks"], step=2)
 
     # ---- filter chip ----
     label(ws, "A4", "Business unit view", bold=True)
