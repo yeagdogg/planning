@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+output/_verify_scratch/
+~$*.xlsx
+.claude/*.lock

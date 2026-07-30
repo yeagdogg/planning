@@ -1,0 +1,590 @@
+"""Workbook generator CLI: builds the Calendar-Year Plan Loss Ratio workbooks.
+
+Usage:
+    python -m src.build_workbook --config config/config.yaml --out output/
+    python -m src.build_workbook --lob "Property"          # single LOB only
+
+Dimensioning (DECISIONS.md D37): ONE WORKBOOK PER LINE OF BUSINESS. Within a
+workbook, every input row is one BUSINESS UNIT x STATE combination; the
+concatenated selector key is "BU|State". The policy term is a workbook-level
+parameter (all combos share the workbook's LOB); tbl_Seasonality is keyed by
+state. Table capacities scale from the configured dimensions.
+
+Architecture (DECISIONS.md D24): this module owns configuration, sample data,
+oracle baking, the master cell layout (:class:`Layout`), the named-range
+registry (:class:`Ctx`), and assembly order. The per-sheet builders live in
+``sheets_inputs / sheets_engine / sheets_calc / sheets_main / sheets_report``.
+
+Every formula the builders emit is classic-mode (Excel-2007-era functions
+only); the oracle in ``src/engine.py`` is the source of truth the generated
+workbooks must tie to (verified by ``tools/verify_workbook.py``).
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import yaml
+from openpyxl import Workbook
+from openpyxl.workbook.defined_name import DefinedName
+
+from . import engine
+from .engine import ComboInputs, ModInputs, RateChange
+from .xlstyle import quote_sheet
+
+GENERATOR_VERSION = "2.0.0"
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class LobCfg:
+    name: str
+    term_months: int = 12
+
+
+@dataclass(frozen=True)
+class Config:
+    plan_year: int
+    business_units: tuple[str, ...]
+    states: tuple[str, ...]
+    lobs: tuple[LobCfg, ...]
+    seasonality_profiles: dict
+    output_lobs: tuple[str, ...]  # LOB names to generate
+    output_dir: str
+    filename: str
+    formula_mode: str
+    solver_max_rate: float
+    solver_min_post_share: float
+    font: str
+    version: str
+    spare_lr_rows: int
+    rate_log_rows: int
+    spare_seasonality_rows: int
+
+    @property
+    def combos(self) -> list[tuple[str, str]]:
+        """(BU, state) pairs, BU-major — the row order of tbl_LR."""
+        return [(bu, st) for bu in self.business_units for st in self.states]
+
+    def lob(self, name: str) -> LobCfg:
+        for l in self.lobs:
+            if l.name == name:
+                return l
+        raise KeyError(name)
+
+
+def _validate_dim_name(kind: str, name: str):
+    if any(ch in name for ch in "*?|"):
+        raise ValueError(f"{kind} name {name!r} may not contain * ? or | characters")
+
+
+def load_config(path: str | Path) -> Config:
+    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    lobs = tuple(
+        LobCfg(name=l["name"], term_months=int(l.get("term_months", 12)))
+        for l in raw["lobs"]
+    )
+    for l in lobs:
+        if not 1 <= l.term_months <= 12:
+            raise ValueError(f"term_months for {l.name} must be 1..12, got {l.term_months}")
+        _validate_dim_name("LOB", l.name)
+    profiles = raw.get("seasonality_profiles") or {}
+    for name, weights in profiles.items():
+        if len(weights) != 12 or min(weights) < 0 or sum(weights) <= 0:
+            raise ValueError(f"seasonality profile {name!r} must be 12 non-negative weights")
+    fmode = raw.get("formula_mode", "classic")
+    if fmode != "classic":
+        raise ValueError(
+            f"formula_mode {fmode!r} is not implemented; only 'classic' ships (DECISIONS.md D18)."
+        )
+    bus = tuple(str(b) for b in raw["business_units"])
+    states = tuple(str(s) for s in raw["states"])
+    if not states:
+        raise ValueError("at least one state is required")
+    for b in bus:
+        _validate_dim_name("business unit", b)
+    for s in states:
+        _validate_dim_name("state", s)
+    out = raw.get("output", {})
+    out_lobs = out.get("lobs", "all")
+    if out_lobs == "all":
+        out_lobs = tuple(l.name for l in lobs)
+    else:
+        out_lobs = tuple(str(x) for x in out_lobs)
+        for name in out_lobs:
+            if name not in {l.name for l in lobs}:
+                raise ValueError(f"output.lobs entry {name!r} is not a configured LOB")
+    cap = raw.get("table_capacity", {})
+    solver = raw.get("solver", {})
+    return Config(
+        plan_year=int(raw["plan_year"]),
+        business_units=bus,
+        states=states,
+        lobs=lobs,
+        seasonality_profiles=profiles,
+        output_lobs=out_lobs,
+        output_dir=out.get("directory", "output"),
+        filename=out.get("filename", "Plan_LR_Workbook_{plan_year}_{lob}"),
+        formula_mode=fmode,
+        solver_max_rate=float(solver.get("max_reasonable_rate", 0.25)),
+        solver_min_post_share=float(solver.get("min_post_share", 0.05)),
+        font=(raw.get("theme") or {}).get("font", "Calibri"),
+        version=str(raw.get("version", GENERATOR_VERSION)),
+        spare_lr_rows=int(cap.get("spare_lr_rows", 6)),
+        rate_log_rows=int(cap.get("rate_log_rows", 240)),
+        spare_seasonality_rows=int(cap.get("spare_seasonality_rows", 3)),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Sample data (clearly marked in-sheet; §4 / DECISIONS.md D22, D37)
+#
+# One sample book per LOB workbook: one row per BU x state, deterministic
+# variation (no randomness — regeneration is reproducible). Dates are relative
+# to plan year P. For every 12-month-term LOB, BU-A | <first state> is EXACTLY
+# the §9 worked example (asserted in build()).
+# ---------------------------------------------------------------------------
+
+LOB_BASE = {
+    "Property": dict(lr=0.65, mind=0.850, ep=45),
+    "General Liability": dict(lr=0.62, mind=0.950, ep=35),
+    "Commercial Auto": dict(lr=0.68, mind=1.000, ep=40),
+    "Workers Comp": dict(lr=0.60, mind=0.900, ep=30),
+    "Umbrella": dict(lr=0.55, mind=1.000, ep=12),
+    "Inland Marine": dict(lr=0.58, mind=0.920, ep=8),
+}
+_DEFAULT_BASE = dict(lr=0.63, mind=0.950, ep=25)
+
+
+def _clamp_mod(x: float) -> float:
+    return round(min(1.5, max(0.5, x)), 3)
+
+
+def sample_lr_rows(cfg: Config, lob: LobCfg) -> list[dict]:
+    p = cfg.plan_year
+    base = LOB_BASE.get(lob.name, _DEFAULT_BASE)
+    asof = dt.date(p - 1, 9, 30)
+    st = cfg.states
+    rows = []
+    for i, (bu, state) in enumerate(cfg.combos):
+        lr = round(base["lr"] + ((i * 7) % 11 - 5) * 0.004, 4)
+        m_ind = base["mind"]
+        m0 = _clamp_mod(m_ind + ((i * 5) % 5 - 2) * 0.005)
+        m1 = _clamp_mod(m0 + ((i * 3) % 7 - 2) * 0.005)
+        row = dict(
+            bu=bu, state=state, lr_proj=lr, basis="current", s=0.05,
+            m_ind=m_ind, m0=m0, m0_asof=asof, m1=m1, m_prior=None, m2=None,
+            ep=base["ep"] * (8 + (i * 13) % 17) * 100,  # ADJUSTED plan EP in 000s
+            trend=None,  # blank inherits the Control default trend (D38)
+            a_other=1.0, a_other_label="", modadj="ON",
+            netp=None, netp1=None,  # blank = explicit rate program (D39)
+        )
+        # showcase combos (state indices are positions in the configured list)
+        if bu == "BU-A" and state == st[0]:
+            row.update(lr_proj=0.65, s=0.05, m_ind=0.850, m0=0.860, m1=0.890)  # §9
+        elif bu == "BU-B" and len(st) > 1 and state == st[1]:
+            row.update(basis="proposed", s=0.08, trend=0.01)  # explicit trend override demo
+        elif bu == "BU-B" and len(st) > 2 and state == st[2]:
+            row.update(a_other=1.02, a_other_label="Commission timing")
+        elif bu == "BU-A" and len(st) > 3 and state == st[3]:
+            row.update(modadj="OFF", m0=m_ind, m1=m_ind)
+        elif bu == "BU-A" and len(st) > 5 and state == st[5]:
+            row.update(m_prior=_clamp_mod(m0 - 0.010), m2=_clamp_mod(m1 + 0.005))
+        elif bu == "BU-C" and len(st) > 6 and state == st[6]:
+            row.update(s=0.065)  # matches the seed-pattern rate-log row (D36)
+        elif bu == "BU-C" and len(st) > 8 and state == st[8]:
+            # net-rate-selection showcase (D39): +10% taken 10/1/(P-1) in the
+            # log, product targets +10% NET from 1/1/P — specifics TBD
+            row.update(netp=0.10)
+        rows.append(row)
+    return rows
+
+
+def degenerate_combo(cfg: Config) -> tuple[str, str]:
+    """The showcase combo seeded with NO rate-log rows (factors = 1.000)."""
+    return ("BU-C", cfg.states[min(4, len(cfg.states) - 1)])
+
+
+def sample_rate_rows(cfg: Config, lob: LobCfg) -> list[dict]:
+    p = cfg.plan_year
+    st = cfg.states
+
+    def row(bu, state, y_off, m, d, filed, status, cons, ach=None, comment=""):
+        return dict(bu=bu, state=state, eff=dt.date(p + y_off, m, d), filed=filed,
+                    status=status, considered=cons, achievement=ach, comment=comment)
+
+    rows = [
+        # §9 worked example (BU-A | first state)
+        row("BU-A", st[0], -2, 7, 1, 0.04, "taken", "Y", comment="Worked example (§9)"),
+        row("BU-A", st[0], -1, 7, 1, 0.06, "taken", "Y", comment="Worked example (§9)"),
+        row("BU-A", st[0], 0, 4, 1, 0.05, "planned", "N", 1.00, "Planned spring increase"),
+    ]
+    if len(st) > 6:
+        rows.append(row("BU-C", st[6], -1, 7, 1, 0.065, "planned", "N", 1.00,
+                        "Pattern: indication's selected change entered as a planned row"))
+    if len(st) > 2:
+        rows.append(row("BU-B", st[2], -1, 4, 1, 0.050, "taken", "Y"))
+        rows.append(row("BU-B", st[2], 0, 5, 15, 0.030, "planned", "N", 1.00,
+                        "Mid-month effective date example"))
+    if len(st) > 3:
+        rows.append(row("BU-B", st[3], -1, 10, 1, 0.080, "taken", "Y"))
+        rows.append(row("BU-B", st[3], 0, 3, 1, 0.060, "planned", "N", 0.80,
+                        "80% achievement assumed"))
+    if len(st) > 5:
+        rows.append(row("BU-A", st[5], -1, 6, 1, 0.045, "taken", "Y"))
+    if len(st) > 8:
+        rows.append(row("BU-C", st[8], -1, 10, 1, 0.10, "taken", "N",
+                        comment="Net-selection showcase: fall filing (after the indication) "
+                                "feeds the +10% net target"))
+
+    # deterministic coverage across the remaining book: most combos get a taken
+    # row in P-1; roughly a quarter also carry a planned row in P.
+    special = {("BU-A", st[0]), degenerate_combo(cfg)}
+    if len(st) > 2:
+        special.add(("BU-B", st[2]))
+    if len(st) > 3:
+        special.add(("BU-B", st[3]))
+    if len(st) > 6:
+        special.add(("BU-C", st[6]))
+    if len(st) > 8:
+        special.add(("BU-C", st[8]))
+    for i, (bu, state) in enumerate(cfg.combos):
+        if (bu, state) in special:
+            continue
+        if i % 3 != 2:
+            rows.append(row(bu, state, -1, (i % 12) + 1, 1,
+                            round(0.02 + (i % 5) * 0.01, 3), "taken", "Y"))
+        if i % 4 == 1:
+            rows.append(row(bu, state, 0, (i % 10) + 1, 1,
+                            round(0.03 + (i % 4) * 0.01, 3), "planned", "N", 1.00))
+    if len(rows) > cfg.rate_log_rows:
+        raise ValueError(
+            f"sample rate log ({len(rows)} rows) exceeds table_capacity.rate_log_rows "
+            f"({cfg.rate_log_rows})")
+    return rows
+
+
+def sample_seasonality_rows(cfg: Config) -> list[dict]:
+    """Seed a couple of state rows with a named profile (marked sample)."""
+    profile = next(iter(cfg.seasonality_profiles.values()), None)
+    if profile is None:
+        return []
+    picks = [s for j, s in enumerate(cfg.states) if j in (6, 7)]
+    return [dict(state=s, weights=list(profile)) for s in picks]
+
+
+# ---------------------------------------------------------------------------
+# Sample rows -> oracle inputs
+# ---------------------------------------------------------------------------
+
+
+def sample_to_combo(
+    cfg: Config,
+    lob: LobCfg,
+    lr_row: dict,
+    rate_rows: list[dict],
+    seasonality_on: bool = False,
+    season_rows: list[dict] | None = None,
+    trend_default: float = 0.0,
+) -> ComboInputs:
+    """Assemble engine inputs for one BU x state combo, mirroring workbook logic."""
+    season = None
+    if seasonality_on and season_rows:
+        for srow in season_rows:
+            if srow["state"] == lr_row["state"] and sum(srow["weights"]) > 0:
+                season = tuple(srow["weights"])
+    changes = tuple(
+        RateChange(
+            effective=r["eff"],
+            filed_pct=r["filed"],
+            status=r["status"],
+            considered=(r["considered"] == "Y"),
+            achievement=1.0 if r["achievement"] is None else r["achievement"],
+            comment=r["comment"],
+        )
+        for r in rate_rows
+        if r["bu"] == lr_row["bu"] and r["state"] == lr_row["state"]
+    )
+    return ComboInputs(
+        lr_proj=lr_row["lr_proj"],
+        lr_basis=lr_row["basis"],
+        sel_change=lr_row["s"],
+        mods=ModInputs(
+            m_ind=lr_row["m_ind"], m0=lr_row["m0"], m0_asof=lr_row["m0_asof"],
+            m1=lr_row["m1"], m_prior=lr_row["m_prior"], m2=lr_row["m2"],
+        ),
+        rate_changes=changes,
+        net_trend=trend_default if lr_row["trend"] is None else lr_row["trend"],
+        a_other=lr_row["a_other"],
+        a_other_label=lr_row["a_other_label"],
+        mod_adjustment_enabled=(lr_row["modadj"] == "ON"),
+        term_months=lob.term_months,
+        seasonality=season,
+        plan_ep=lr_row["ep"],
+        net_sel_p=lr_row.get("netp"),
+        net_sel_p1=lr_row.get("netp1"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Layout: every anchor the sheet builders share. 1-based rows/columns.
+#
+# Sizes depend on the configured dimensions, so call Layout.configure(cfg)
+# before building or verifying (build() does this). Class-level attributes
+# keep all L.XXX call sites unchanged; generation is single-threaded.
+# ---------------------------------------------------------------------------
+
+
+class Layout:
+    # ---- Inputs sheet (dynamic; set by configure) ----
+    LR_HDR = 6
+    LR_FIRST = 7
+    LR_ROWS = 69
+    LR_LAST = 75
+    RL_HDR = 79
+    RL_FIRST = 80
+    RL_ROWS = 240
+    RL_LAST = 319
+    SE_HDR = 323
+    SE_FIRST = 324
+    SE_ROWS = 24
+    SE_LAST = 347
+    WB_HDR = 351          # workbook-parameters block (LOB + term)
+    TERM_ROW = 352
+
+    # ---- Rate Engine sheet (fixed) ----
+    RE_COH_HDR = 16
+    RE_COH_FIRST = 17
+    N_COH = 48
+    RE_COH_LAST = RE_COH_FIRST + N_COH - 1
+    RE_MATRIX_COL = 22   # column V — S/T/U hold the net-selection columns (D39)
+    N_MONTHS = 36
+    RE_MATRIX_LAST_COL = RE_MATRIX_COL + N_MONTHS - 1
+    RE_ROW_NUM = 66
+    RE_ROW_DEN = 67
+    RE_ROW_EM = 68
+    RE_ROW_MINW = 69
+    RE_ROW_MAXW = 70
+    RE_ROW_VIOL = 71
+    RE_ROW_MODM = 72
+    RE_ROW_MIDX = 15
+
+    # ---- Mod Engine ----
+    ME_COH_FIRST = 17
+    ME_COH_LAST = ME_COH_FIRST + N_COH - 1
+
+    # ---- _calc sheet (dynamic) ----
+    CALC_RES_HDR = 3
+    CALC_RES_FIRST = 4
+    CALC_RES_LAST = 72
+    CALC_BLOCK_FIRST = 76
+    CALC_BLOCK_STRIDE = 54
+
+    # ---- Portfolio (dynamic) ----
+    PF_HDR = 5
+    PF_FIRST = 6
+    PF_LAST = 74
+    PF_W_TOTAL = 76
+    PF_S_TOTAL = 77
+
+    # ---- Bridge (fixed) ----
+    BR_IN_FIRST = 6
+    BR_WF_HDR = 29
+    BR_WF_FIRST = 30
+    BR_CHART_DATA = 58
+
+    # ---- Checks (fixed) ----
+    CK_HDR = 5
+    CK_FIRST = 6
+
+    @classmethod
+    def configure(cls, cfg: Config):
+        cls.LR_ROWS = len(cfg.business_units) * len(cfg.states) + cfg.spare_lr_rows
+        cls.LR_LAST = cls.LR_FIRST + cls.LR_ROWS - 1
+        cls.RL_HDR = cls.LR_LAST + 4
+        cls.RL_FIRST = cls.RL_HDR + 1
+        cls.RL_ROWS = cfg.rate_log_rows
+        cls.RL_LAST = cls.RL_FIRST + cls.RL_ROWS - 1
+        cls.SE_HDR = cls.RL_LAST + 4
+        cls.SE_FIRST = cls.SE_HDR + 1
+        cls.SE_ROWS = len(cfg.states) + cfg.spare_seasonality_rows
+        cls.SE_LAST = cls.SE_FIRST + cls.SE_ROWS - 1
+        cls.WB_HDR = cls.SE_LAST + 4
+        cls.TERM_ROW = cls.WB_HDR + 1
+        cls.CALC_RES_LAST = cls.CALC_RES_FIRST + cls.LR_ROWS - 1
+        cls.CALC_BLOCK_FIRST = cls.CALC_RES_LAST + 4
+        cls.PF_LAST = cls.PF_FIRST + cls.LR_ROWS - 1
+        cls.PF_W_TOTAL = cls.PF_LAST + 2
+        cls.PF_S_TOTAL = cls.PF_LAST + 3
+
+
+# ---------------------------------------------------------------------------
+# Build context: workbook + config + oracle + named-range registry
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Ctx:
+    cfg: Config
+    lob: LobCfg
+    wb: Workbook
+    lr_rows: list
+    rate_rows: list
+    season_rows: list
+    oracle_m: engine.EngineResult      # worked-example combo, monthly
+    oracle_c: engine.EngineResult      # worked-example combo, continuous
+    oracle_solver_r: float
+    we_key: str                        # worked-example combo key "BU-A|<state>"
+    we_row: dict
+    names: dict = field(default_factory=dict)   # name -> (ref, description)
+    lay_dyn: dict = field(default_factory=dict)  # dynamic anchors shared between builders
+
+    def define(self, name: str, sheet: str, ref: str, description: str):
+        """Register a workbook-level defined name (documented on Methodology).
+
+        Excel resolves defined names CASE-INSENSITIVELY, so two names differing
+        only by case silently collide — guard against it at build time (D32).
+        """
+        for existing in self.names:
+            if existing.lower() == name.lower() and existing != name:
+                raise ValueError(
+                    f"Defined-name case collision: {name!r} vs {existing!r} "
+                    "(Excel names are case-insensitive)")
+        if name in self.names:
+            raise ValueError(f"Defined name {name!r} registered twice")
+        full = f"{quote_sheet(sheet)}!{ref}"
+        self.names[name] = (full, description)
+
+    def flush_names(self):
+        for name, (ref, _desc) in sorted(self.names.items()):
+            self.wb.defined_names.add(DefinedName(name, attr_text=ref))
+
+    @property
+    def p(self) -> int:
+        return self.cfg.plan_year
+
+
+SHEET_ORDER = [
+    "Read Me", "Control", "Inputs", "Rate Engine", "Mod Engine", "Bridge",
+    "Flow Dashboard", "Portfolio", "State Summary", "Scenarios", "Solver",
+    "Attribution", "Checks", "Methodology", "_lists", "_calc", "_oracle",
+]
+HIDDEN_SHEETS = {"_lists", "_calc", "_oracle"}
+
+
+# ---------------------------------------------------------------------------
+# Assembly
+# ---------------------------------------------------------------------------
+
+
+def build(cfg: Config, lob_name: str) -> Workbook:
+    from . import sheets_calc, sheets_engine, sheets_inputs, sheets_main, sheets_report
+
+    Layout.configure(cfg)
+    lob = cfg.lob(lob_name)
+    lr_rows = sample_lr_rows(cfg, lob)
+    rate_rows = sample_rate_rows(cfg, lob)
+    season_rows = sample_seasonality_rows(cfg)
+
+    # ---- oracle bake for the worked-example combo (BU-A | first state) -----
+    we_row = next(r for r in lr_rows if r["bu"] == "BU-A" and r["state"] == cfg.states[0])
+    we_key = f"{we_row['bu']}|{we_row['state']}"
+    combo = sample_to_combo(cfg, lob, we_row, rate_rows)
+    if cfg.plan_year == 2027 and lob.term_months == 12:
+        # The seeded sample must reproduce §9 exactly for annual-term books
+        # (comments/EP/s may differ, so compare results, not input dataclasses).
+        p_ref, combo_ref = engine.worked_example()
+        ref = engine.run_bridge(p_ref, combo_ref, "monthly")
+        got = engine.run_bridge(cfg.plan_year, combo, "monthly")
+        assert abs(ref.cy_lr_p - got.cy_lr_p) < 1e-12 and abs(ref.crl_ind - got.crl_ind) < 1e-12, (
+            f"sample seed for {we_key} must reproduce engine.worked_example() results"
+        )
+    oracle_m = engine.run_bridge(cfg.plan_year, combo, "monthly")
+    oracle_c = engine.run_bridge(cfg.plan_year, combo, "continuous")
+    solver_res = engine.solve_rate_for_target(
+        cfg.plan_year, combo, oracle_m.cy_lr_p,
+        dt.date(cfg.plan_year, 4, 1),
+        max_reasonable_rate=cfg.solver_max_rate,
+        min_post_share=cfg.solver_min_post_share,
+    )
+
+    wb = Workbook()
+    wb.remove(wb.active)
+    for name in SHEET_ORDER:
+        ws = wb.create_sheet(name)
+        if name in HIDDEN_SHEETS:
+            ws.sheet_state = "hidden"
+
+    ctx = Ctx(
+        cfg=cfg, lob=lob, wb=wb, lr_rows=lr_rows, rate_rows=rate_rows,
+        season_rows=season_rows, oracle_m=oracle_m, oracle_c=oracle_c,
+        oracle_solver_r=solver_res.required_change, we_key=we_key, we_row=we_row,
+    )
+
+    # Build order: reference data first, then engines, then presentation.
+    sheets_inputs.build_lists(ctx)
+    sheets_inputs.build_inputs(ctx)
+    sheets_inputs.build_control(ctx)
+    sheets_engine.build_rate_engine(ctx)
+    sheets_engine.build_mod_engine(ctx)
+    sheets_main.build_bridge(ctx)
+    sheets_calc.build_calc(ctx)
+    sheets_main.build_portfolio(ctx)
+    sheets_main.build_state_summary(ctx)
+    sheets_main.build_scenarios(ctx)
+    sheets_main.build_solver(ctx)
+    sheets_main.build_attribution(ctx)
+    sheets_report.build_flow_dashboard(ctx)
+    sheets_report.build_oracle_sheet(ctx)
+    sheets_report.build_checks(ctx)
+    sheets_report.build_methodology(ctx)
+    sheets_report.build_readme(ctx)
+
+    ctx.flush_names()
+    wb.calculation.calcMode = "auto"
+    wb.calculation.fullCalcOnLoad = True
+    return wb
+
+
+def output_path(cfg: Config, out_dir: Path, lob_name: str) -> Path:
+    safe = lob_name.replace(" ", "_")
+    return out_dir / f"{cfg.filename.format(plan_year=cfg.plan_year, lob=safe)}.xlsx"
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="Generate the CY Plan LR workbooks (one per LOB).")
+    ap.add_argument("--config", default="config/config.yaml")
+    ap.add_argument("--out", default=None, help="output directory (default: from config)")
+    ap.add_argument("--lob", default=None,
+                    help="generate a single LOB workbook (default: all configured)")
+    args = ap.parse_args(argv)
+
+    cfg = load_config(args.config)
+    out_dir = Path(args.out or cfg.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    lob_names = [args.lob] if args.lob else list(cfg.output_lobs)
+    for name in lob_names:
+        if name not in {l.name for l in cfg.lobs}:
+            raise SystemExit(f"unknown LOB {name!r}; configured: {[l.name for l in cfg.lobs]}")
+
+    for name in lob_names:
+        wb = build(cfg, name)
+        path = output_path(cfg, out_dir, name)
+        wb.save(path)
+        print(f"wrote {path}")
+    print(
+        "NOTE: openpyxl stores formulas without cached results. Open each file once in "
+        "Excel (or run tools/recalc.py) so values populate, then check the Checks sheet."
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

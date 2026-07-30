@@ -1,0 +1,88 @@
+# ---------------------------------------------------------------------------
+# Calendar-Year Plan Loss Ratio Workbook — generator configuration
+#
+# This file defines STRUCTURE only. All actuarial inputs (loss ratios, rate
+# logs, mods, seasonality weights) live in the generated workbooks' input
+# tables and are maintained there by the team (brief §4).
+#
+# Dimensioning (user direction, DECISIONS.md D37): ONE WORKBOOK PER LINE OF
+# BUSINESS; within each workbook, inputs are one row per BUSINESS UNIT x STATE.
+#
+# Regeneration workflow: edit this file (e.g., bump plan_year), rerun
+#   python -m src.build_workbook --config config/config.yaml --out output/
+# then paste your inputs into the new workbooks' tables (schemas are stable).
+# ---------------------------------------------------------------------------
+
+plan_year: 2027
+
+business_units:
+  - BU-A
+  - BU-B
+  - BU-C
+
+# Rename to your actual writing states (sample list of 21; add/remove freely —
+# table capacities scale automatically on regeneration).
+states:
+  - AZ
+  - CA
+  - CO
+  - CT
+  - FL
+  - GA
+  - IL
+  - IN
+  - IA
+  - KY
+  - MD
+  - MI
+  - MN
+  - MO
+  - NC
+  - NJ
+  - NY
+  - OH
+  - PA
+  - TN
+  - TX
+
+# One workbook is generated per LOB; term_months is that workbook's policy
+# term (default 12; Inland Marine demonstrates the 6-month override, §10).
+lobs:
+  - name: Property
+  - name: General Liability
+  - name: Commercial Auto
+  - name: Workers Comp
+  - name: Umbrella
+  - name: Inland Marine
+    term_months: 6
+
+# Named 12-month written-weight profiles (Jan..Dec, relative weights) used to
+# pre-fill sample rows of tbl_Seasonality (which is keyed by STATE in-book).
+seasonality_profiles:
+  coastal_renewals: [2.0, 0.6, 0.6, 0.8, 0.8, 1.0, 2.0, 0.8, 0.6, 0.6, 0.6, 1.6]
+
+# Spare blank input rows kept beyond the seeded dimensions so a new state or
+# late rate filings can be added without regenerating immediately.
+table_capacity:
+  spare_lr_rows: 6         # extra blank BU x State rows in tbl_LR
+  rate_log_rows: 240       # total tbl_RateLog rows (state x BU x changes)
+  spare_seasonality_rows: 3
+
+output:
+  lobs: all                # 'all' or a list of LOB names to generate
+  directory: output
+  filename: "Plan_LR_Workbook_{plan_year}_{lob}"
+
+# classic (default): Excel-2007-era functions only — LibreOffice-verifiable.
+# modern is reserved (not implemented; the generator will refuse it).
+formula_mode: classic
+
+solver:
+  max_reasonable_rate: 0.25    # |required change| beyond this triggers a warning
+  min_post_share: 0.05         # post-effective earned share below this warns
+
+theme:
+  font: Calibri
+
+# Version stamped on Read Me; bump when regenerating with structural changes.
+version: "2.0.0"
