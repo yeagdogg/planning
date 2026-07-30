@@ -9,6 +9,8 @@ Financial-model conventions (brief §8):
 
 from __future__ import annotations
 
+import math
+
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
@@ -188,6 +190,31 @@ def section(ws, row, col_letter, text, span_note=None):
 
 def note(ws, addr, text, italic=True):
     return put(ws, addr, text, fnt=F_SMALL_IT if italic else F_SMALL, align=ALIGN_WRAP)
+
+
+def text_height(text: str, width: float, size: int = 10) -> float:
+    """Row height (pt) that shows the whole wrapped ``text`` in a column of the
+    given Excel width. Excel skips auto-fit once a height is set explicitly, so
+    an under-estimate clips the text invisibly — calibration errs tall.
+    Excel caps row height at 409.5pt; prose needing more must move to a wider
+    column, which the min() here makes a visible (not silent) failure."""
+    chars_per_line = max(6.0, width * (11.0 / max(size, 6)) * 0.85)
+    lines = sum(max(1, math.ceil(len(para) / chars_per_line))
+                for para in str(text).split("\n"))
+    return min(405.0, max(15.0, lines * (size + 4.0) + 6.0))
+
+
+def prose(ws, addr, text, size=10, bold=False, color=None, width=None):
+    """Paragraph text sized to its HOST column so nothing clips (vs note(),
+    which leaves height to Excel's 409.5pt-capped auto-fit). Pass ``width``
+    when the host column's width is set after the call."""
+    col_letter = "".join(ch for ch in addr if ch.isalpha())
+    row = int("".join(ch for ch in addr if ch.isdigit()))
+    w = width or ws.column_dimensions[col_letter].width or 8.43
+    c = put(ws, addr, text, fnt=font(color or GREY_DARK, bold=bold, size=size),
+            align=ALIGN_WRAP)
+    ws.row_dimensions[row].height = text_height(text, w, size=size)
+    return c
 
 
 def jump(ws, addr, target: str, text: str, size=10, bold=False):

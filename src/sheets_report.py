@@ -14,8 +14,8 @@ from .xlstyle import (
     F_SMALL_IT, FAIL_RED, FILL_AMBER, FILL_GREEN, FILL_GREY, FILL_NAVY, FILL_PANEL,
     FILL_RED, FILL_REQ, FMT_DATE, FMT_GEN, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT,
     GREY_DARK, LINK_GREEN, NAVY, PASS_GREEN, STEEL, col, font, formula, header_row,
-    jump, label, link, note, presentation_setup, print_setup, put, section, set_widths,
-    title,
+    jump, label, link, note, presentation_setup, print_setup, prose, put, section,
+    set_widths, text_height, title,
 )
 
 RE = "'Rate Engine'"
@@ -668,7 +668,7 @@ def build_methodology(ctx: Ctx):
         r += 1
         for t in paras:
             put(ws, f"B{r}", t, fnt=font(GREY_DARK, size=10), align=ALIGN_WRAP)
-            ws.row_dimensions[r].height = max(26, 13 * (len(t) // 110 + 1))
+            ws.row_dimensions[r].height = max(26.0, text_height(t, 30, size=10))
             r += 1
         r += 1
 
@@ -745,7 +745,7 @@ def build_readme(ctx: Ctx):
     ]
     for s in steps:
         put(ws, f"B{r}", s, fnt=font(GREY_DARK, size=10), align=ALIGN_WRAP)
-        ws.row_dimensions[r].height = max(15, 13 * (len(s) // 110 + 1))
+        ws.row_dimensions[r].height = text_height(s, 34, size=10)
         r += 1
     r += 1
 
@@ -804,7 +804,7 @@ def build_readme(ctx: Ctx):
     ]
     for s in notes_:
         put(ws, f"B{r}", s, fnt=font(GREY_DARK, size=10), align=ALIGN_WRAP)
-        ws.row_dimensions[r].height = max(15, 13 * (len(s) // 110 + 1))
+        ws.row_dimensions[r].height = text_height(s, 34, size=10)
         r += 1
     r += 1
     section(ws, r, "B", "Version log")

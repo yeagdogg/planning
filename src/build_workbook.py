@@ -36,7 +36,33 @@ from . import engine
 from .engine import ComboInputs, ModInputs, RateChange
 from .xlstyle import quote_sheet
 
-GENERATOR_VERSION = "2.0.0"
+GENERATOR_VERSION = "2.1.0"
+
+
+class SHEETS:
+    """Canonical sheet names. New code references these constants so a rename
+    is a one-line change; the harness imports them for mutation targets."""
+    README = "Read Me"
+    CONTROL = "Control"
+    INPUTS = "Inputs"
+    RATE_LOG = "Rate Log"          # created by the C6 rate-log split
+    RATE_ENGINE = "Rate Engine"
+    MOD_ENGINE = "Mod Engine"
+    BRIDGE = "Bridge"
+    WALKTHROUGH = "Walkthrough"
+    ONE_PAGER = "One-Pager"
+    COMPARE = "Compare"
+    FLOW = "Flow Dashboard"
+    PORTFOLIO = "Portfolio"
+    STATE_SUMMARY = "State Summary"
+    SCENARIOS = "Scenarios"
+    SOLVER = "Solver"
+    ATTRIBUTION = "Attribution"
+    CHECKS = "Checks"
+    METHODOLOGY = "Methodology"
+    LISTS = "_lists"
+    CALC = "_calc"
+    ORACLE = "_oracle"
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -473,11 +499,12 @@ class Ctx:
 
 
 SHEET_ORDER = [
-    "Read Me", "Control", "Inputs", "Rate Engine", "Mod Engine", "Bridge",
-    "Flow Dashboard", "Portfolio", "State Summary", "Scenarios", "Solver",
-    "Attribution", "Checks", "Methodology", "_lists", "_calc", "_oracle",
+    SHEETS.README, SHEETS.CONTROL, SHEETS.INPUTS, SHEETS.RATE_ENGINE,
+    SHEETS.MOD_ENGINE, SHEETS.BRIDGE, SHEETS.FLOW, SHEETS.PORTFOLIO,
+    SHEETS.STATE_SUMMARY, SHEETS.SCENARIOS, SHEETS.SOLVER, SHEETS.ATTRIBUTION,
+    SHEETS.CHECKS, SHEETS.METHODOLOGY, SHEETS.LISTS, SHEETS.CALC, SHEETS.ORACLE,
 ]
-HIDDEN_SHEETS = {"_lists", "_calc", "_oracle"}
+HIDDEN_SHEETS = {SHEETS.LISTS, SHEETS.CALC, SHEETS.ORACLE}
 
 
 # ---------------------------------------------------------------------------

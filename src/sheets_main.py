@@ -290,24 +290,34 @@ def build_portfolio(ctx: Ctx):
         link(ws, f"B{r}", f'=IF(INDEX(lr_key,{n})="","",INDEX(lr_state,{n}))')
         link(ws, f"C{r}", f"=INDEX(lr_key,{n})")
         ws[f"C{r}"].font = font(GREY_DARK, size=8)
-        link(ws, f"D{r}", f"=N(INDEX(lr_lrproj,{n}))", fmt=FMT_PCT_Z, align=ALIGN_C)
+        # Spare rows return "" (never numeric 0): the min-anchored color scales
+        # ignore text, so blank capacity rows can't distort the heatmap, and
+        # the total rows below use SUM / comma-form SUMPRODUCT, which both
+        # treat text as zero.
+        link(ws, f"D{r}", f'=IF($C{r}="","",N(INDEX(lr_lrproj,{n})))',
+             fmt=FMT_PCT_Z, align=ALIGN_C)
         link(ws, f"E{r}", f'=IF($C{r}="","",INDEX(lr_basis,{n})&"")', align=ALIGN_C)
-        link(ws, f"F{r}", f"=INDEX(calc_lrcur,{n})", fmt=FMT_PCT_Z, align=ALIGN_C)
-        link(ws, f"G{r}", f"=INDEX(calc_cylr_p,{n})", fmt=FMT_PCT_Z, align=ALIGN_C, bold=True)
-        link(ws, f"H{r}", f"=(INDEX(calc_cylr_p,{n})-INDEX(calc_lrcur,{n}))*100",
+        link(ws, f"F{r}", f'=IF($C{r}="","",INDEX(calc_lrcur,{n}))',
+             fmt=FMT_PCT_Z, align=ALIGN_C)
+        link(ws, f"G{r}", f'=IF($C{r}="","",INDEX(calc_cylr_p,{n}))',
+             fmt=FMT_PCT_Z, align=ALIGN_C, bold=True)
+        link(ws, f"H{r}",
+             f'=IF($C{r}="","",(INDEX(calc_cylr_p,{n})-INDEX(calc_lrcur,{n}))*100)',
              fmt=PTS_Z, align=ALIGN_C)
-        link(ws, f"I{r}", f'=IF($C{r}="",0,INDEX(calc_arate_p,{n}))', fmt=FMT_IDX_Z,
+        link(ws, f"I{r}", f'=IF($C{r}="","",INDEX(calc_arate_p,{n}))', fmt=FMT_IDX_Z,
              align=ALIGN_C)
-        link(ws, f"J{r}", f'=IF($C{r}="",0,INDEX(calc_amod_p,{n}))', fmt=FMT_IDX_Z,
+        link(ws, f"J{r}", f'=IF($C{r}="","",INDEX(calc_amod_p,{n}))', fmt=FMT_IDX_Z,
              align=ALIGN_C)
-        link(ws, f"K{r}", f'=IF($C{r}="",0,INDEX(calc_echg,{n}))', fmt=PCT_SIGNED_Z,
+        link(ws, f"K{r}", f'=IF($C{r}="","",INDEX(calc_echg,{n}))', fmt=PCT_SIGNED_Z,
              align=ALIGN_C)
-        link(ws, f"L{r}", f'=IF($C{r}="",0,INDEX(calc_carry,{n}))', fmt=PCT_SIGNED_Z,
+        link(ws, f"L{r}", f'=IF($C{r}="","",INDEX(calc_carry,{n}))', fmt=PCT_SIGNED_Z,
              align=ALIGN_C)
-        link(ws, f"M{r}", f"=INDEX(calc_cylr_p1,{n})", fmt=FMT_PCT_Z, align=ALIGN_C)
-        link(ws, f"N{r}", f"=N(INDEX(lr_ep,{n}))", fmt=FMT_EP_Z, align=ALIGN_C)
-        formula(ws, f"O{r}", f"=IF(SUM($N${L.PF_FIRST}:$N${L.PF_LAST})=0,0,"
-                             f"$N{r}/SUM($N${L.PF_FIRST}:$N${L.PF_LAST}))",
+        link(ws, f"M{r}", f'=IF($C{r}="","",INDEX(calc_cylr_p1,{n}))',
+             fmt=FMT_PCT_Z, align=ALIGN_C)
+        link(ws, f"N{r}", f'=IF($C{r}="","",N(INDEX(lr_ep,{n})))',
+             fmt=FMT_EP_Z, align=ALIGN_C)
+        formula(ws, f"O{r}", f'=IF($C{r}="","",IF(SUM($N${L.PF_FIRST}:$N${L.PF_LAST})=0,0,'
+                             f"N($N{r})/SUM($N${L.PF_FIRST}:$N${L.PF_LAST})))",
                 fmt=FMT_PCT_Z, align=ALIGN_C)
         ws[f"O{r}"].font = font(GREY_DARK, size=9)
 

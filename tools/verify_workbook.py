@@ -149,8 +149,8 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
     errs = scan_errors(wb)
     check("zero formula-error cells in every sheet (incl. hidden)", not errs,
           "; ".join(errs[:8]))
-    check("Checks sheet: ALL CHECKS PASS", wb["Checks"]["C3"].value == "ALL CHECKS PASS",
-          str(wb["Checks"]["C3"].value))
+    check("Checks sheet: ALL CHECKS PASS", nval(wb, "ck_overall") == "ALL CHECKS PASS",
+          str(nval(wb, "ck_overall")))
 
     # Chart axes must stay visible after the Excel resave (D36).
     import zipfile
@@ -239,7 +239,7 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
     check("Solver Mode B 12-month table ties oracle", ok_b)
     if lob.term_months == 12:
         check("Solver Mode B latest qualifying month is April",
-              sv["D42"].value == "Apr 2027", str(sv["D42"].value))
+              sv["D42"].value == f"Apr {p}", str(sv["D42"].value))
 
     # scenarios with blank levers reproduce base
     sc = wb["Scenarios"]
@@ -631,8 +631,8 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
               f"wb={nval(wb, 'nr_CYLR_P')} oracle={m_p2.cy_lr_p}")
         check("[plan year P+1] fingerprint FALSE", nval(wb, "orc_fp") is False)
         check("[plan year P+1] Checks still ALL PASS (oracle rows N/A)",
-              wb["Checks"]["C3"].value == "ALL CHECKS PASS",
-              str(wb["Checks"]["C3"].value))
+              nval(wb, "ck_overall") == "ALL CHECKS PASS",
+              str(nval(wb, "ck_overall")))
     run("plan year change", {("Control", "C6"): p2}, a10)
 
     # 10b. plan year set BACK a year (the "reproduce last year" test, D44):
@@ -656,7 +656,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
         check(f"[plan year {pm1}] Control stale-year banner appears",
               isinstance(banner, str) and banner.startswith("NOTE"), str(banner)[:60])
         check(f"[plan year {pm1}] Checks still ALL PASS",
-              wb["Checks"]["C3"].value == "ALL CHECKS PASS")
+              nval(wb, "ck_overall") == "ALL CHECKS PASS")
     run(f"plan year back to {pm1}", {("Control", "C6"): pm1}, a10b)
 
 
