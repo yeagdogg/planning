@@ -23,10 +23,11 @@ from .xlstyle import (
     print_setup, put, section, set_widths, title,
 )
 
-COH_HEADERS = ["#", "Written month", "Month end", "Days", "Mo", "Mid-month",
-               "Abs mo", "w_k", "W_pre", "W_post", "# chg", "1st-chg days", "p",
-               "W_k index", "M_w(k)", "ec(P-1)", "ec(P)", "ec(P+1)",
-               "q hist", "Q net", "In force"]
+COH_HEADERS = ["#", "Written month", "Month end", "Days", "Mo#", "Mid-month",
+               "Abs mo#", "Weight w", "Index before mo (W_pre)", "Index at mo end (W_post)",
+               "# chgs in mo", "Days after 1st chg", "Split p", "Written rate index (W)",
+               "Written mod (M_w)", "Earned in P-1 (ec)", "Earned in P (ec)",
+               "Earned in P+1 (ec)", "Hist net price (q)", "Net path (Q)", "Index in force"]
 
 
 @dataclass(frozen=True)
@@ -209,18 +210,18 @@ def build_rate_engine(ctx: Ctx):
     # Header scalars (left: outputs; right: parameters)
     section(ws, 4, "A", "Calendar-year aggregates")
     hdr = [
-        ("CRL_ind (indication rate level)",
+        ("Indication rate level, fully earned (CRL_ind)",
          '=EXP(SUMPRODUCT((rl_key=nr_SelKey)*(rl_cons="Y")*rl_ln1p))', FMT_IDX,
          "nr_CRLind", "Cumulative rate level in the indication: product over considered rows"),
-        (f"E_CY({p - 1}) earned rate index", None, FMT_IDX,
+        (f"CY {p - 1} earned rate level  E_CY({p - 1})", None, FMT_IDX,
          "nr_ECY_Pm1", "Calendar-year earned rate index, plan year minus 1"),
-        (f"E_CY({p}) earned rate index", None, FMT_IDX,
+        (f"CY {p} earned rate level  E_CY({p})", None, FMT_IDX,
          "nr_ECY_P", "Calendar-year earned rate index, plan year"),
-        (f"E_CY({p + 1}) earned rate index", None, FMT_IDX,
+        (f"CY {p + 1} earned rate level  E_CY({p + 1})", None, FMT_IDX,
          "nr_ECY_P1", "Calendar-year earned rate index, plan year + 1"),
-        (f"A_rate({p}) = CRL_ind / E_CY({p})", "=nr_CRLind/nr_ECY_P", FMT_IDX,
+        (f"Rate earn-in factor  A_rate({p}) = CRL / E_CY", "=nr_CRLind/nr_ECY_P", FMT_IDX,
          "nr_Arate_P", "Rate adjustment factor for the plan year"),
-        (f"A_rate({p + 1})", "=nr_CRLind/nr_ECY_P1", FMT_IDX,
+        (f"Rate earn-in factor  A_rate({p + 1})", "=nr_CRLind/nr_ECY_P1", FMT_IDX,
          "nr_Arate_P1", "Rate adjustment factor for plan year + 1"),
         ("CY earned rate chg vs indication", "=nr_ECY_P/nr_CRLind-1", "+0.0%;-0.0%;0.0%",
          "nr_EChgVsInd", "E_CY(P)/CRL_ind - 1"),
@@ -296,6 +297,7 @@ def build_rate_engine(ctx: Ctx):
                        header_row_at=L.RE_COH_HDR,
                        net=dict(mode="nr_NetMode", x="nr_NetSelP", x1="nr_NetSelP1",
                                 modeff='nr_ModAdjEff="ON"', mind="nr_MInd"))
+    ws.row_dimensions[L.RE_COH_HDR].height = 42
     for i in range(L.N_COH):
         r = L.RE_COH_FIRST + i
         link(ws, f"O{r}", f"='Mod Engine'!$E{r}", fmt=FMT_MOD)
@@ -442,12 +444,12 @@ def build_mod_engine(ctx: Ctx):
         s=("$H$6", "$H$7", "$H$8"))
 
     # Header echo + outputs
-    hdr = [("M_ind (indication avg mod)", "=nr_MInd", FMT_MOD),
-           ("M_0 (current written)", "=nr_M0", FMT_MOD),
-           ("M_0 as-of", "=nr_M0Asof", FMT_DATE),
-           ("M_1 (proj. at 12/31/P)", "=nr_M1", FMT_MOD),
-           ("M_prior (optional)", "=nr_MPrior", FMT_MOD),
-           ("M_2 (optional)", "=nr_M2", FMT_MOD)]
+    hdr = [("Mod assumed in indication (M_ind)", "=nr_MInd", FMT_MOD),
+           ("Current avg written mod (M_0)", "=nr_M0", FMT_MOD),
+           ("Current mod as-of date", "=nr_M0Asof", FMT_DATE),
+           (f"Projected mod at 12/31/{p} (M_1)", "=nr_M1", FMT_MOD),
+           ("Mod ~1 yr before as-of (M_prior, opt)", "=nr_MPrior", FMT_MOD),
+           (f"Projected mod at 12/31/{p + 1} (M_2, opt)", "=nr_M2", FMT_MOD)]
     section(ws, 4, "A", "Inputs (from tbl_LR via Bridge)")
     for i, (lbl, f, fmt) in enumerate(hdr):
         r = 5 + i
@@ -472,14 +474,14 @@ def build_mod_engine(ctx: Ctx):
                 f"/SUMPRODUCT($D${cf}:$D${cl},${ecL}${cf}:${ecL}${cl})",
                 fmt=fmt, border=BORDER_THIN, bold=(name == "nr_MEarned_P"))
         ctx.define(name, "Mod Engine", f"$L${r}", desc)
-    label(ws, "J8", f"A_mod({p}) = M_ind / earned mod")
+    label(ws, "J8", f"Mod drift factor  A_mod({p}) = M_ind / earned mod")
     formula(ws, "L8",
             '=IF(nr_NetMode,1,IF(AND(nr_ModAdjMaster="ON",nr_ModAdjRow="ON"),'
             "nr_MInd/nr_MEarned_P,1))",
             fmt=FMT_IDX, border=BORDER_THIN, bold=True)
     ctx.define("nr_Amod_P", "Mod Engine", "$L$8",
                "Mod adjustment factor for the plan year (1 under a net selection, D39)")
-    label(ws, "J9", f"A_mod({p + 1})")
+    label(ws, "J9", f"Mod drift factor  A_mod({p + 1})")
     formula(ws, "L9",
             '=IF(nr_NetMode,1,IF(AND(nr_ModAdjMaster="ON",nr_ModAdjRow="ON"),'
             "nr_MInd/nr_MEarned_P1,1))",
@@ -501,10 +503,11 @@ def build_mod_engine(ctx: Ctx):
 
     # Cohort table (links to Rate Engine + local M_w)
     section(ws, 15, "A", "Writing cohorts — written mod path (columns A-D, F-H link to the Rate Engine)")
-    header_row(ws, 16, 1, ["#", "Written month", "Mid-month", "w_k", "M_w(k)",
-                           "ec(P-1)", "ec(P)", "ec(P+1)"],
-               widths=[5, 12, 10, 7, 9, 9, 9, 9], fill=FILL_GREY,
+    header_row(ws, 16, 1, ["#", "Written month", "Mid-month", "Weight w", "Written mod (M_w)",
+                           "Earned in P-1", "Earned in P", "Earned in P+1"],
+               widths=[5, 12, 10, 8, 10, 9, 9, 9], fill=FILL_GREY,
                fnt=font(GREY_DARK, bold=True, size=9))
+    ws.row_dimensions[16].height = 30
     re = "'Rate Engine'"
     for i in range(L.N_COH):
         r = L.ME_COH_FIRST + i

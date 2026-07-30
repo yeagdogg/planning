@@ -132,13 +132,28 @@ def build_lists(ctx: Ctx):
 
 # Paste-friendly layout (D40): input columns are CONTIGUOUS — the key and all
 # engine helper columns live to the RIGHT of each dataset, never in between.
-LR_HEADERS = [
-    "BU", "State", "Projected LR", "LR basis", "Selected chg s", "M_ind", "M_0",
-    "M_0 as-of", "M_1", "M_prior (opt)", "M_2 (opt)", "Adj plan EP (000s)", "Net trend P+1",
-    "A_other", "A_other label", "Mod adj", "Net sel P (opt)", "Net sel P+1 (opt)",
-]
-RL_HEADERS = ["BU", "State", "Effective", "Filed %", "Status", "Considered?",
-              "Achievement %", "Comment"]
+# Labels are plain-English first with the technical symbol in parentheses
+# (D43) so they still cross-reference Methodology and the named ranges.
+
+
+def lr_headers(p: int) -> list[str]:
+    return [
+        "BU", "State", "Projected loss ratio", "LR basis",
+        "Indication selected chg (s)", "Mod assumed in indication (M_ind)",
+        "Current avg written mod (M_0)", "Current mod as-of date",
+        f"Projected mod at 12/31/{p} (M_1)", "Mod ~1 yr before as-of (M_prior, opt)",
+        f"Projected mod at 12/31/{p + 1} (M_2, opt)", "Adj plan EP (000s)",
+        f"Net trend for {p + 1} (opt)", "Other adj factor (A_other)",
+        "Reason for other adj", "Apply mod adjustment?",
+        f"Net rate selection {p} (opt)", f"Net rate selection {p + 1} (opt)",
+    ]
+
+
+def rl_headers() -> list[str]:
+    return ["BU", "State", "Effective date", "Filed chg %", "Status (taken / planned)",
+            "In indication? (Y/N)", "Achievement % (planned)", "Comment"]
+
+
 RL_HELPER_HEADERS = ["Key", "r_eff", "ln(1+r)", "Eff month", "Days on/after", "Earlier cnt",
                      "Same cnt", "First?", "Dup month?", "Seq"]
 
@@ -162,8 +177,9 @@ def build_inputs(ctx: Ctx):
     section(ws, L.LR_HDR - 1, "A",
             "tbl_LR — one row per BU x state (projected LR and mod inputs). "
             "Columns A:R are one contiguous paste block.")
-    header_row(ws, L.LR_HDR, 1, LR_HEADERS,
-               widths=[9, 8, 11, 10, 11, 8, 8, 11, 8, 11, 9, 12, 11, 8, 18, 9, 11, 11])
+    header_row(ws, L.LR_HDR, 1, lr_headers(p),
+               widths=[9, 8, 11, 10, 12, 13, 12, 11, 12, 13, 12, 12, 11, 10, 18, 11, 12, 12])
+    ws.row_dimensions[L.LR_HDR].height = 44
     put(ws, f"T{L.LR_HDR}", "Key", fnt=font(GREY_DARK, bold=True, size=9), fill=FILL_GREY)
     put(ws, f"T{L.LR_HDR - 1}", "engine helper — do not edit", fnt=F_SMALL_IT)
     fmt_by_col = {3: FMT_PCT, 4: FMT_GEN, 5: FMT_PCT, 6: FMT_MOD, 7: FMT_MOD, 8: FMT_DATE,
@@ -231,7 +247,8 @@ def build_inputs(ctx: Ctx):
             "tbl_RateLog — one row per rate change per BU x state   "
             "(planned rows: effective change = filed % x achievement %). "
             "Columns A:H are one contiguous paste block.")
-    header_row(ws, L.RL_HDR, 1, RL_HEADERS, widths=[9, 8, 11, 9, 10, 12, 13, 34])
+    header_row(ws, L.RL_HDR, 1, rl_headers(), widths=[9, 8, 11, 9, 12, 12, 13, 34])
+    ws.row_dimensions[L.RL_HDR].height = 30
     header_row(ws, L.RL_HDR, 10, RL_HELPER_HEADERS,
                widths=[14, 8, 8, 11, 12, 10, 9, 7, 11, 6], fill=FILL_GREY,
                fnt=font(GREY_DARK, bold=True, size=9))
@@ -482,10 +499,10 @@ def build_control(ctx: Ctx):
     put(ws, "C23", '="CY "&nr_PlanYear', fnt=F_HEADER, fill=FILL_NAVY, align=ALIGN_C)
     put(ws, "D23", '="CY "&(nr_PlanYear+1)&" (indicative)"', fnt=F_HEADER, fill=FILL_NAVY, align=ALIGN_C)
     rows = [
-        ("Earned rate index E_CY", "=nr_ECY_P", "=nr_ECY_P1", FMT_IDX),
-        ("Rate adjustment A_rate", "=nr_Arate_P", "=nr_Arate_P1", FMT_IDX),
+        ("Earned rate level (E_CY)", "=nr_ECY_P", "=nr_ECY_P1", FMT_IDX),
+        ("Rate earn-in factor (A_rate)", "=nr_Arate_P", "=nr_Arate_P1", FMT_IDX),
         ("Earned schedule mod", "=nr_MEarned_P", "=nr_MEarned_P1", FMT_MOD),
-        ("Mod adjustment A_mod", "=nr_Amod_P", "=nr_Amod_P1", FMT_IDX),
+        ("Mod drift factor (A_mod)", "=nr_Amod_P", "=nr_Amod_P1", FMT_IDX),
         ("Earned rate chg (year over year)", "=nr_YoY_P", "=nr_YoY_P1", "+0.0%;-0.0%;0.0%"),
         ("CY plan loss ratio", "=nr_CYLR_P", "=nr_CYLR_P1", FMT_PCT),
     ]

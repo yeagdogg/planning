@@ -78,33 +78,39 @@ def build_bridge(ctx: Ctx):
          "nr_LRproj", "Projected loss ratio from the indication, as entered", False),
         ("LR basis", f'=IF({R}=0,"current",INDEX(lr_basis,{R})&"")', FMT_GEN,
          "nr_Basis", "Basis of the input LR: current | proposed", False),
-        ("Selected change s", f"=IF({R}=0,0,N(INDEX(lr_s,{R})))", FMT_PCT,
+        ("Indication selected change (s)", f"=IF({R}=0,0,N(INDEX(lr_s,{R})))", FMT_PCT,
          "nr_SelS", "Selected/indicated change used for basis normalization", False),
         ("LR at current rate level",
          '=IF(nr_Basis="proposed",nr_LRproj*(1+nr_SelS),nr_LRproj)', FMT_PCT,
          "nr_LRcur", "Basis-normalized projected LR (§3.4.1)", False),
-        ("M_ind", f"=IF({R}=0,1,IF(N(INDEX(lr_mind,{R}))=0,1,INDEX(lr_mind,{R})))", FMT_MOD,
+        ("Mod assumed in indication (M_ind)",
+         f"=IF({R}=0,1,IF(N(INDEX(lr_mind,{R}))=0,1,INDEX(lr_mind,{R})))", FMT_MOD,
          "nr_MInd", "Average schedule mod assumed in the indication", False),
-        ("M_0 (current written mod)", f"=IF({R}=0,1,IF(N(INDEX(lr_m0,{R}))=0,1,INDEX(lr_m0,{R})))",
+        ("Current avg written mod (M_0)",
+         f"=IF({R}=0,1,IF(N(INDEX(lr_m0,{R}))=0,1,INDEX(lr_m0,{R})))",
          FMT_MOD, "nr_M0", "Current average written mod", False),
-        ("M_0 as-of (close of day)",
+        ("Current mod as-of date (close of day)",
          f"=IF({R}=0,DATE(nr_PlanYear-1,10,1),IF(N(INDEX(lr_m0asof,{R}))=0,"
          f"DATE(nr_PlanYear-1,10,1),INDEX(lr_m0asof,{R})))", FMT_DATE,
          "nr_M0Asof", "As-of date of M_0 (anchored close-of-day, D2)", False),
-        ("M_1 (proj. at 12/31/P)", f"=IF({R}=0,1,IF(N(INDEX(lr_m1,{R}))=0,1,INDEX(lr_m1,{R})))",
+        (f"Projected mod at 12/31/{p} (M_1)",
+         f"=IF({R}=0,1,IF(N(INDEX(lr_m1,{R}))=0,1,INDEX(lr_m1,{R})))",
          FMT_MOD, "nr_M1", "Projected average written mod at 12/31/P", False),
-        ("M_prior (0 = not given)", f"=IF({R}=0,0,N(INDEX(lr_mprior,{R})))", FMT_MOD,
+        ("Mod ~1 yr before as-of (M_prior; 0 = not given)",
+         f"=IF({R}=0,0,N(INDEX(lr_mprior,{R})))", FMT_MOD,
          "nr_MPrior", "Average mod ~12 months before M_0; 0/blank = extrapolate backward", False),
-        ("M_2 (0 = defaults to M_1)", f"=IF({R}=0,0,N(INDEX(lr_m2,{R})))", FMT_MOD,
+        (f"Projected mod at 12/31/{p + 1} (M_2; 0 = use M_1)",
+         f"=IF({R}=0,0,N(INDEX(lr_m2,{R})))", FMT_MOD,
          "nr_M2", "Projected written mod at 12/31/(P+1); 0/blank = M_1", False),
         ("Net trend (P+1 view)",
          f"=IF({R}=0,N(nr_TrendDefault),IF(ISBLANK(INDEX(lr_trend,{R})),N(nr_TrendDefault),"
          f"INDEX(lr_trend,{R})))", FMT_PCT,
          "nr_Trend", "Effective P+1 net trend: tbl_LR value, or the Control default when blank",
          False),
-        ("A_other", f"=IF({R}=0,1,IF(N(INDEX(lr_aother,{R}))=0,1,INDEX(lr_aother,{R})))", FMT_IDX,
+        ("Other adjustment factor (A_other)",
+         f"=IF({R}=0,1,IF(N(INDEX(lr_aother,{R}))=0,1,INDEX(lr_aother,{R})))", FMT_IDX,
          "nr_AOther", "Manual adjustment factor (label required when <> 1)", False),
-        ("A_other label", f'=IF({R}=0,"",INDEX(lr_aotherlbl,{R})&"")', FMT_GEN,
+        ("Reason for other adjustment", f'=IF({R}=0,"",INDEX(lr_aotherlbl,{R})&"")', FMT_GEN,
          "nr_AOtherLbl", "Reason for A_other", False),
         ("Mod adjustment (combo row)",
          f'=IF({R}=0,"ON",IF(INDEX(lr_modadj,{R})="OFF","OFF","ON"))', FMT_GEN,
@@ -142,7 +148,7 @@ def build_bridge(ctx: Ctx):
     wf = L.BR_WF_FIRST  # 27
     steps = [
         ("Projected LR (as input)", None, "=nr_LRproj", None, "=nr_LRproj"),
-        ("Basis normalization x(1+s)", '=IF(nr_Basis="proposed",1+nr_SelS,1)', None,
+        ("Convert to current rate level x(1+s)", '=IF(nr_Basis="proposed",1+nr_SelS,1)', None,
          '=IF(nr_Basis="proposed",1+nr_SelS,1)', None),
         (f"Net trend (applies to {p + 1} only)", "=1", None, "=1+nr_Trend", None),
         ('=IF(nr_NetMode,"Rate + price earn-in (net)  A_net","Rate earn-in  A_rate")',
@@ -256,11 +262,13 @@ def build_portfolio(ctx: Ctx):
           "Computed simultaneously from the hidden _calc engine blocks (rows align 1:1 with tbl_LR). "
           "Heatmap: green = favorable vs projected.")
     header_row(ws, L.PF_HDR, 1,
-               ["BU", "State", "Key", "Proj LR (input)", "Basis", "LR current",
-                f"CY {p} plan LR", "D vs current", "A_rate", "A_mod",
-                "Earned chg vs ind", f"Carryover {p + 1}", f"CY {p + 1} LR",
-                "Plan EP (000s)", "EP wt"],
-               widths=[9, 8, 4, 11, 10, 10, 11, 11, 9, 9, 12, 12, 11, 12, 8])
+               ["BU", "State", "Key", "Projected LR (as input)", "Basis",
+                "Projected LR (current level)", f"CY {p} plan LR",
+                "Chg vs projected (pts)", "Rate earn-in (A_rate)", "Mod drift (A_mod)",
+                "Earned rate chg vs indication", f"Carryover into {p + 1}",
+                f"CY {p + 1} plan LR", "Adj plan EP (000s)", "EP weight"],
+               widths=[9, 8, 4, 11, 10, 11, 11, 11, 10, 10, 13, 12, 11, 12, 8])
+    ws.row_dimensions[L.PF_HDR].height = 42
     for i in range(L.LR_ROWS):
         n = i + 1
         r = L.PF_FIRST + i
@@ -387,14 +395,18 @@ def build_state_summary(ctx: Ctx):
             cell.alignment = Alignment(horizontal="centerContinuous", vertical="center")
             cell.font = font(NAVY, bold=True, size=9)
             cell.fill = PatternFill_safe(SS_CAPTION_FILL)
-    headers = ["State", "Adj plan EP (000s)", "M_ind", "M_0 (current)", "M_1 (proj.)",
+    headers = ["State", "Adj plan EP (000s)", "Mod in indication", "Current mod",
+               f"Proj. mod 12/31/{p}",
                "Chg 1 date", "Chg 1", "Chg 2 date", "Chg 2", "Chg 3 date", "Chg 3",
-               "Chg 4 date", "Chg 4", "# chgs", "CRL_ind", f"E_CY({p})", "A_rate",
-               "Earned mod", "A_mod", "LR current", f"CY {p} plan LR", "Net trend",
-               f"A_rate({p + 1})", f"A_mod({p + 1})", f"CY {p + 1} plan LR", "Net sel"]
-    widths = [7, 12, 7.5, 8.5, 8, 9, 7, 9, 7, 9, 7, 9, 7, 6.5, 8, 8, 8, 8, 8, 8.5, 10,
-              7.5, 8.5, 8.5, 10, 7.5]
+               "Chg 4 date", "Chg 4", "# chgs", "Indication rate level",
+               f"{p} earned rate level", "Rate earn-in (A_rate)", f"{p} earned mod",
+               "Mod drift (A_mod)", "Projected LR (current level)", f"CY {p} plan LR",
+               f"Net trend ({p + 1})", f"{p + 1} rate earn-in", f"{p + 1} mod drift",
+               f"CY {p + 1} plan LR", "Net rate sel"]
+    widths = [7, 12, 9, 8.5, 9, 9, 7, 9, 7, 9, 7, 9, 7, 6.5, 9.5, 9.5, 9.5, 9, 9.5, 11, 10,
+              8.5, 9.5, 9.5, 10, 8.5]
     header_row(ws, hdr, 1, headers, widths=widths)
+    ws.row_dimensions[hdr].height = 42
     group_starts = {3, 6, 15, 20, 22, 26}
     med = Side(style="medium", color=STEEL)
 
@@ -555,28 +567,31 @@ def build_state_summary(ctx: Ctx):
     guide = [
         ("Adj plan EP", "Adjusted plan earned premium (000s) — the weight used to combine "
                         "business units and to build the TOTAL row."),
-        ("M_ind  /  M_0  /  M_1", f"Average schedule mod assumed in the indication; the current "
-                                  f"written average; the projected average at 12/31/{p}. Drift "
-                                  "in the average mod is a price change that earns in exactly "
-                                  "like rate."),
+        ("Mod columns  (M_ind / M_0 / M_1)",
+         "The average schedule mod assumed in the indication; the current written average; "
+         f"the projected average at 12/31/{p}. Drift in the average mod is a price change "
+         "that earns in exactly like rate."),
         ("Rate change history", "Effective changes (filed % x achievement for planned rows) in "
                                 "date order for the business unit in view."),
-        ("CRL_ind", "The cumulative rate level the indication assumed FULLY EARNED — the "
-                    "product of all rate changes it considered. This is the 'assumed rate in "
-                    "the indication'."),
-        (f"E_CY({p})", f"The rate level calendar-year {p} ACTUALLY earns. Policies written "
-                       f"last year carry older rates into early {p}, and new actions earn in "
-                       "only gradually as the book turns over — so the earned level rarely "
-                       "matches the indication's."),
-        ("A_rate", f"CRL_ind / E_CY({p}). Above 1.000: {p} earns less rate than the "
-                   "indication assumed, pushing the plan LR up. Below 1.000: extra rate the "
-                   "indication never counted earns in, pushing it down."),
-        ("Earned mod  /  A_mod", f"The average schedule mod {p} earns, and M_ind / that value "
-                                 "— the identical earn-in logic applied to the price (mod) "
-                                 "lever."),
-        ("LR current", "The projected LR restated to current rate level (multiplied by (1+s) "
-                       "when the indication quoted it at the proposed level)."),
-        (f"CY {p} plan LR", "LR current  x  A_rate  x  A_mod  x  A_other."),
+        ("Indication rate level  (CRL_ind)",
+         "The cumulative rate level the indication assumed FULLY EARNED — the product of all "
+         "rate changes it considered. This is the 'assumed rate in the indication'."),
+        (f"{p} earned rate level  (E_CY)",
+         f"The rate level calendar-year {p} ACTUALLY earns. Policies written last year carry "
+         f"older rates into early {p}, and new actions earn in only gradually as the book "
+         "turns over — so the earned level rarely matches the indication's."),
+        ("Rate earn-in  (A_rate)",
+         f"Indication rate level / {p} earned rate level. Above 1.000: {p} earns less rate "
+         "than the indication assumed, pushing the plan LR up. Below 1.000: extra rate the "
+         "indication never counted earns in, pushing it down."),
+        ("Earned mod  /  Mod drift (A_mod)",
+         f"The average schedule mod {p} earns, and M_ind / that value — the identical "
+         "earn-in logic applied to the price (mod) lever."),
+        ("Projected LR (current level)",
+         "The projected LR restated to current rate level (multiplied by (1+s) when the "
+         "indication quoted it at the proposed level)."),
+        (f"CY {p} plan LR",
+         "Projected LR (current level)  x  rate earn-in  x  mod drift  x  other adj."),
         (f"Net trend  /  CY {p + 1}", f"The {p + 1} view holds the indication fixed, applies "
                                       "the net loss-over-premium trend once, and swaps in "
                                       f"{p + 1}'s earn-in factors. Indicative only — it "
@@ -666,15 +681,15 @@ def build_scenarios(ctx: Ctx):
     section(ws, 5, "B", "Scenario levers (blue = enter; blank = same as Base)")
     header_row(ws, 5, 3, ["S1", "S2", "S3", "S4"], widths=[10, 10, 10, 10])
     levers = [
-        ("D filed rate on planned rows (adds to filed %)", FMT_PCT, "sc_dpts",
+        ("Extra filed rate on planned rows (+/- pts)", FMT_PCT, "sc_dpts",
          "Scenario lever: added to every planned row's filed %"),
-        ("Effective-date shift (months, planned rows)", FMT_INT, "sc_shift",
+        ("Shift planned effective dates (+/- months)", FMT_INT, "sc_shift",
          "Scenario lever: EDATE month shift applied to planned rows"),
         ("Achievement override (planned rows)", FMT_PCT, "sc_ach",
          "Scenario lever: replaces achievement % on planned rows"),
-        ("D M_1 (and M_2) written-mod shift", FMT_MOD, "sc_dm1",
+        ("Shift projected mod path M_1/M_2 (+/-)", FMT_MOD, "sc_dm1",
          "Scenario lever: added to M_1 and M_2 anchors"),
-        ("D net rate selection (net-mode combos)", FMT_PCT, "sc_dnet",
+        ("Adjust net rate selection (+/- pts)", FMT_PCT, "sc_dnet",
          "Scenario lever: added to the net selection x for P and P+1 (D39)"),
     ]
     for i, (lbl, fmt, name, desc) in enumerate(levers):
@@ -691,7 +706,8 @@ def build_scenarios(ctx: Ctx):
     ctx.define("sc_res_names", "Scenarios", "$C$13:$G$13", "Scenario result column headers")
     ctx.define("sc_res_cylr", "Scenarios", "$C$14:$G$14", "CY plan LR by scenario")
 
-    metrics = ["CY plan LR (P)", "D vs Base", "A_rate(P)", "A_mod(P)", "E_CY(P)",
+    metrics = [f"CY {p} plan LR", "Change vs Base (pts)", "Rate earn-in (A_rate)",
+               "Mod drift (A_mod)", "Earned rate level (E_CY)",
                f"Carryover into {p + 1}"]
     for i, m in enumerate(metrics):
         label(ws, f"B{14 + i}", m)
@@ -792,16 +808,17 @@ def build_solver(ctx: Ctx):
         ws[f"G{r}"].font = font(GREY_DARK, size=9)
 
     outputs = [
-        ("C_pre  (earned exposure x W0 before eff)",
+        ("Old-rate earned exposure before the date (C_pre)",
          "=SUMPRODUCT((slv_absmi<$G$7)*slv_w*slv_ecp*slv_widx)+$G$18*(1-$G$15)*$G$16", FMT_IDX,
          None),
-        ("C_post (earned exposure x W0 on/after eff)",
+        ("Earnable exposure on/after the date (C_post)",
          "=SUMPRODUCT((slv_absmi>$G$7)*slv_w*slv_ecp*slv_widx)+$G$18*$G$15*$G$17", FMT_IDX, None),
-        ("D (total CY earned exposure)", "=slv_den", FMT_IDX, None),
-        ("A_mod(P) in force", "=nr_Amod_P", FMT_IDX, None),
-        ("A_rate needed", "=IF(OR(nr_LRcur=0,$C$7=\"\"),0,$C$7/(nr_LRcur*$C$14*nr_AOther))",
+        ("Total CY earned exposure (D)", "=slv_den", FMT_IDX, None),
+        ("Mod drift factor in force (A_mod)", "=nr_Amod_P", FMT_IDX, None),
+        ("Rate earn-in factor needed (A_rate)",
+         "=IF(OR(nr_LRcur=0,$C$7=\"\"),0,$C$7/(nr_LRcur*$C$14*nr_AOther))",
          FMT_IDX, None),
-        ("E_CY needed", "=IF($C$15=0,0,nr_CRLind/$C$15)", FMT_IDX, None),
+        ("Earned rate level needed (E_CY)", "=IF($C$15=0,0,nr_CRLind/$C$15)", FMT_IDX, None),
         ("REQUIRED CHANGE r",
          '=IF(OR($C$12=0,$C$16=0),"n/a",($C$16*$C$13-$C$11)/$C$12-1)', "0.000%", "nr_SolverR"),
         ("Filed-rate equivalent (r / achievement)",

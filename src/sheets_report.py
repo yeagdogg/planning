@@ -145,10 +145,12 @@ def build_flow_dashboard(ctx: Ctx):
     qt = 48
     section(ws, qt - 1, "B",
             f"Quarterly earned rate and price change, and unearned runway — CY {p} and CY {p + 1}")
-    header_row(ws, qt, 2, ["Quarter", "E_Q (earned idx)", "E_Q prior year", "YoY earned rate chg",
-                           "W at quarter end", "Unearned runway", "Price idx P_Q",
-                           "P_Q prior year", "YoY earned price chg"],
-               widths=[10, 13, 13, 13, 13, 13, 12, 12, 13])
+    header_row(ws, qt, 2, ["Quarter", "Earned rate level (E_Q)", "Prior-year E_Q",
+                           "YoY earned rate chg", "Written level at qtr end",
+                           "Unearned runway", "Earned price level (P_Q)", "Prior-year P_Q",
+                           "YoY earned price chg"],
+               widths=[10, 13, 13, 13, 13, 13, 13, 12, 13])
+    ws.row_dimensions[qt].height = 30
     rows = [(p, q) for q in range(1, 5)] + [(p + 1, q) for q in range(1, 5)]
     for i, (yr, q) in enumerate(rows):
         r = qt + 1 + i
