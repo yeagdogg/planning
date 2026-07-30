@@ -28,8 +28,8 @@ TABLE_STYLE = TableStyleInfo(
 )
 
 
-def _dv(ws, kind, ranges, **kw):
-    dv = DataValidation(type=kind, allow_blank=True, showErrorMessage=True, **kw)
+def _dv(ws, kind, ranges, blocking=True, **kw):
+    dv = DataValidation(type=kind, allow_blank=True, showErrorMessage=blocking, **kw)
     ws.add_data_validation(dv)
     for r in ranges:
         dv.add(r)
@@ -42,25 +42,88 @@ def _dv(ws, kind, ranges, **kw):
 
 
 def build_lists(ctx: Ctx):
+    """Validation lists. BU and state lists are DYNAMIC (D42): they extract the
+    unique values actually present in tbl_LR via classic first-occurrence
+    helpers, so renaming or adding a BU/state in tbl_LR flows straight into
+    every dropdown, the Control selectors, and the State Summary — no
+    regeneration needed. The remaining lists are fixed enumerations."""
     ws = ctx.wb["_lists"]
-    label(ws, "A1", "Validation lists (hidden sheet; referenced by data-validation dropdowns)", bold=True)
-    cols = {
-        "A": ("lst_bu", "Business units", list(ctx.cfg.business_units)),
-        "B": ("lst_state", "States", list(ctx.cfg.states)),
+    n = L.LR_ROWS
+    first, last = 3, 3 + n - 1
+    label(ws, "A1",
+          "Validation lists (hidden). Columns A/B/I are LIVE unique values from tbl_LR; "
+          "helper machinery in columns M:P (D42).", bold=True)
+
+    # ---- static enumerations ----
+    static_cols = {
         "C": ("lst_status", "Rate change status", ["taken", "planned"]),
         "D": ("lst_yn", "Yes/No flags", ["Y", "N"]),
         "E": ("lst_basis", "LR basis", ["current", "proposed"]),
         "F": ("lst_onoff", "Toggles", ["ON", "OFF"]),
         "G": ("lst_scenario", "Scenario selector", ["Base", "S1", "S2", "S3", "S4"]),
         "H": ("lst_basisdisp", "Projected-LR KPI display", ["As input", "Current level"]),
-        "I": ("lst_bu_all", "State Summary BU filter", ["All"] + list(ctx.cfg.business_units)),
     }
-    for letter, (name, desc, values) in cols.items():
+    for letter, (name, desc, values) in static_cols.items():
         label(ws, f"{letter}2", desc, bold=True)
         for i, v in enumerate(values):
             put(ws, f"{letter}{3 + i}", v, fnt=F_LABEL)
         ctx.define(name, "_lists", f"${letter}$3:${letter}${2 + len(values)}", desc)
-    set_widths(ws, {c: 18 for c in cols})
+
+    # ---- first-occurrence helpers (aligned with tbl_LR rows) ----
+    label(ws, "M2", "BU 1st?", bold=True)
+    label(ws, "N2", "BU rank", bold=True)
+    label(ws, "O2", "State 1st?", bold=True)
+    label(ws, "P2", "State rank", bold=True)
+    for k in range(1, n + 1):
+        r = first + k - 1
+        ar = L.LR_FIRST + k - 1
+        if k == 1:
+            formula(ws, f"M{r}", f'=IF(Inputs!$A${ar}="",0,1)')
+            formula(ws, f"O{r}", f'=IF(Inputs!$B${ar}="",0,1)')
+        else:
+            formula(ws, f"M{r}",
+                    f'=IF(Inputs!$A${ar}="",0,'
+                    f"IF(COUNTIF(Inputs!$A${L.LR_FIRST}:$A${ar - 1},Inputs!$A${ar})=0,1,0))")
+            formula(ws, f"O{r}",
+                    f'=IF(Inputs!$B${ar}="",0,'
+                    f"IF(COUNTIF(Inputs!$B${L.LR_FIRST}:$B${ar - 1},Inputs!$B${ar})=0,1,0))")
+        formula(ws, f"N{r}", f"=IF($M{r}=0,0,SUM($M${first}:$M{r}))")
+        formula(ws, f"P{r}", f"=IF($O{r}=0,0,SUM($O${first}:$O{r}))")
+        for cL in "MNOP":
+            ws[f"{cL}{r}"].font = F_LABEL
+    label(ws, "M1", "count:", bold=True)
+    formula(ws, f"N1", f"=SUM($M${first}:$M${last})")
+    formula(ws, f"P1", f"=SUM($O${first}:$O${last})")
+
+    # ---- live unique lists ----
+    label(ws, "A2", "Business units (live)", bold=True)
+    label(ws, "B2", "States (live)", bold=True)
+    label(ws, "I2", "BU filter (live)", bold=True)
+    put(ws, f"I{first}", "All", fnt=F_LABEL)
+    for k in range(1, n + 1):
+        r = first + k - 1
+        formula(ws, f"A{r}",
+                f'=IF({k}>$N$1,"",INDEX(lr_bu,MATCH({k},$N${first}:$N${last},0)))')
+        formula(ws, f"B{r}",
+                f'=IF({k}>$P$1,"",INDEX(lr_state,MATCH({k},$P${first}:$P${last},0)))')
+        formula(ws, f"I{r + 1}", f'=IF($A{r}="","",$A{r})')
+        for cL in "ABI":
+            ws[f"{cL}{r}"].font = F_LABEL
+
+    # Self-sizing ranges via the non-volatile INDEX form (no OFFSET).
+    ctx.define("lst_bu", "_lists",
+               f"$A${first}:INDEX(_lists!$A${first}:$A${last},MAX(1,_lists!$N$1))",
+               "LIVE unique business units from tbl_LR (self-sizing, D42)")
+    ctx.define("lst_state", "_lists",
+               f"$B${first}:INDEX(_lists!$B${first}:$B${last},MAX(1,_lists!$P$1))",
+               "LIVE unique states from tbl_LR (self-sizing, D42)")
+    ctx.define("lst_bu_all", "_lists",
+               f"$I${first}:INDEX(_lists!$I${first}:$I${last + 1},MAX(1,_lists!$N$1+1))",
+               "State Summary BU filter: 'All' + live business units (D42)")
+    ctx.define("lst_state_cnt", "_lists", "$P$1",
+               "Count of distinct states currently in tbl_LR")
+    set_widths(ws, {c: 18 for c in "ABCDEFGHI"})
+    set_widths(ws, {c: 9 for c in "MNOP"})
 
 
 # ---------------------------------------------------------------------------
@@ -265,8 +328,11 @@ def build_inputs(ctx: Ctx):
     # DV sits ON the input cells only (a paste passes straight over it); the
     # paste blocks contain no formula columns (D40).
     fr, lr_ = L.LR_FIRST, L.LR_LAST
-    _dv(ws, "list", [f"A{fr}:A{lr_}"], formula1="=lst_bu")
-    _dv(ws, "list", [f"B{fr}:B{lr_}"], formula1="=lst_state")
+    # tbl_LR defines the roster, so its own BU/State dropdowns are
+    # SUGGESTION-ONLY (blocking=False): pick an existing value or type a new
+    # one — every list downstream then follows automatically (D42).
+    _dv(ws, "list", [f"A{fr}:A{lr_}"], blocking=False, formula1="=lst_bu")
+    _dv(ws, "list", [f"B{fr}:B{lr_}"], blocking=False, formula1="=lst_state")
     _dv(ws, "list", [f"D{fr}:D{lr_}"], formula1="=lst_basis")
     _dv(ws, "list", [f"P{fr}:P{lr_}"], formula1="=lst_onoff")
     _dv(ws, "decimal", [f"C{fr}:C{lr_}"], operator="between", formula1="0", formula2="3",

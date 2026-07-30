@@ -369,7 +369,8 @@ def build_state_summary(ctx: Ctx):
     dv.add("B4")
 
     cap_row, hdr, first = 6, 7, 8
-    last = first + len(states) - 1
+    n_disp = len(states) + 3   # live-roster slots incl. headroom for new states (D42)
+    last = first + n_disp - 1
     tot = last + 2
     crit = "$AA$4"
 
@@ -420,11 +421,12 @@ def build_state_summary(ctx: Ctx):
         (25, "calc_w_cylr1", "calc_cylr_p1", None, FMT_PCT),
     ]
 
-    for i, state in enumerate(states):
+    for i in range(n_disp):
         r = first + i
         band = FILL_PANEL if i % 2 else None
-        put(ws, f"A{r}", state, fnt=font(NAVY, bold=True), align=ALIGN_C, fill=band,
-            border=BORDER_THIN)
+        # live roster: the k-th distinct state currently in tbl_LR (D42)
+        link(ws, f"A{r}", f"=_lists!$B${3 + i}", align=ALIGN_C, fill=band,
+             border=BORDER_THIN, bold=True)
         formula(ws, f"AA{r}", f"=COUNTIFS(calc_state,$A{r},calc_bu,{crit})", fmt=FMT_INT)
         ws[f"AA{r}"].font = font(GREY_DARK, size=8)
         formula(ws, f"AB{r}", f'=IF($B$4="All","",$B$4&"|"&$A{r})')

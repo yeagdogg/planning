@@ -273,11 +273,19 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
         tot_l28 += sum(ep * om.cy_lr_p1 for ep, om in rows_)
     check("State Summary (All): every state row EP-weighted correctly", bad == 0,
           f"{bad} mismatches")
-    tot_row = 8 + len(cfg.states) + 1
+    tot_row = 8 + len(cfg.states) + 3 + 1   # 3 live-roster spare rows (D42)
     check("State Summary (All): total row EP-weighted correctly",
           approx(ss[f"U{tot_row}"].value, tot_l27 / tot_ep, 1e-9)
           and approx(ss[f"Y{tot_row}"].value, tot_l28 / tot_ep, 1e-9)
           and approx(ss[f"B{tot_row}"].value, tot_ep, 1e-6))
+    # live dimension lists (D42): _lists uniques match the seeded roster
+    ls = wb["_lists"]
+    got_bus = [ls[f"A{3 + i}"].value for i in range(len(cfg.business_units))]
+    got_states = [ls[f"B{3 + i}"].value for i in range(len(cfg.states))]
+    check("_lists live BU uniques match tbl_LR", got_bus == list(cfg.business_units),
+          str(got_bus))
+    check("_lists live state uniques match tbl_LR", got_states == list(cfg.states),
+          str(got_states[:5]))
     return wb
 
 
@@ -578,6 +586,40 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
               approx(wb["Scenarios"]["C14"].value, net_m.cy_lr_p, 1e-9))
     run("net + scenario D-net", {("Inputs", f"Q{we_row_xl}"): 0.08,
                                  ("Scenarios", "C10"): 0.02}, a9e)
+
+    # 9f. in-book rename of a BU and a state (D42): every dropdown list, the
+    # selectors, and the State Summary must follow without regeneration
+    ren_state = st[1] if len(st) > 1 else st[0]
+    ren_row = next(x for x in lr_rows if x["bu"] == "BU-B" and x["state"] == ren_state)
+    ren_lr_xl = L.LR_FIRST + lr_rows.index(ren_row)
+    muts = {("Inputs", f"A{ren_lr_xl}"): "BU-X", ("Inputs", f"B{ren_lr_xl}"): "ZZ",
+            ("Control", "C7"): "BU-X", ("Control", "C8"): "ZZ"}
+    for i, rr in enumerate(rate_rows):
+        if rr["bu"] == "BU-B" and rr["state"] == ren_state:
+            muts[("Inputs", f"A{L.RL_FIRST + i}")] = "BU-X"
+            muts[("Inputs", f"B{L.RL_FIRST + i}")] = "ZZ"
+    ren_m = engine.run_bridge(p, combo_of("BU-B", ren_state), "monthly")  # values unchanged
+
+    def a9f(wb):
+        ls = wb["_lists"]
+        bus = {ls[f"A{3 + i}"].value for i in range(10)}
+        sts = {ls[f"B{3 + i}"].value for i in range(len(st) + 3)}
+        check("[rename] new BU appears in the live BU list", "BU-X" in bus, str(sorted(
+            b for b in bus if b))[:80])
+        check("[rename] new state appears in the live state list", "ZZ" in sts)
+        check("[rename] Bridge ties oracle for the renamed combo",
+              approx(nval(wb, "nr_CYLR_P"), ren_m.cy_lr_p, 1e-9),
+              f"wb={nval(wb, 'nr_CYLR_P')} oracle={ren_m.cy_lr_p}")
+        ss = wb["State Summary"]
+        zz_row = next((r for r in range(8, 8 + len(st) + 3)
+                       if ss[f"A{r}"].value == "ZZ"), None)
+        check("[rename] State Summary grew a live ZZ row", zz_row is not None)
+        if zz_row:
+            check("[rename] ZZ row EP and CY LR tie the renamed combo",
+                  approx(ss[f"B{zz_row}"].value, ren_row["ep"], 1e-6)
+                  and approx(ss[f"U{zz_row}"].value, ren_m.cy_lr_p, 1e-9),
+                  f"EP={ss[f'B{zz_row}'].value} U={ss[f'U{zz_row}'].value}")
+    run("in-book rename BU/state", muts, a9f)
 
     # 10. plan-year change (fingerprint must go N/A, engines recompute cleanly)
     p2 = p + 1

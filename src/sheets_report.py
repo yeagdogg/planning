@@ -411,6 +411,8 @@ def build_checks(ctx: Ctx):
        '=SUMPRODUCT((se_state<>"")*(N(se_sum)=0)*1)', 0, "WARN"))
     A(("Advisory", "Considered? column is Y/N (blank counts as N)", "=0",
        '=SUMPRODUCT((rl_key<>"")*(rl_cons<>"Y")*(rl_cons<>"N")*(rl_cons<>"")*1)', 0, "WARN"))
+    A(("Advisory", "No duplicate BU x state combos in tbl_LR (roster integrity)", "=0",
+       '=SUMPRODUCT((lr_key<>"")*(COUNTIF(lr_key,lr_key)>1)*1)', 0, "WARN"))
     A(("Advisory", "Net selections pair with an active mod adjustment (else rate-only)", "=0",
        '=SUMPRODUCT((lr_key<>"")*(1-ISBLANK(lr_netp))*(lr_modadj="OFF")*1)', 0, "WARN"))
     A(("Advisory", "No planned rows on/after 1/1/P are superseded by a net selection", "=0",
@@ -710,7 +712,8 @@ def build_readme(ctx: Ctx):
         "1.  Replace the SAMPLE rows on the Inputs sheet with your book: tbl_LR (one row per "
         "BU x state), tbl_RateLog (one row per rate change per BU x state), tbl_Seasonality "
         "(optional, by state), and the workbook policy term. Do not insert or delete rows — "
-        "spare rows are provided.",
+        "spare rows are provided. Rename BUs and states directly in tbl_LR: every dropdown, "
+        "the Control selectors, and the State Summary follow the live roster automatically.",
         "2.  On Control, pick the plan year, BU, and state (this workbook covers "
         f"{ctx.lob.name} only). Toggles: seasonality, the mod-adjustment master switch, and "
         "the Projected-LR display basis.",
