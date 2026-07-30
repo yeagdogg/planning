@@ -350,7 +350,12 @@ def build_rate_engine(ctx: Ctx):
                 f'=IF({cL}{L.RE_ROW_DEN}=0,"",SUMPRODUCT({cL}${L.RE_COH_FIRST}:{cL}${L.RE_COH_LAST},'
                 f"$H${L.RE_COH_FIRST}:$H${L.RE_COH_LAST},'Mod Engine'!$E${L.RE_COH_FIRST}:$E${L.RE_COH_LAST})"
                 f"/{cL}{L.RE_ROW_DEN})", fmt="0.000")
-        for rr in (L.RE_ROW_MINW, L.RE_ROW_MAXW, L.RE_ROW_VIOL, L.RE_ROW_MODM):
+        formula(ws, f"{cL}{L.RE_ROW_MODNUM}",
+                f"=SUMPRODUCT({cL}${L.RE_COH_FIRST}:{cL}${L.RE_COH_LAST},"
+                f"$H${L.RE_COH_FIRST}:$H${L.RE_COH_LAST},'Mod Engine'!$E${L.RE_COH_FIRST}:$E${L.RE_COH_LAST})",
+                fmt="0.0000")
+        for rr in (L.RE_ROW_MINW, L.RE_ROW_MAXW, L.RE_ROW_VIOL, L.RE_ROW_MODM,
+                   L.RE_ROW_MODNUM):
             ws[f"{cL}{rr}"].font = font(GREY_DARK, size=8)
     for rr, lbl in ((L.RE_ROW_NUM, "Monthly numerator  SUM w-e-W"),
                     (L.RE_ROW_DEN, "Monthly denominator  SUM w-e"),
@@ -358,7 +363,8 @@ def build_rate_engine(ctx: Ctx):
                     (L.RE_ROW_MINW, "min W over contributing cohorts"),
                     (L.RE_ROW_MAXW, "max W over contributing cohorts"),
                     (L.RE_ROW_VIOL, "bound violation (Checks)"),
-                    (L.RE_ROW_MODM, "Earned mod by month (M_w from Mod Engine)")):
+                    (L.RE_ROW_MODM, "Earned mod by month (M_w from Mod Engine)"),
+                    (L.RE_ROW_MODNUM, "Mod numerator SUM w-e-M (quarterly price)")):
         put(ws, f"{col(mcol0 - 1)}{rr}", lbl, fnt=font(GREY_DARK, size=9),
             align=ALIGN_C if False else None)
     ctx.define("re_em_row", "Rate Engine",

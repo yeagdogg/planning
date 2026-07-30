@@ -144,10 +144,11 @@ def build_flow_dashboard(ctx: Ctx):
     # ---- (e) quarterly table + (b) YoY chart ----
     qt = 48
     section(ws, qt - 1, "B",
-            f"Quarterly earned rate change and unearned runway — CY {p} and CY {p + 1}")
-    header_row(ws, qt, 2, ["Quarter", "E_Q (earned idx)", "E_Q prior year", "YoY earned chg",
-                           "W at quarter end", "Unearned runway"],
-               widths=[10, 13, 13, 12, 13, 13])
+            f"Quarterly earned rate and price change, and unearned runway — CY {p} and CY {p + 1}")
+    header_row(ws, qt, 2, ["Quarter", "E_Q (earned idx)", "E_Q prior year", "YoY earned rate chg",
+                           "W at quarter end", "Unearned runway", "Price idx P_Q",
+                           "P_Q prior year", "YoY earned price chg"],
+               widths=[10, 13, 13, 13, 13, 13, 12, 12, 13])
     rows = [(p, q) for q in range(1, 5)] + [(p + 1, q) for q in range(1, 5)]
     for i, (yr, q) in enumerate(rows):
         r = qt + 1 + i
@@ -167,21 +168,35 @@ def build_flow_dashboard(ctx: Ctx):
         coh_end = L.RE_COH_FIRST + 12 + off + 2
         link(ws, f"F{r}", f"={RE}!$N${coh_end}", fmt=FMT_IDX, align=ALIGN_C)
         formula(ws, f"G{r}", f"=$F{r}/$C{r}-1", fmt="+0.0%;-0.0%;0.0%", align=ALIGN_C)
+        # combined price: rate x quarterly earned mod / M_ind (net path already combined)
+        formula(ws, f"H{r}",
+                f"=IF(nr_NetMode,$C{r},$C{r}*SUM({RE}!{c1}${L.RE_ROW_MODNUM}:{c2}${L.RE_ROW_MODNUM})"
+                f"/SUM({RE}!{c1}${L.RE_ROW_DEN}:{c2}${L.RE_ROW_DEN})/nr_MInd)",
+                fmt=FMT_IDX, align=ALIGN_C)
+        formula(ws, f"I{r}",
+                f"=IF(nr_NetMode,$D{r},$D{r}*SUM({RE}!{p1}${L.RE_ROW_MODNUM}:{p2}${L.RE_ROW_MODNUM})"
+                f"/SUM({RE}!{p1}${L.RE_ROW_DEN}:{p2}${L.RE_ROW_DEN})/nr_MInd)",
+                fmt=FMT_IDX, align=ALIGN_C)
+        ws[f"I{r}"].font = font(GREY_DARK, size=9)
+        formula(ws, f"J{r}", f"=$H{r}/$I{r}-1", fmt="+0.0%;-0.0%;0.0%", align=ALIGN_C)
     note(ws, f"B{qt + 10}",
          "Unearned runway = written index at quarter end / earned index of the quarter - 1: "
          "rate level already locked in on the books but not yet visible in earned premium "
-         "(DECISIONS.md D27). YoY uses the same quarter one year earlier.")
+         "(DECISIONS.md D27). Price = rate index x earned mod / M_ind — the combined net "
+         "price customers actually pay (under a net rate selection the two series coincide "
+         "by construction). YoY uses the same quarter one year earlier.")
 
     yoy = BarChart()
     yoy.type = "col"
     yoy.gapWidth = 50
     yoy.add_data(Reference(ws, min_col=5, min_row=qt, max_row=qt + 8), titles_from_data=True)
+    yoy.add_data(Reference(ws, min_col=10, min_row=qt, max_row=qt + 8), titles_from_data=True)
     yoy.set_categories(Reference(ws, min_col=2, min_row=qt + 1, max_row=qt + 8))
     yoy.series[0].graphicalProperties.solidFill = STEEL
-    yoy.legend = None
+    yoy.series[1].graphicalProperties.solidFill = NAVY
     yoy.y_axis.number_format = "0.0%"
-    _chart(yoy, f"Year-over-year earned rate change by quarter — CY {p} and CY {p + 1}",
-           height=8.5, width=16, y_title="YoY earned rate chg")
+    _chart(yoy, f"YoY earned RATE vs PRICE change by quarter — CY {p} and CY {p + 1}",
+           height=8.5, width=16, y_title="YoY earned change")
     ws.add_chart(yoy, "K4")
 
     set_widths(ws, {"A": 2, "B": 11, "C": 12, "D": 12, "E": 12, "F": 12, "G": 13, "H": 13,

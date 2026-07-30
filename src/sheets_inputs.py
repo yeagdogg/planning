@@ -67,14 +67,16 @@ def build_lists(ctx: Ctx):
 # Inputs
 # ---------------------------------------------------------------------------
 
+# Paste-friendly layout (D40): input columns are CONTIGUOUS — the key and all
+# engine helper columns live to the RIGHT of each dataset, never in between.
 LR_HEADERS = [
-    "BU", "State", "Key", "Projected LR", "LR basis", "Selected chg s", "M_ind", "M_0",
+    "BU", "State", "Projected LR", "LR basis", "Selected chg s", "M_ind", "M_0",
     "M_0 as-of", "M_1", "M_prior (opt)", "M_2 (opt)", "Adj plan EP (000s)", "Net trend P+1",
     "A_other", "A_other label", "Mod adj", "Net sel P (opt)", "Net sel P+1 (opt)",
 ]
-RL_HEADERS = ["BU", "State", "Key", "Effective", "Filed %", "Status", "Considered?",
+RL_HEADERS = ["BU", "State", "Effective", "Filed %", "Status", "Considered?",
               "Achievement %", "Comment"]
-RL_HELPER_HEADERS = ["r_eff", "ln(1+r)", "Eff month", "Days on/after", "Earlier cnt",
+RL_HELPER_HEADERS = ["Key", "r_eff", "ln(1+r)", "Eff month", "Days on/after", "Earlier cnt",
                      "Same cnt", "First?", "Dup month?", "Seq"]
 
 
@@ -88,70 +90,75 @@ def build_inputs(ctx: Ctx):
         "SAMPLE DATA: every populated row below is illustrative and should be replaced with "
         f"your book. {ctx.we_key} carries the documented worked example used by the Checks sheet.",
         fnt=font(FAIL_RED, bold=True, italic=True))
+    put(ws, "A5" if False else "T4",
+        "Each dataset is one contiguous paste block (tbl_LR A:R, tbl_RateLog A:H) — keys and "
+        "engine helpers sit to the right and recalculate on their own.",
+        fnt=F_SMALL_IT)
 
     # ------------------------------------------------------------------ tbl_LR
     section(ws, L.LR_HDR - 1, "A",
-            "tbl_LR — one row per BU x state (projected LR and mod inputs)")
+            "tbl_LR — one row per BU x state (projected LR and mod inputs). "
+            "Columns A:R are one contiguous paste block.")
     header_row(ws, L.LR_HDR, 1, LR_HEADERS,
-               widths=[9, 8, 14, 11, 10, 11, 8, 8, 11, 8, 11, 9, 12, 11, 8, 18, 9, 11, 11])
-    fmt_by_col = {4: FMT_PCT, 5: FMT_GEN, 6: FMT_PCT, 7: FMT_MOD, 8: FMT_MOD, 9: FMT_DATE,
-                  10: FMT_MOD, 11: FMT_MOD, 12: FMT_MOD, 13: FMT_EP, 14: FMT_PCT,
-                  15: FMT_IDX, 16: FMT_GEN, 17: FMT_GEN, 18: FMT_PCT, 19: FMT_PCT}
-    required_cols = {1, 2, 4, 5, 7, 8, 9, 10, 17}
+               widths=[9, 8, 11, 10, 11, 8, 8, 11, 8, 11, 9, 12, 11, 8, 18, 9, 11, 11])
+    put(ws, f"T{L.LR_HDR}", "Key", fnt=font(GREY_DARK, bold=True, size=9), fill=FILL_GREY)
+    put(ws, f"T{L.LR_HDR - 1}", "engine helper — do not edit", fnt=F_SMALL_IT)
+    fmt_by_col = {3: FMT_PCT, 4: FMT_GEN, 5: FMT_PCT, 6: FMT_MOD, 7: FMT_MOD, 8: FMT_DATE,
+                  9: FMT_MOD, 10: FMT_MOD, 11: FMT_MOD, 12: FMT_EP, 13: FMT_PCT,
+                  14: FMT_IDX, 15: FMT_GEN, 16: FMT_GEN, 17: FMT_PCT, 18: FMT_PCT}
+    required_cols = {1, 2, 3, 4, 6, 7, 8, 9, 16}
     for i in range(L.LR_ROWS):
         r = L.LR_FIRST + i
         row = ctx.lr_rows[i] if i < len(ctx.lr_rows) else None
         vals = {
-            1: row and row["bu"], 2: row and row["state"], 4: row and row["lr_proj"],
-            5: row and row["basis"], 6: row and row["s"], 7: row and row["m_ind"],
-            8: row and row["m0"], 9: row and row["m0_asof"], 10: row and row["m1"],
-            11: row and row["m_prior"], 12: row and row["m2"], 13: row and row["ep"],
-            14: row and row["trend"], 15: row and row["a_other"],
-            16: (row["a_other_label"] if row else None), 17: row and row["modadj"],
-            18: row and row["netp"], 19: row and row["netp1"],
+            1: row and row["bu"], 2: row and row["state"], 3: row and row["lr_proj"],
+            4: row and row["basis"], 5: row and row["s"], 6: row and row["m_ind"],
+            7: row and row["m0"], 8: row and row["m0_asof"], 9: row and row["m1"],
+            10: row and row["m_prior"], 11: row and row["m2"], 12: row and row["ep"],
+            13: row and row["trend"], 14: row and row["a_other"],
+            15: (row["a_other_label"] if row else None), 16: row and row["modadj"],
+            17: row and row["netp"], 18: row and row["netp1"],
         }
-        for c in range(1, 20):
-            if c == 3:
-                formula(ws, f"C{r}", f'=IF(OR($A{r}="",$B{r}=""),"",$A{r}&"|"&$B{r})',
-                        fmt=FMT_GEN, border=BORDER_THIN)
-                ws[f"C{r}"].font = font(GREY_DARK, size=9)
-                continue
+        for c in range(1, 19):
             input_cell(ws, f"{ws.cell(row=r, column=c).coordinate}", vals.get(c),
                        fmt=fmt_by_col.get(c, FMT_GEN), required=(c in required_cols))
-    ws[f"Q{L.LR_HDR}"].comment = Comment(
+        formula(ws, f"T{r}", f'=IF(OR($A{r}="",$B{r}=""),"",$A{r}&"|"&$B{r})',
+                fmt=FMT_GEN, border=BORDER_THIN)
+        ws[f"T{r}"].font = font(GREY_DARK, size=9)
+    ws[f"P{L.LR_HDR}"].comment = Comment(
         "Per-combo mod adjustment toggle. Set OFF if the indication's premium trend already "
         "reflects schedule mod drift — otherwise the drift is double-counted. The Control "
         "sheet master toggle must also be ON for the adjustment to apply.", "generator")
-    ws[f"R{L.LR_HDR}"].comment = Comment(
+    ws[f"Q{L.LR_HDR}"].comment = Comment(
         "OPTIONAL net rate selection (DECISIONS.md D39). When set, cohorts written on/after "
         "1/1/P abandon the planned rate program and the projected mod path: each cohort's "
         "combined net price (rate x mod) renews this % above its year-ago cohort. History "
         "before 1/1/P still earns exactly as modeled. Blank = explicit program (classic). "
         "The P+1 column defaults to the P selection when blank.", "generator")
-    tbl = Table(displayName="tbl_LR", ref=f"A{L.LR_HDR}:S{L.LR_LAST}")
+    tbl = Table(displayName="tbl_LR", ref=f"A{L.LR_HDR}:R{L.LR_LAST}")
     tbl.tableStyleInfo = TABLE_STYLE
     ws.add_table(tbl)
     lr_names = {
         "lr_bu": ("A", "tbl_LR business unit"), "lr_state": ("B", "tbl_LR state"),
-        "lr_key": ("C", "tbl_LR concatenated BU|State key"),
-        "lr_lrproj": ("D", "Projected loss ratio from the indication"),
-        "lr_basis": ("E", "LR basis: current | proposed"),
-        "lr_s": ("F", "Selected/indicated change s (used when basis = proposed)"),
-        "lr_mind": ("G", "M_ind: avg schedule mod assumed in the indication"),
-        "lr_m0": ("H", "M_0: current avg written mod"),
-        "lr_m0asof": ("I", "M_0 as-of date (close of day)"),
-        "lr_m1": ("J", "M_1: projected avg written mod at 12/31/P"),
-        "lr_mprior": ("K", "M_prior: avg mod ~12 months before M_0 (optional)"),
-        "lr_m2": ("L", "M_2: projected avg written mod at 12/31/(P+1); blank = M_1"),
-        "lr_ep": ("M", "ADJUSTED plan earned premium (000s) — the weight behind Portfolio "
+        "lr_lrproj": ("C", "Projected loss ratio from the indication"),
+        "lr_basis": ("D", "LR basis: current | proposed"),
+        "lr_s": ("E", "Selected/indicated change s (used when basis = proposed)"),
+        "lr_mind": ("F", "M_ind: avg schedule mod assumed in the indication"),
+        "lr_m0": ("G", "M_0: current avg written mod"),
+        "lr_m0asof": ("H", "M_0 as-of date (close of day)"),
+        "lr_m1": ("I", "M_1: projected avg written mod at 12/31/P"),
+        "lr_mprior": ("J", "M_prior: avg mod ~12 months before M_0 (optional)"),
+        "lr_m2": ("K", "M_2: projected avg written mod at 12/31/(P+1); blank = M_1"),
+        "lr_ep": ("L", "ADJUSTED plan earned premium (000s) — the weight behind Portfolio "
                        "totals and State Summary aggregates"),
-        "lr_trend": ("N", "Annual net loss-over-premium trend for the P+1 view"),
-        "lr_aother": ("O", "A_other manual adjustment factor"),
-        "lr_aotherlbl": ("P", "Label required when A_other <> 1"),
-        "lr_modadj": ("Q", "Per-combo mod adjustment toggle (ON/OFF)"),
-        "lr_netp": ("R", "OPTIONAL net rate selection for P: YoY combined rate x mod target "
+        "lr_trend": ("M", "Annual net loss-over-premium trend for the P+1 view"),
+        "lr_aother": ("N", "A_other manual adjustment factor"),
+        "lr_aotherlbl": ("O", "Label required when A_other <> 1"),
+        "lr_modadj": ("P", "Per-combo mod adjustment toggle (ON/OFF)"),
+        "lr_netp": ("Q", "OPTIONAL net rate selection for P: YoY combined rate x mod target "
                          "from 1/1/P (blank = explicit program, D39)"),
-        "lr_netp1": ("S", "OPTIONAL net selection for P+1 (blank = carry the P selection)"),
+        "lr_netp1": ("R", "OPTIONAL net selection for P+1 (blank = carry the P selection)"),
+        "lr_key": ("T", "Helper: concatenated BU|State key (right of the paste block, D40)"),
     }
     for name, (colL, desc) in lr_names.items():
         ctx.define(name, "Inputs", f"${colL}${L.LR_FIRST}:${colL}${L.LR_LAST}", desc)
@@ -159,63 +166,64 @@ def build_inputs(ctx: Ctx):
     # -------------------------------------------------------------- tbl_RateLog
     section(ws, L.RL_HDR - 1, "A",
             "tbl_RateLog — one row per rate change per BU x state   "
-            "(planned rows: effective change = filed % x achievement %)")
-    header_row(ws, L.RL_HDR, 1, RL_HEADERS, widths=[9, 8, 14, 11, 9, 10, 12, 13, 34])
+            "(planned rows: effective change = filed % x achievement %). "
+            "Columns A:H are one contiguous paste block.")
+    header_row(ws, L.RL_HDR, 1, RL_HEADERS, widths=[9, 8, 11, 9, 10, 12, 13, 34])
     header_row(ws, L.RL_HDR, 10, RL_HELPER_HEADERS,
-               widths=[8, 8, 11, 12, 10, 9, 7, 11, 6], fill=FILL_GREY,
+               widths=[14, 8, 8, 11, 12, 10, 9, 7, 11, 6], fill=FILL_GREY,
                fnt=font(GREY_DARK, bold=True, size=9))
     put(ws, f"J{L.RL_HDR - 1}", "engine helpers (formulas — do not edit)", fnt=F_SMALL_IT)
+    ws.column_dimensions["I"].width = 2
     for i in range(L.RL_ROWS):
         r = L.RL_FIRST + i
         row = ctx.rate_rows[i] if i < len(ctx.rate_rows) else None
         input_cell(ws, f"A{r}", row and row["bu"])
         input_cell(ws, f"B{r}", row and row["state"])
-        formula(ws, f"C{r}", f'=IF(OR($A{r}="",$B{r}=""),"",$A{r}&"|"&$B{r})', border=BORDER_THIN)
-        ws[f"C{r}"].font = font(GREY_DARK, size=9)
-        input_cell(ws, f"D{r}", row and row["eff"], fmt=FMT_DATE)
-        input_cell(ws, f"E{r}", row and row["filed"], fmt=FMT_PCT)
-        input_cell(ws, f"F{r}", row and row["status"])
-        input_cell(ws, f"G{r}", row and row["considered"])
-        input_cell(ws, f"H{r}", row and row["achievement"], fmt=FMT_PCT, required=False)
-        input_cell(ws, f"I{r}", (row["comment"] if row else None), required=False)
-        ws[f"I{r}"].alignment = ALIGN_L
-        # helpers J..Q
-        formula(ws, f"J{r}", f'=IF($D{r}="","",$E{r}*IF($F{r}="planned",IF($H{r}="",1,$H{r}),1))',
+        input_cell(ws, f"C{r}", row and row["eff"], fmt=FMT_DATE)
+        input_cell(ws, f"D{r}", row and row["filed"], fmt=FMT_PCT)
+        input_cell(ws, f"E{r}", row and row["status"])
+        input_cell(ws, f"F{r}", row and row["considered"])
+        input_cell(ws, f"G{r}", row and row["achievement"], fmt=FMT_PCT, required=False)
+        input_cell(ws, f"H{r}", (row["comment"] if row else None), required=False)
+        ws[f"H{r}"].alignment = ALIGN_L
+        # helpers J..S (right of the paste block, D40)
+        formula(ws, f"J{r}", f'=IF(OR($A{r}="",$B{r}=""),"",$A{r}&"|"&$B{r})', border=BORDER_THIN)
+        formula(ws, f"K{r}", f'=IF($C{r}="","",$D{r}*IF($E{r}="planned",IF($G{r}="",1,$G{r}),1))',
                 fmt=FMT_PCT)
-        formula(ws, f"K{r}", f'=IF($D{r}="",0,IF(1+$J{r}>0,LN(1+$J{r}),0))', fmt=FMT_IDX)
-        formula(ws, f"L{r}", f'=IF($D{r}="","",DATE(YEAR($D{r}),MONTH($D{r}),1))', fmt=FMT_DATE)
-        formula(ws, f"M{r}", f'=IF($D{r}="",0,EOMONTH($D{r},0)-$D{r}+1)', fmt=FMT_INT)
-        formula(ws, f"N{r}", f'=IF($D{r}="",0,COUNTIFS(rl_key,$C{r},rl_effmonth,$L{r},rl_eff,"<"&$D{r}))',
+        formula(ws, f"L{r}", f'=IF($C{r}="",0,IF(1+$K{r}>0,LN(1+$K{r}),0))', fmt=FMT_IDX)
+        formula(ws, f"M{r}", f'=IF($C{r}="","",DATE(YEAR($C{r}),MONTH($C{r}),1))', fmt=FMT_DATE)
+        formula(ws, f"N{r}", f'=IF($C{r}="",0,EOMONTH($C{r},0)-$C{r}+1)', fmt=FMT_INT)
+        formula(ws, f"O{r}", f'=IF($C{r}="",0,COUNTIFS(rl_key,$J{r},rl_effmonth,$M{r},rl_eff,"<"&$C{r}))',
                 fmt=FMT_INT)
-        formula(ws, f"O{r}", f'=IF($D{r}="",0,COUNTIFS($C${L.RL_FIRST}:$C{r},$C{r},$L${L.RL_FIRST}:$L{r},$L{r},$D${L.RL_FIRST}:$D{r},$D{r}))',
+        formula(ws, f"P{r}", f'=IF($C{r}="",0,COUNTIFS($J${L.RL_FIRST}:$J{r},$J{r},$M${L.RL_FIRST}:$M{r},$M{r},$C${L.RL_FIRST}:$C{r},$C{r}))',
                 fmt=FMT_INT)
-        formula(ws, f"P{r}", f'=IF($D{r}="",0,IF(AND($N{r}=0,$O{r}=1),1,0))', fmt=FMT_INT)
-        formula(ws, f"Q{r}", f'=IF($D{r}="",0,IF(COUNTIFS(rl_key,$C{r},rl_effmonth,$L{r})>1,1,0))',
+        formula(ws, f"Q{r}", f'=IF($C{r}="",0,IF(AND($O{r}=0,$P{r}=1),1,0))', fmt=FMT_INT)
+        formula(ws, f"R{r}", f'=IF($C{r}="",0,IF(COUNTIFS(rl_key,$J{r},rl_effmonth,$M{r})>1,1,0))',
                 fmt=FMT_INT)
-        formula(ws, f"R{r}",
-                f'=IF($D{r}="",0,COUNTIFS(rl_key,$C{r},rl_eff,"<"&$D{r})'
-                f"+COUNTIFS($C${L.RL_FIRST}:$C{r},$C{r},$D${L.RL_FIRST}:$D{r},$D{r}))",
+        formula(ws, f"S{r}",
+                f'=IF($C{r}="",0,COUNTIFS(rl_key,$J{r},rl_eff,"<"&$C{r})'
+                f"+COUNTIFS($J${L.RL_FIRST}:$J{r},$J{r},$C${L.RL_FIRST}:$C{r},$C{r}))",
                 fmt=FMT_INT)
-        for cL in "JKLMNOPQR":
+        for cL in "JKLMNOPQRS":
             ws[f"{cL}{r}"].font = font(GREY_DARK, size=9)
-    tbl = Table(displayName="tbl_RateLog", ref=f"A{L.RL_HDR}:I{L.RL_LAST}")
+    tbl = Table(displayName="tbl_RateLog", ref=f"A{L.RL_HDR}:H{L.RL_LAST}")
     tbl.tableStyleInfo = TABLE_STYLE
     ws.add_table(tbl)
     rl_names = {
         "rl_bu": ("A", "tbl_RateLog business unit"), "rl_state": ("B", "tbl_RateLog state"),
-        "rl_key": ("C", "tbl_RateLog BU|State key"),
-        "rl_eff": ("D", "Rate change effective date (start of day)"),
-        "rl_filed": ("E", "Filed rate change (decimal fraction)"),
-        "rl_status": ("F", "taken | planned"),
-        "rl_cons": ("G", "Considered in the indication? (Y/N)"),
-        "rl_ach": ("H", "Achievement % (planned rows; blank = 100%)"),
-        "rl_reff": ("J", "Helper: effective change = filed x achievement (planned only)"),
-        "rl_ln1p": ("K", "Helper: ln(1 + effective change); 0 for blank rows"),
-        "rl_effmonth": ("L", "Helper: first day of the effective month"),
-        "rl_daysafter": ("M", "Helper: days in effective month on/after the change"),
-        "rl_first": ("P", "Helper: 1 for the first change in its BU|State cohort month"),
-        "rl_dup": ("Q", "Helper: 1 when >1 change shares a BU|State cohort month"),
-        "rl_seq": ("R", "Helper: chronological rank of the change within its BU|State key"),
+        "rl_eff": ("C", "Rate change effective date (start of day)"),
+        "rl_filed": ("D", "Filed rate change (decimal fraction)"),
+        "rl_status": ("E", "taken | planned"),
+        "rl_cons": ("F", "Considered in the indication? (Y/N)"),
+        "rl_ach": ("G", "Achievement % (planned rows; blank = 100%)"),
+        "rl_key": ("J", "Helper: BU|State key (right of the paste block, D40)"),
+        "rl_reff": ("K", "Helper: effective change = filed x achievement (planned only)"),
+        "rl_ln1p": ("L", "Helper: ln(1 + effective change); 0 for blank rows"),
+        "rl_effmonth": ("M", "Helper: first day of the effective month"),
+        "rl_daysafter": ("N", "Helper: days in effective month on/after the change"),
+        "rl_first": ("Q", "Helper: 1 for the first change in its BU|State cohort month"),
+        "rl_dup": ("R", "Helper: 1 when >1 change shares a BU|State cohort month"),
+        "rl_seq": ("S", "Helper: chronological rank of the change within its BU|State key"),
     }
     for name, (colL, desc) in rl_names.items():
         ctx.define(name, "Inputs", f"${colL}${L.RL_FIRST}:${colL}${L.RL_LAST}", desc)
@@ -254,39 +262,41 @@ def build_inputs(ctx: Ctx):
          "Applies to every BU x state in this workbook (one workbook per LOB, D37).")
 
     # ------------------------------------------------------------- validations
+    # DV sits ON the input cells only (a paste passes straight over it); the
+    # paste blocks contain no formula columns (D40).
     fr, lr_ = L.LR_FIRST, L.LR_LAST
     _dv(ws, "list", [f"A{fr}:A{lr_}"], formula1="=lst_bu")
     _dv(ws, "list", [f"B{fr}:B{lr_}"], formula1="=lst_state")
-    _dv(ws, "list", [f"E{fr}:E{lr_}"], formula1="=lst_basis")
-    _dv(ws, "list", [f"Q{fr}:Q{lr_}"], formula1="=lst_onoff")
-    _dv(ws, "decimal", [f"D{fr}:D{lr_}"], operator="between", formula1="0", formula2="3",
+    _dv(ws, "list", [f"D{fr}:D{lr_}"], formula1="=lst_basis")
+    _dv(ws, "list", [f"P{fr}:P{lr_}"], formula1="=lst_onoff")
+    _dv(ws, "decimal", [f"C{fr}:C{lr_}"], operator="between", formula1="0", formula2="3",
         error="Loss ratio must be between 0 and 300% (entered as a fraction).")
-    _dv(ws, "decimal", [f"F{fr}:F{lr_}", f"N{fr}:N{lr_}"], operator="between",
+    _dv(ws, "decimal", [f"E{fr}:E{lr_}", f"M{fr}:M{lr_}"], operator="between",
         formula1="-0.5", formula2="1", error="Enter a decimal fraction between -50% and +100%.")
-    _dv(ws, "decimal", [f"G{fr}:G{lr_}", f"H{fr}:H{lr_}", f"J{fr}:J{lr_}",
-                        f"K{fr}:K{lr_}", f"L{fr}:L{lr_}"], operator="between",
+    _dv(ws, "decimal", [f"F{fr}:F{lr_}", f"G{fr}:G{lr_}", f"I{fr}:I{lr_}",
+                        f"J{fr}:J{lr_}", f"K{fr}:K{lr_}"], operator="between",
         formula1="0.5", formula2="1.5", error="Schedule mods must lie in [0.5, 1.5].")
-    _dv(ws, "decimal", [f"M{fr}:M{lr_}"], operator="greaterThanOrEqual", formula1="0",
+    _dv(ws, "decimal", [f"L{fr}:L{lr_}"], operator="greaterThanOrEqual", formula1="0",
         error="Plan EP must be non-negative.")
-    _dv(ws, "decimal", [f"O{fr}:O{lr_}"], operator="between", formula1="0.5", formula2="2",
+    _dv(ws, "decimal", [f"N{fr}:N{lr_}"], operator="between", formula1="0.5", formula2="2",
         error="A_other must lie in [0.5, 2.0].")
-    _dv(ws, "date", [f"I{fr}:I{lr_}"], operator="between",
+    _dv(ws, "date", [f"H{fr}:H{lr_}"], operator="between",
         formula1="DATE(1990,1,1)", formula2="DATE(2100,12,31)",
         error="Enter a real as-of date (it must precede 12/31 of the plan year; "
               "the Checks sheet enforces that bound).")
-    _dv(ws, "decimal", [f"R{fr}:R{lr_}", f"S{fr}:S{lr_}"], operator="between",
+    _dv(ws, "decimal", [f"Q{fr}:Q{lr_}", f"R{fr}:R{lr_}"], operator="between",
         formula1="-0.5", formula2="1",
         error="Net rate selection must lie in [-50%, +100%] (decimal fraction; blank = off).")
     fr, lr_ = L.RL_FIRST, L.RL_LAST
     _dv(ws, "list", [f"A{fr}:A{lr_}"], formula1="=lst_bu")
     _dv(ws, "list", [f"B{fr}:B{lr_}"], formula1="=lst_state")
-    _dv(ws, "list", [f"F{fr}:F{lr_}"], formula1="=lst_status")
-    _dv(ws, "list", [f"G{fr}:G{lr_}"], formula1="=lst_yn")
-    _dv(ws, "decimal", [f"E{fr}:E{lr_}"], operator="between", formula1="-0.5", formula2="2",
+    _dv(ws, "list", [f"E{fr}:E{lr_}"], formula1="=lst_status")
+    _dv(ws, "list", [f"F{fr}:F{lr_}"], formula1="=lst_yn")
+    _dv(ws, "decimal", [f"D{fr}:D{lr_}"], operator="between", formula1="-0.5", formula2="2",
         error="Filed change must lie in [-50%, +200%] (decimal fraction).")
-    _dv(ws, "decimal", [f"H{fr}:H{lr_}"], operator="between", formula1="0", formula2="1.5",
+    _dv(ws, "decimal", [f"G{fr}:G{lr_}"], operator="between", formula1="0", formula2="1.5",
         error="Achievement must lie in [0%, 150%].")
-    _dv(ws, "date", [f"D{fr}:D{lr_}"], operator="between",
+    _dv(ws, "date", [f"C{fr}:C{lr_}"], operator="between",
         formula1="DATE(1990,1,1)", formula2="DATE(2100,12,31)", error="Enter a real date.")
     _dv(ws, "decimal", [rng(2, L.SE_FIRST, 13, L.SE_LAST)], operator="between",
         formula1="0", formula2="100", error="Seasonality weights are non-negative.")

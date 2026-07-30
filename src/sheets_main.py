@@ -714,13 +714,18 @@ def build_solver(ctx: Ctx):
     ws["D17"].font = font(FAIL_RED, size=9, italic=True)
 
     # ---- Mode B ----
-    section(ws, 25, "B", "Mode B — CY LR by effective month for a given rate")
+    section(ws, 25, "B",
+            f"Mode B — timing sensitivity: the FULL-YEAR CY {p} plan LR under each possible "
+            "start month for the same change")
     label(ws, "B26", "Rate change r to time")
     input_cell(ws, "C26", 0.05, fmt=FMT_PCT)
-    note(ws, "D26", "uses Mode A's target to flag which months still meet it")
-    header_row(ws, 28, 2, ["Month", "Effective", "C_pre", "C_post", "E_CY(P)",
-                           "CY LR", "Meets target?"],
-               widths=[9, 11, 10, 10, 10, 10, 13])
+    note(ws, "D26",
+         "Each row is a separate what-if, NOT the loss ratio moving through the year: the "
+         "same increase made effective later earns in less during the plan year, so the "
+         "full-year result lands higher. Mode A's target flags which start months still work.")
+    header_row(ws, 28, 2, ["Effective month", "Effective", "C_pre", "C_post", "E_CY(P)",
+                           f"Full-yr CY {p} LR", "Meets target?"],
+               widths=[13, 11, 10, 10, 10, 12, 13])
     slv = ctx.lay_dyn["solver"]
     bf = slv["first"]
     for m in range(1, 13):
@@ -740,9 +745,9 @@ def build_solver(ctx: Ctx):
         ws[f"I{r}"].font = font(GREY_DARK, size=8)
         formula(ws, f"J{r}", f'=IF($C$7="","",$C$7)', fmt=FMT_PCT)
         ws[f"J{r}"].font = font(GREY_DARK, size=8)
-    label(ws, "B42", "Latest month that still meets the target", bold=True)
+    label(ws, "B42", "Latest start month that still meets the target", bold=True)
     formula(ws, "D42",
-            '=IF(MAX($I$29:$I$40)=0,"No month meets the target",'
+            '=IF(MAX($I$29:$I$40)=0,"No start month meets the target",'
             'TEXT(DATE(nr_PlanYear,MAX($I$29:$I$40),1),"mmm yyyy"))', bold=True,
             fill=FILL_PANEL)
     put(ws, "I28", "helper", fnt=font(GREY_DARK, size=8))
@@ -759,8 +764,10 @@ def build_solver(ctx: Ctx):
     _line_color(lc.series[1], FAIL_RED, width_pt=1.25, dashed=True)
     lc.legend = None
     lc.y_axis.number_format = "0.0%"
-    _style_chart(lc, f"CY {p} LR by effective month (dashed = target)",
-                 y_title="CY plan LR", height=8, width=14)
+    _style_chart(lc,
+                 f"Timing sensitivity: full-year CY {p} plan LR if the change starts in each "
+                 "month (later start = less earned benefit; dashed = target)",
+                 y_title=f"Full-year CY {p} plan LR", height=8, width=14)
     ws.add_chart(lc, "K28")
 
     set_widths(ws, {"A": 2, "B": 38, "C": 12, "D": 30, "E": 3, "F": 30, "G": 11})

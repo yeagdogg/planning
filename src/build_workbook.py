@@ -374,6 +374,7 @@ class Layout:
     RE_ROW_MAXW = 70
     RE_ROW_VIOL = 71
     RE_ROW_MODM = 72
+    RE_ROW_MODNUM = 73   # monthly mod numerator SUM w-e-M (quarterly price chart)
     RE_ROW_MIDX = 15
 
     # ---- Mod Engine ----

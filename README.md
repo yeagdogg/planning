@@ -103,10 +103,11 @@ Property **104 checks / 0 failed** (full), the other five LOB files 35 (or 33 fo
 1. Edit `config/config.yaml` (bump `plan_year`; adjust BUs, states, LOBs/terms, or
    `table_capacity` if needed — capacities scale from the dimensions automatically).
 2. Rerun the generator and the recalc tool.
-3. Paste your team's inputs into the new workbooks' tables — table schemas are stable across
-   regenerations, so a straight paste-over works. Default capacities per workbook: 69 `tbl_LR`
-   rows (63 BU×state + 6 spare), 240 rate-log rows, 24 seasonality rows (fixed; do not insert
-   or delete rows).
+3. Paste your team's inputs into the new workbooks' tables — each dataset is one contiguous
+   paste block (`tbl_LR` columns A:R, `tbl_RateLog` columns A:H; keys and engine helpers sit
+   to the right and recalculate on their own), and schemas are stable across regenerations.
+   Default capacities per workbook: 69 `tbl_LR` rows (63 BU×state + 6 spare), 240 rate-log
+   rows, 24 seasonality rows (fixed; do not insert or delete rows).
 4. Confirm each `Checks` sheet shows **ALL CHECKS PASS**.
 
 Note: oracle-tie rows on `Checks` compare against constants baked for the *seeded sample*; they

@@ -339,7 +339,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
     def a2(wb):
         check("[combo mod OFF] CY LR ties oracle", approx(nval(wb, "nr_CYLR_P"),
               off_m.cy_lr_p, 1e-9))
-    run("combo mod OFF", {("Inputs", f"Q{we_row_xl}"): "OFF"}, a2)
+    run("combo mod OFF", {("Inputs", f"P{we_row_xl}"): "OFF"}, a2)
 
     # 3. basis proposed on the worked-example combo
     prop_m = engine.run_bridge(p, replace(base_combo, lr_basis="proposed", sel_change=0.05),
@@ -350,7 +350,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
               approx(nval(wb, "nr_LRcur"), 0.65 * 1.05, 1e-12))
         check("[basis proposed] CY LR ties oracle", approx(nval(wb, "nr_CYLR_P"),
               prop_m.cy_lr_p, 1e-9))
-    run("basis proposed", {("Inputs", f"E{we_row_xl}"): "proposed"}, a3)
+    run("basis proposed", {("Inputs", f"D{we_row_xl}"): "proposed"}, a3)
 
     # 4. seasonality ON for a state with a seeded profile
     se_state = season_rows[0]["state"] if season_rows else None
@@ -415,7 +415,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
                    if rr["bu"] == tgt["bu"] and rr["state"] == tgt["state"]]
         muts = {("Control", "C7"): tgt["bu"], ("Control", "C8"): tgt["state"]}
         for r in rows_xl:
-            for colL in "ABDEFGHI":
+            for colL in "ABCDEFGH":
                 muts[("Inputs", f"{colL}{r}")] = None
         blank_m = engine.run_bridge(
             p, replace(combo_of(tgt["bu"], tgt["state"]), rate_changes=()), "monthly")
@@ -565,7 +565,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
               approx(nval(wb, "nr_CYLR_P1"), net_m.cy_lr_p1, 1e-9))
         check("[net 8%] A_mod collapses to 1", approx(nval(wb, "nr_Amod_P"), 1.0, 1e-12))
         check("[net 8%] net mode flag TRUE", nval(wb, "nr_NetMode") is True)
-    run("net selection 8%", {("Inputs", f"R{we_row_xl}"): 0.08}, a9d)
+    run("net selection 8%", {("Inputs", f"Q{we_row_xl}"): 0.08}, a9d)
 
     # 9e. scenario D-net lever on top of a net selection
     net_s1 = engine.run_bridge(p, replace(base_combo, net_sel_p=0.10), "monthly")
@@ -576,7 +576,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
               approx(got, net_s1.cy_lr_p, 1e-9), f"wb={got} oracle={net_s1.cy_lr_p}")
         check("[net + D-net 2%] base column still ties 8% net",
               approx(wb["Scenarios"]["C14"].value, net_m.cy_lr_p, 1e-9))
-    run("net + scenario D-net", {("Inputs", f"R{we_row_xl}"): 0.08,
+    run("net + scenario D-net", {("Inputs", f"Q{we_row_xl}"): 0.08,
                                  ("Scenarios", "C10"): 0.02}, a9e)
 
     # 10. plan-year change (fingerprint must go N/A, engines recompute cleanly)
