@@ -14,8 +14,8 @@ from .xlstyle import (
     ALIGN_C, ALIGN_WRAP, BORDER_THIN, DOWN_BAR, F_HEADER, F_LABEL, F_SMALL_IT, FAIL_RED,
     FILL_NAVY, FILL_PANEL, FMT_DATE, FMT_EP_Z, FMT_GEN, FMT_IDX, FMT_IDX_Z,
     FMT_INT, FMT_MOD, FMT_PCT, FMT_PCT_Z, GREY_DARK, NAVY, STEEL, STEEL_LIGHT,
-    TOTAL_BAR, UP_BAR, col, font, formula, header_row, input_cell, label, link, note,
-    presentation_setup, print_setup, put, section, set_widths, title,
+    TOTAL_BAR, UP_BAR, col, font, formula, header_row, input_cell, jump, label, link,
+    note, presentation_setup, print_setup, put, section, set_widths, title,
 )
 
 PTS_Z = '+0.00 "pts";-0.00 "pts";""'
@@ -63,8 +63,12 @@ def build_bridge(ctx: Ctx):
           "for the selected BU x state. All factors trace to the Rate Engine, Mod Engine, "
           "and Inputs sheets.")
 
+    label(ws, "E4", "Selected:")
+    link(ws, "F4", "=nr_SelKey", bold=True)
+    jump(ws, "H4", "Control!C7", "Change BU/state selection >")
+
     # ---- selected inputs block ----
-    section(ws, 5, "B", "Selected combo inputs (tbl_LR via INDEX/MATCH on the BU|LOB key)")
+    section(ws, 5, "B", "Selected combo inputs (tbl_LR via INDEX/MATCH on the BU|State key)")
     label(ws, "E5", "row in tbl_LR")
     formula(ws, "F5", "=IF(nr_SelOK,MATCH(nr_SelKey,lr_key,0),0)", fmt=FMT_INT)
     ws["F5"].font = font(GREY_DARK, size=9)
@@ -697,6 +701,7 @@ def build_scenarios(ctx: Ctx):
           "Blank lever = Base value. Engines live on the hidden _calc sheet.")
     label(ws, "B3", "Selected:")
     link(ws, "C3", "=nr_SelKey", bold=True)
+    jump(ws, "D3", "Control!C7", "Change BU/state selection >")
 
     section(ws, 5, "B", "Scenario levers (blue = enter; blank = same as Base)")
     header_row(ws, 5, 3, ["S1", "S2", "S3", "S4"], widths=[10, 10, 10, 10])
@@ -788,6 +793,9 @@ def build_solver(ctx: Ctx):
     title(ws, "B2", "Solver — inverse plan (closed form, no iteration)",
           "Because the CY earned index is linear in a single unknown change r, the required "
           "rate solves in closed form.")
+    label(ws, "B3", "Selected:")
+    link(ws, "C3", "=nr_SelKey", bold=True)
+    jump(ws, "E3", "Control!C7", "Change BU/state selection >")
     put(ws, "B4",
         "Convention (DECISIONS.md D13): the Solver replaces the ENTIRE planned-rate program "
         "with a single action at the chosen date. Its base index W0 uses taken rows only.",
@@ -949,6 +957,7 @@ def build_attribution(ctx: Ctx):
           "4) loss-side residual. The decomposition is order-dependent (see Methodology).")
     label(ws, "B3", "Selected:")
     link(ws, "C3", "=nr_SelKey", bold=True)
+    jump(ws, "D3", "Control!C7", "Change BU/state selection >")
     formula(ws, "E3",
             '=IF(nr_NetMode,"NOTE: this combo carries a NET RATE SELECTION - premium-side '
             'steps 1-3 are suspended (factors = 1) because rate and mods are merged in the '

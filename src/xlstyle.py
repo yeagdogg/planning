@@ -190,6 +190,16 @@ def note(ws, addr, text, italic=True):
     return put(ws, addr, text, fnt=F_SMALL_IT if italic else F_SMALL, align=ALIGN_WRAP)
 
 
+def jump(ws, addr, target: str, text: str, size=10, bold=False):
+    """In-workbook navigation link via the classic HYPERLINK function.
+
+    ``target`` example: "'Rate Engine'!A1" or "Control!C7".
+    """
+    c = put(ws, addr, f'=HYPERLINK("#{target}","{text}")')
+    c.font = Font(name=FONT_NAME, color=NAVY, size=size, bold=bold, underline="single")
+    return c
+
+
 def col(idx: int) -> str:
     return get_column_letter(idx)
 

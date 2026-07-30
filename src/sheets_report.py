@@ -14,7 +14,8 @@ from .xlstyle import (
     F_SMALL_IT, FAIL_RED, FILL_AMBER, FILL_GREEN, FILL_GREY, FILL_NAVY, FILL_PANEL,
     FILL_RED, FILL_REQ, FMT_DATE, FMT_GEN, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT,
     GREY_DARK, LINK_GREEN, NAVY, PASS_GREEN, STEEL, col, font, formula, header_row,
-    label, link, note, presentation_setup, print_setup, put, section, set_widths, title,
+    jump, label, link, note, presentation_setup, print_setup, put, section, set_widths,
+    title,
 )
 
 RE = "'Rate Engine'"
@@ -63,6 +64,7 @@ def build_flow_dashboard(ctx: Ctx):
           "Selected BU x state. The plan year is shaded in the index chart. All series "
           "trace to the Rate Engine and Mod Engine sheets via the chart-data block below.")
     link(ws, "J2", "=nr_SelKey", bold=True)
+    jump(ws, "L2", "Control!C7", "Change BU/state selection >")
 
     # ---- chart data block (36 monthly rows) ----
     put(ws, f"B{CD0 - 1}", "Chart data (formulas — do not edit)", fnt=F_SMALL_IT)

@@ -19,7 +19,7 @@ from .build_workbook import Ctx, Layout as L
 from .xlstyle import (
     ALIGN_C, BORDER_THIN, F_HEADER, F_LABEL, F_SMALL_IT, FILL_GREY, FILL_NAVY, FILL_PANEL,
     FMT_DATE, FMT_GEN, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT, GREY_DARK, STEEL,
-    col, font, formula, header_row, label, link, note, presentation_setup,
+    col, font, formula, header_row, jump, label, link, note, presentation_setup,
     print_setup, put, section, set_widths, title,
 )
 
@@ -205,7 +205,7 @@ def build_rate_engine(ctx: Ctx):
     # Selected combo banner
     label(ws, "A3", "Selected:")
     link(ws, "B3", "=nr_SelKey", bold=True)
-    note(ws, "D3", "change the selection on Control")
+    jump(ws, "D3", "Control!C7", "Change BU/state selection >")
 
     # Header scalars (left: outputs; right: parameters)
     section(ws, 4, "A", "Calendar-year aggregates")
@@ -420,6 +420,7 @@ def build_mod_engine(ctx: Ctx):
           "exposure-weighted AVERAGE through the same earning matrix (mods are levels, not changes).")
     label(ws, "A3", "Selected:")
     link(ws, "B3", "=nr_SelKey", bold=True)
+    jump(ws, "D3", "Control!C7", "Change BU/state selection >")
 
     # Anchor table
     section(ws, 4, "E", "Mod path anchors (x = close-of-day serial: date + 1; see Methodology)")
