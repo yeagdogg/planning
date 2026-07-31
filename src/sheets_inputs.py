@@ -243,6 +243,28 @@ def build_inputs(ctx: Ctx):
     for name, (colL, desc) in lr_names.items():
         ctx.define(name, "Inputs", f"${colL}${L.LR_FIRST}:${colL}${L.LR_LAST}", desc)
 
+    # ---- live per-row results (echo columns V:Y, right of the Key helper) ----
+    # The hidden _calc results table aligns 1:1 with tbl_LR, so editing any
+    # input on row n moves that same row's plan LR on the same screen.
+    put(ws, f"V{L.LR_HDR - 1}", "live results (formulas — do not edit)", fnt=F_SMALL_IT)
+    header_row(ws, L.LR_HDR, 22,
+               ["This combo's CY plan LR", "Chg vs projected (pts)",
+                "Rate earn-in (A_rate)", "Mod drift (A_mod)"],
+               widths=[13, 12, 11, 11], fill=FILL_GREY,
+               fnt=font(GREY_DARK, bold=True, size=9))
+    for i in range(L.LR_ROWS):
+        r = L.LR_FIRST + i
+        n = i + 1
+        formula(ws, f"V{r}", f'=IF($T{r}="","",INDEX(calc_cylr_p,{n}))', fmt=FMT_PCT)
+        formula(ws, f"W{r}",
+                f'=IF($T{r}="","",(INDEX(calc_cylr_p,{n})-INDEX(calc_lrcur,{n}))*100)',
+                fmt=FMT_PTS_SIGNED)
+        formula(ws, f"X{r}", f'=IF($T{r}="","",INDEX(calc_arate_p,{n}))', fmt=FMT_IDX)
+        formula(ws, f"Y{r}", f'=IF($T{r}="","",INDEX(calc_amod_p,{n}))', fmt=FMT_IDX)
+        for cL in "VWXY":
+            ws[f"{cL}{r}"].font = font(GREY_DARK, size=9)
+            ws[f"{cL}{r}"].alignment = ALIGN_C
+
     # -------------------------------------------------------------- tbl_RateLog
     section(ws, L.RL_HDR - 1, "A",
             "tbl_RateLog — one row per rate change per BU x state   "
@@ -339,8 +361,9 @@ def build_inputs(ctx: Ctx):
     input_cell(ws, f"B{L.TERM_ROW}", ctx.lob.term_months, fmt=FMT_INT)
     ctx.define("nr_TermMonths", "Inputs", f"$B${L.TERM_ROW}",
                "Workbook policy term in months (this workbook covers one LOB)")
-    note(ws, f"C{L.TERM_ROW}",
-         "Applies to every BU x state in this workbook (one workbook per LOB, D37).")
+    put(ws, f"C{L.TERM_ROW}",
+        "Applies to every BU x state in this workbook (one workbook per LOB, D37).",
+        fnt=F_SMALL_IT)
 
     # ------------------------------------------------------------- validations
     # DV sits ON the input cells only (a paste passes straight over it); the
@@ -388,7 +411,9 @@ def build_inputs(ctx: Ctx):
     _dv(ws, "whole", [f"B{L.TERM_ROW}"], operator="between",
         formula1="1", formula2="12", error="Term must be 1..12 months.")
 
-    presentation_setup(ws, gridlines_off=False, freeze=f"A{L.LR_FIRST}", tab_color=WARN_AMBER)
+    # freeze BU + State columns as well as the header rows, so a row's identity
+    # stays pinned while editing the right-hand inputs and live results
+    presentation_setup(ws, gridlines_off=False, freeze=f"C{L.LR_FIRST}", tab_color=WARN_AMBER)
     print_setup(ws)
 
 

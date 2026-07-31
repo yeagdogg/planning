@@ -183,6 +183,7 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
         ("nr_Amod_P1", m.a_mod_p1), ("nr_LRcur", m.lr_current), ("nr_CYLR_P", m.cy_lr_p),
         ("nr_CYLR_P1", m.cy_lr_p1), ("nr_EChgVsInd", m.earned_chg_vs_ind),
         ("nr_YoY_P", m.yoy_earned_p), ("nr_YoY_P1", m.yoy_earned_p1),
+        ("nr_WalkLR", m.cy_lr_p),   # Walkthrough assembly must tie the Bridge
     ]
     for name, expected in ties:
         check(f"{name} ties oracle monthly", approx(nval(wb, name), expected, 1e-9),

@@ -370,20 +370,22 @@ def sample_to_combo(
 
 class Layout:
     # ---- Inputs sheet (dynamic; set by configure) ----
-    LR_HDR = 6
-    LR_FIRST = 7
+    # Workbook parameters live ABOVE the tables so the term input is never a
+    # 350-row scroll away; the tables cascade below them.
+    WB_HDR = 7            # workbook-parameters block (LOB + term)
+    TERM_ROW = 8
+    LR_HDR = 11
+    LR_FIRST = 12
     LR_ROWS = 69
-    LR_LAST = 75
-    RL_HDR = 79
-    RL_FIRST = 80
+    LR_LAST = 80
+    RL_HDR = 84
+    RL_FIRST = 85
     RL_ROWS = 240
-    RL_LAST = 319
-    SE_HDR = 323
-    SE_FIRST = 324
+    RL_LAST = 324
+    SE_HDR = 328
+    SE_FIRST = 329
     SE_ROWS = 24
-    SE_LAST = 347
-    WB_HDR = 351          # workbook-parameters block (LOB + term)
-    TERM_ROW = 352
+    SE_LAST = 352
 
     # ---- Rate Engine sheet (fixed) ----
     RE_COH_HDR = 16
@@ -433,6 +435,10 @@ class Layout:
 
     @classmethod
     def configure(cls, cfg: Config):
+        cls.WB_HDR = 7
+        cls.TERM_ROW = cls.WB_HDR + 1
+        cls.LR_HDR = cls.TERM_ROW + 3
+        cls.LR_FIRST = cls.LR_HDR + 1
         cls.LR_ROWS = len(cfg.business_units) * len(cfg.states) + cfg.spare_lr_rows
         cls.LR_LAST = cls.LR_FIRST + cls.LR_ROWS - 1
         cls.RL_HDR = cls.LR_LAST + 4
@@ -443,8 +449,6 @@ class Layout:
         cls.SE_FIRST = cls.SE_HDR + 1
         cls.SE_ROWS = len(cfg.states) + cfg.spare_seasonality_rows
         cls.SE_LAST = cls.SE_FIRST + cls.SE_ROWS - 1
-        cls.WB_HDR = cls.SE_LAST + 4
-        cls.TERM_ROW = cls.WB_HDR + 1
         cls.CALC_RES_LAST = cls.CALC_RES_FIRST + cls.LR_ROWS - 1
         cls.CALC_BLOCK_FIRST = cls.CALC_RES_LAST + 4
         cls.PF_LAST = cls.PF_FIRST + cls.LR_ROWS - 1
@@ -500,9 +504,10 @@ class Ctx:
 
 SHEET_ORDER = [
     SHEETS.README, SHEETS.CONTROL, SHEETS.INPUTS, SHEETS.RATE_ENGINE,
-    SHEETS.MOD_ENGINE, SHEETS.BRIDGE, SHEETS.FLOW, SHEETS.PORTFOLIO,
-    SHEETS.STATE_SUMMARY, SHEETS.SCENARIOS, SHEETS.SOLVER, SHEETS.ATTRIBUTION,
-    SHEETS.CHECKS, SHEETS.METHODOLOGY, SHEETS.LISTS, SHEETS.CALC, SHEETS.ORACLE,
+    SHEETS.MOD_ENGINE, SHEETS.BRIDGE, SHEETS.WALKTHROUGH, SHEETS.FLOW,
+    SHEETS.PORTFOLIO, SHEETS.STATE_SUMMARY, SHEETS.SCENARIOS, SHEETS.SOLVER,
+    SHEETS.ATTRIBUTION, SHEETS.CHECKS, SHEETS.METHODOLOGY,
+    SHEETS.LISTS, SHEETS.CALC, SHEETS.ORACLE,
 ]
 HIDDEN_SHEETS = {SHEETS.LISTS, SHEETS.CALC, SHEETS.ORACLE}
 
@@ -513,7 +518,8 @@ HIDDEN_SHEETS = {SHEETS.LISTS, SHEETS.CALC, SHEETS.ORACLE}
 
 
 def build(cfg: Config, lob_name: str) -> Workbook:
-    from . import sheets_calc, sheets_engine, sheets_inputs, sheets_main, sheets_report
+    from . import (sheets_calc, sheets_engine, sheets_inputs, sheets_main,
+                   sheets_report, sheets_walkthrough)
 
     Layout.configure(cfg)
     lob = cfg.lob(lob_name)
@@ -570,6 +576,7 @@ def build(cfg: Config, lob_name: str) -> Workbook:
     sheets_main.build_solver(ctx)
     sheets_main.build_attribution(ctx)
     sheets_report.build_flow_dashboard(ctx)
+    sheets_walkthrough.build_walkthrough(ctx)
     sheets_report.build_oracle_sheet(ctx)
     sheets_report.build_checks(ctx)
     sheets_report.build_methodology(ctx)

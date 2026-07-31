@@ -518,6 +518,14 @@ def build_checks(ctx: Ctx):
        '=IF(NOT(nr_NetMode),0,COUNTIFS(rl_key,nr_SelKey,rl_status,"planned",'
        'rl_eff,">="&DATE(nr_PlanYear,1,1)))', 0, "WARN"))
     A(("Advisory", "Selected BU|State exists in tbl_LR", "=0", "=IF(nr_SelOK,0,1)", 0, "WARN"))
+    # ---- appended v2.1 checks (append-only: Checks!G16 and earlier rows never move) ----
+    A(("Structure", "Walkthrough assembly equals the Bridge result", "=0",
+       "=ABS(nr_WalkLR-nr_CYLR_P)", 1e-9, "FAIL"))
+    A(("Advisory", "Taken rows still carrying an achievement % (it is ignored — restate "
+       "Filed % as achieved)", "=0",
+       '=SUMPRODUCT((rl_status="taken")*(rl_ach<>"")*(rl_ach<>1)*1)', 0, "WARN"))
+    A(("Structure", "Every distinct state fits on the State Summary display", "=0",
+       f"=MAX(0,lst_state_cnt-{len(ctx.cfg.states) + 3})", 0, "FAIL"))
 
     header_row(ws, L.CK_HDR, 1,
                ["#", "Category", "Check", "Expected", "Actual", "Tolerance", "Status", ""],
@@ -867,6 +875,8 @@ READ_ME_GUIDE = [
     ("State Summary", "One row per state with a BU filter ('All' = EP-weighted) — the "
                       "leadership exhibit."),
     ("Bridge", "The selected combo's answer: projected LR -> CY plan LR, factor by factor."),
+    ("Walkthrough", "The fully worked example — every calculation for the selected combo, "
+                    "start to finish."),
     ("Rate Engine", "Audit trail: 48 writing cohorts x earning matrix behind the earned "
                     "rate level."),
     ("Mod Engine", "Audit trail: the written schedule-mod path and the earned mod."),
