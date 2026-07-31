@@ -75,9 +75,12 @@ def build_flow_dashboard(ctx: Ctx):
         fnt=F_SMALL_IT)
     heads = ["Month", "Written idx W", "Earned idx E_m", "Written mod", "Earned mod",
              "Price idx (written)", "Price idx (earned)", "Plan year",
-             "YoY earned rate", "YoY earned price", "Unearned runway"]
+             "YoY earned rate", "YoY earned price", "Unearned runway",
+             "YoY written rate leg", "YoY written mod leg", "YoY delivered net (program)",
+             "Locked leg (taken only)", "Planned / residual leg", "Δ vs net assertion"]
     for j, h in enumerate(heads):
         put(ws, f"{col(2 + j)}{CD0}", h, fnt=font(GREY_DARK, size=9))
+    tkf = ctx.lay_dyn["progflow_tk"]["first"]   # locked (taken-only) block, D59
     for j in range(L.N_MONTHS):
         r = CD0 + 1 + j
         mcol = col(L.RE_MATRIX_COL + j)
@@ -99,8 +102,23 @@ def build_flow_dashboard(ctx: Ctx):
                     fmt=pct_m)
             formula(ws, f"K{r}", f'=IF(OR($H{r}="",$H{r - 12}=""),"",$H{r}/$H{r - 12}-1)',
                     fmt=pct_m)
+            # written-basis program legs on renewals (D59): the raw written
+            # index (RE col N) is program-basis even in net mode — the net
+            # supersession lives only in the S/T/U columns
+            modr = f"'Mod Engine'!$E${coh}/'Mod Engine'!$E${coh - 12}"
+            formula(ws, f"M{r}", f"={RE}!$N${coh}/{RE}!$N${coh - 12}-1", fmt=pct_m)
+            formula(ws, f"N{r}", f'=IF(nr_ModAdjEff="ON",{modr}-1,"—")', fmt=pct_m)
+            formula(ws, f"O{r}",
+                    f'={RE}!$N${coh}/{RE}!$N${coh - 12}*IF(nr_ModAdjEff="ON",{modr},1)-1',
+                    fmt=pct_m)
+            formula(ws, f"P{r}", f"='_calc'!$N${tkf + 12 + j}/'_calc'!$N${tkf + j}-1",
+                    fmt=pct_m)
+            formula(ws, f"Q{r}", f"=(1+$M{r})/(1+$P{r})-1", fmt=pct_m)
+            formula(ws, f"R{r}",
+                    f'=IF(NOT(nr_NetMode),"",$O{r}-IF($I{r}=1,nr_NetSelP,nr_NetSelP1))',
+                    fmt=pct_m)
         formula(ws, f"L{r}", f'=IF(OR($C{r}="",$D{r}=""),"",$C{r}/$D{r}-1)', fmt=pct_m)
-        for cL in "BCDEFGHIJKL":
+        for cL in ("BCDEFGHIJKLMNOPQR" if j >= 12 else "BCDEFGHIJKL"):
             ws[f"{cL}{r}"].font = font(GREY_DARK, size=8)
 
     cats = Reference(ws, min_col=2, min_row=CD0 + 1, max_row=CD0 + L.N_MONTHS)
@@ -233,6 +251,22 @@ def build_flow_dashboard(ctx: Ctx):
            height=8.5, width=14)
     ws.add_chart(run, "T4")
 
+    # ---- program delivery lines (D59): what the logged program delivers ----
+    prog = LineChart()
+    for c, lbl, rgb, dashed in ((15, "YoY delivered net (program)", NAVY, False),
+                                (13, "Written rate leg", STEEL, False),
+                                (16, "Locked (taken-only) leg", GREY_DARK, True)):
+        prog.add_data(Reference(ws, min_col=c, min_row=m0, max_row=m1),
+                      titles_from_data=False)
+        s = prog.series[-1]
+        s.tx = SeriesLabel(v=lbl)
+        _line(s, rgb, dashed=dashed)
+    prog.set_categories(Reference(ws, min_col=2, min_row=m0, max_row=m1))
+    prog.y_axis.number_format = "0.0%"
+    _chart(prog, "Program delivery on renewals: delivered vs rate leg vs locked",
+           height=8.5, width=14, y_title="YoY written-basis change")
+    ws.add_chart(prog, "T22")
+
     # per-chart "what to look for" captions (single overflow lines)
     captions = [
         ("B21", "Watch the gap: written (steel) runs ahead of earned (navy) — the gap is "
@@ -244,9 +278,23 @@ def build_flow_dashboard(ctx: Ctx):
         ("B39", "Mod drift reaches earned premium with the same lag as rate — a price "
                 "change in slow motion."),
         ("K39", "Rate x mod combined: the net price customers actually pay."),
+        ("T39", "Delivered (navy) = rate leg x mod leg on renewals; the dashed locked "
+                "line is what survives if no planned action lands (see Program Flow)."),
     ]
     for addr, text in captions:
         put(ws, addr, text, fnt=F_SMALL_IT)
+
+    # w-weighted plan-year average of the delivered column (Checks cross-tie, D59)
+    put(ws, f"T{CD0 - 1}", "avg YoY delivered net, plan yr (w-weighted):",
+        fnt=font(GREY_DARK, size=8))
+    wrow = f"{RE}!$H${L.RE_COH_FIRST + 24}:$H${L.RE_COH_FIRST + 35}"
+    formula(ws, f"U{CD0 - 1}",
+            f"=SUMPRODUCT({wrow},1+$O${CD0 + 13}:$O${CD0 + 24})/SUM({wrow})-1",
+            fmt="+0.000%;-0.000%;0.000%")
+    ws[f"U{CD0 - 1}"].font = font(GREY_DARK, size=8)
+    ctx.define("fd_avgdel", "Flow Dashboard", f"$U${CD0 - 1}",
+               "Plan-year w-weighted avg YoY delivered net from the visible engine path "
+               "(ties the _calc block results, D59)")
 
     # ---- carryover ledger: why CY P+1 starts above CY P, action by action ----
     cl = qt + 12
@@ -301,7 +349,8 @@ def build_flow_dashboard(ctx: Ctx):
          bold=True, fill=FILL_PANEL)
 
     set_widths(ws, {"A": 2, "B": 11, "C": 12, "D": 12, "E": 12, "F": 12, "G": 13, "H": 13,
-                    "I": 11, "J": 12, "K": 12, "L": 12})
+                    "I": 11, "J": 12, "K": 12, "L": 12, "M": 12, "N": 12, "O": 13,
+                    "P": 12, "Q": 12, "R": 12})
     presentation_setup(ws, gridlines_off=True, tab_color=NAVY)
     print_setup(ws)
 

@@ -92,6 +92,17 @@ def build_calc(ctx: Ctx):
             f_grey(ws, f"{cL}{rr}",
                    f"=SUMPRODUCT({blk['w']},{ec},{blk['Mw']})/SUMPRODUCT({blk['w']},{ec})",
                    FMT_MOD)
+        # program-flow ratio averages (D59): w-weighted means of the monthly
+        # YoY RATIOS over Jan..Dec P (vs year-ago) — NOT the E_CY aggregate-
+        # ratio convention. Read by the Program Flow summary via stride-INDEX.
+        wr = f"$H${t + 27}:$H${t + 38}"
+        np_, ny = f"$N${t + 27}:$N${t + 38}", f"$N${t + 15}:$N${t + 26}"
+        op, oy = f"$O${t + 27}:$O${t + 38}", f"$O${t + 15}:$O${t + 26}"
+        f_grey(ws, f"H{rr}", f"=SUMPRODUCT({wr},{np_}/{ny})/SUM({wr})", FMT_IDX)
+        f_grey(ws, f"I{rr}", f"=SUMPRODUCT({wr},{op}/{oy})/SUM({wr})", FMT_IDX)
+        f_grey(ws, f"J{rr}",
+               f"=IF($O${t}=1,SUMPRODUCT({wr},{np_}/{ny}*{op}/{oy})/SUM({wr}),$H{rr})",
+               FMT_IDX)
 
     # ------------------------------------------------------------------
     # 1. Results table rows 4..21 (linked by Portfolio via calc_* names)
@@ -420,3 +431,21 @@ def build_calc(ctx: Ctx):
     }
     for name, (ref, desc) in slv_names.items():
         ctx.define(name, "_calc", ref, desc)
+
+    # ------------------------------------------------------------------
+    # 6. Program-flow locked block (taken rows only, keyed on nr_SelKey)
+    # ------------------------------------------------------------------
+    t = ab + 4 * L.CALC_BLOCK_STRIDE
+    put(ws, f"A{t}", "Program-flow locked block — taken rows only (D13), keyed on "
+                     "nr_SelKey (the Solver base cannot be reused: slv_key can detach "
+                     "from Control via the override); status-aware first flag per D58",
+        fnt=font(GREY_DARK, bold=True, size=9))
+    blk = write_cohort_block(
+        ws, ctx, t + 3, LogRefs(key_cond="nr_SelKey", taken_only=True,
+                                first="rl_firsttaken"),
+        t_ref="nr_TermMonths", srow_ref="re_srow", ssum_ref="re_ssum",
+        anchors=None, include_mod=False, header=True, header_row_at=t + 2)
+    ctx.define("fd_tkw", "_calc", f"$N${blk['first']}:$N${blk['last']}",
+               "Taken-only written index for the Control selection (Flow Dashboard "
+               "locked leg, D59)")
+    ctx.lay_dyn["progflow_tk"] = dict(top=t, first=blk["first"], last=blk["last"])
