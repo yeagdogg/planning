@@ -63,6 +63,17 @@ PROG_LR = dict(
     gap=98,       # CT  signed program - asserted in points (0 when non-net)
 )
 
+# Rate-change history per combo (D66): the four chronological slots and the
+# status counts, published so the BOOK workbook — which harvests this table and
+# has no rate log of its own — can show the same program history the per-LOB
+# State Summary shows. Slots are (date, effective %, T/P token) x 4.
+BOOK_PUB = dict(
+    ntaken=99,    # CU  count of taken rows for the combo
+    nplanned=100,  # CV  count of planned rows
+    slot=101,     # CW..DH  4 slots x 3 columns, chronological
+)
+BOOK_SLOTS = 4
+
 
 def _grey(ws, addr):
     ws[addr].font = font(GREY_DARK, size=9)
@@ -246,6 +257,25 @@ def build_calc(ctx: Ctx):
                f"=IF($AK{r}=1,0,ABS(${cy}{r}-$N{r})+ABS(${cy1}{r}-$O{r}))", FMT_IDX)
         f_grey(ws, f"{col(PROG_LR['gap'])}{r}",
                f"=IF($AK{r}=0,0,(${cy}{r}-$N{r})*100)", "+0.00;-0.00;0.00")
+        # rate-change history for the book harvest (D66)
+        for cidx, status in ((BOOK_PUB["ntaken"], "taken"),
+                             (BOOK_PUB["nplanned"], "planned")):
+            f_grey(ws, f"{col(cidx)}{r}",
+                   f'=COUNTIFS(rl_key,$A{r},rl_status,"{status}",rl_eff,"<>")', FMT_INT)
+        for j in range(BOOK_SLOTS):
+            c0 = BOOK_PUB["slot"] + j * 3
+            cnt = f"COUNTIFS(rl_key,$A{r},rl_seq,{j + 1})"
+            f_grey(ws, f"{col(c0)}{r}",
+                   f'=IF({cnt}=0,"",SUMIFS(rl_eff,rl_key,$A{r},rl_seq,{j + 1}))',
+                   "m/d/yy")
+            f_grey(ws, f"{col(c0 + 1)}{r}",
+                   f'=IF({cnt}=0,"",SUMIFS(rl_reff,rl_key,$A{r},rl_seq,{j + 1}))',
+                   "+0.0%;-0.0%;0.0%")
+            f_grey(ws, f"{col(c0 + 2)}{r}",
+                   f'=IF({cnt}=0,"",'
+                   f'IF(COUNTIFS(rl_key,$A{r},rl_seq,{j + 1},rl_status,"planned")>0,'
+                   f'"P","T")&'
+                   f'IF(COUNTIFS(rl_key,$A{r},rl_seq,{j + 1},rl_cons,"Y")>0,"","*"))')
     res_names = {
         "calc_key": ("A", "Combo keys, aligned 1:1 with tbl_LR rows"),
         "calc_term": ("B", "Policy term by combo"),
@@ -290,6 +320,12 @@ def build_calc(ctx: Ctx):
         ctx.define(nm, "_calc",
                    f"${col(PROG_LR[key])}${L.CALC_RES_FIRST}:"
                    f"${col(PROG_LR[key])}${L.CALC_RES_LAST}", desc)
+    for nm, key, desc in (
+            ("calc_ntaken", "ntaken", "Count of TAKEN rate-log rows for the combo (D66)"),
+            ("calc_nplanned", "nplanned", "Count of PLANNED rate-log rows for the combo")):
+        ctx.define(nm, "_calc",
+                   f"${col(BOOK_PUB[key])}${L.CALC_RES_FIRST}:"
+                   f"${col(BOOK_PUB[key])}${L.CALC_RES_LAST}", desc)
     ctx.define("calc_w_aother", "_calc",
                f"${col(W_AOTHER_COL)}${L.CALC_RES_FIRST}:"
                f"${col(W_AOTHER_COL)}${L.CALC_RES_LAST}",
