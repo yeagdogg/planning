@@ -398,6 +398,33 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
     check("[program flow] worked-example grid rows tie oracle (3 grids x 12 months)",
           bad == 0, f"{bad} mismatched months")
 
+    # published flow columns (D60): the flat projection ties per-combo oracle
+    from src.sheets_calc import FLOW_PUB
+    from src.xlstyle import col as xcol
+    bad = bad_w = bad_a = 0
+    for i, rowdef in enumerate(lr_rows):
+        cmb2 = sample_to_combo(cfg, lob, rowdef, rate_rows)
+        cpf = engine.program_flow_by_month(p, cmb2)
+        eng2 = engine.MonthlyEngine(p, cmb2)
+        rr2 = L.CALC_RES_FIRST + i
+        for j in range(12):
+            if not approx(cs[f"{xcol(FLOW_PUB['delivered'] + j)}{rr2}"].value,
+                          cpf.rows[j]["delivered"], 1e-9):
+                bad += 1
+            epw_o = rowdef["ep"] * eng2.w(engine.month_index(p, 1) + j)
+            wv = cs[f"{xcol(FLOW_PUB['epw'] + j)}{rr2}"].value
+            if wv is None or epw_o == 0 or not approx(wv / epw_o, 1.0, 1e-9):
+                bad_w += 1
+        if not approx(cs[f"{xcol(FLOW_PUB['avg_del'])}{rr2}"].value,
+                      cpf.avg_delivered_ratio, 1e-9):
+            bad_a += 1
+    check("[program flow] published delivered legs tie oracle (all combos x 12)",
+          bad == 0, f"{bad} mismatched cells")
+    check("[program flow] published EP x w products tie oracle", bad_w == 0,
+          f"{bad_w} mismatched cells")
+    check("[program flow] published avg-ratio echoes tie the block results",
+          bad_a == 0, f"{bad_a} mismatched combos")
+
     # live dimension lists (D42): _lists uniques match the seeded roster
     ls = wb["_lists"]
     got_bus = [ls[f"A{3 + i}"].value for i in range(len(cfg.business_units))]
@@ -855,8 +882,10 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
             run("net delivery: All view", {("Net Delivery", "B5"): "All"}, a9g5)
 
     # 9h. Program Flow / dashboard written-legs exercises (D59)
-    from src.sheets_programflow import grid_starts as pf_grid_starts
+    from src.sheets_programflow import (grid_starts as pf_grid_starts,
+                                        n_disp as pf_n_disp)
     pf_g1, pf_g2, pf_g3 = pf_grid_starts(cfg)
+    pf_nd = pf_n_disp(cfg)
     pf_rl0 = L.RL_FIRST + len(rate_rows)
 
     # (i) a NEW planned row on the WE combo moves the dashboard legs and the
@@ -929,14 +958,42 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
               "(D58 on the locked block)", bad == 0, f"{bad} mismatched months")
     run("program flow: mixed-status cohort month (locked block)", muts_mixtk, a9h3)
 
-    # (iv) fabrication guard: the All view shows nothing computable
+    # (iv) All view (D60): the EP-weighted book view ties the combined oracle
+    def _state_comb(stname):
+        return engine.combined_flow_by_month(
+            p, [sample_to_combo(cfg, lob, x, rate_rows)
+                for x in lr_rows if x["state"] == stname])
+    comb0, comb6 = _state_comb(st[0]), _state_comb(st[6])
+    book = engine.combined_flow_by_month(
+        p, [sample_to_combo(cfg, lob, x, rate_rows) for x in lr_rows])
+
     def a9h4(wb):
         pfs = wb[SHEETS.PROGRAM_FLOW]
-        blank = all(pfs[f"{cL}{9}"].value in (None, "", "—") for cL in "CDEFG")
-        check("[program flow: All view] summary metrics blank, never fabricated",
-              blank, str([pfs[f'{cL}9'].value for cL in 'CDEFG']))
-        check("[program flow: All view] grid cells blank",
-              pfs.cell(row=pf_g3 + 3, column=2).value in (None, ""))
+        ok = (approx(pfs["D9"].value, comb0.avg_rate_ratio - 1.0, 1e-9)
+              and approx(pfs["F9"].value, comb0.avg_delivered_ratio - 1.0, 1e-9)
+              and (pfs["E9"].value == "—" if comb0.avg_mod_ratio is None
+                   else approx(pfs["E9"].value, comb0.avg_mod_ratio - 1.0, 1e-9)))
+        check("[program flow: All view] summary averages tie the EP-weighted oracle",
+              ok, str([pfs[f'{c}9'].value for c in 'DEF']))
+        check("[program flow: All view] delta column stays per-BU (dash)",
+              pfs["G9"].value == "—", repr(pfs["G9"].value))
+        bad = 0
+        for si_, comb_ in ((0, comb0), (6, comb6)):
+            for g0, key_ in ((pf_g1, "rate_leg"), (pf_g2, "mod_leg"),
+                             (pf_g3, "delivered")):
+                for j in range(12):
+                    wv = pfs.cell(row=g0 + 3 + si_, column=2 + j).value
+                    ov = comb_.rows[j][key_]
+                    ok_ = (wv == "—") if ov is None else approx(wv, ov, 1e-9)
+                    if not ok_:
+                        bad += 1
+        check("[program flow: All view] grids tie the combined oracle "
+              "(2 states x 3 grids x 12 months)", bad == 0, f"{bad} mismatches")
+        bad = sum(0 if approx(pfs.cell(row=pf_g3 + 3 + pf_nd, column=2 + j).value,
+                              book.rows[j]["delivered"], 1e-9) else 1
+                  for j in range(12))
+        check("[program flow: All view] IN VIEW delivered row = the whole book "
+              "(cross-state EP x w weights)", bad == 0, f"{bad} mismatches")
         check("[program flow: All view] Checks still ALL PASS",
               nval(wb, "ck_overall") == "ALL CHECKS PASS")
     run("program flow: All view", {("Program Flow", "B5"): "All"}, a9h4)

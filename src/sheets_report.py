@@ -599,6 +599,10 @@ def build_checks(ctx: Ctx):
     A(("Advisory", "Net combo(s) in the Program Flow view deliver 1pt+ off the asserted "
        "net on program basis (see Net Delivery)", "=0",
        '=IF(pf_BU="All",0,COUNTIF(pfd_gap,">0.01"))', 0, "WARN"))
+    # ---- appended v2.4 checks (Program Flow All view, D60) ----
+    A(("Advisory", "Net combo(s) ANYWHERE in the book deliver 1pt+ off their asserted "
+       "net on program basis — view-independent (see Net Delivery)", "=0",
+       '=COUNTIF(pfd_bookgap,">0.01")', 0, "WARN"))
 
     header_row(ws, L.CK_HDR, 1,
                ["#", "Category", "Check", "Expected", "Actual", "Tolerance", "Status",
@@ -902,6 +906,16 @@ def build_methodology(ctx: Ctx):
          "YoY still rides on planned actions. Per-state plan-year averages are "
          "written-weighted means of the monthly RATIOS (the Net Delivery delivered-"
          "average convention, not the calendar-year aggregate-ratio convention).",
+         "The 'All' view (D60) combines business units on adjusted-EP weights: each "
+         "combo's monthly legs are published as flat columns on the hidden results "
+         "table, so every combined figure is a single EP x weight SUMPRODUCT. Within a "
+         "state the seasonality weights cancel (they are keyed by state), making state "
+         "rows pure EP-weighted means; the IN VIEW rows use EP x weight across states — "
+         "the book-level flow line. Combined legs are weighted MEANS: rate x mod need "
+         "not multiply to delivered exactly under mix (delivered is the exact "
+         "statistic — the same honesty as the Portfolio bridge's mix line). The "
+         "delta-vs-assertion column stays per-BU, and a view-independent Checks "
+         "advisory watches every net combo's program-vs-assertion gap book-wide.",
          ]),
         ("7. Solver (E1)", [
          "The CY earned index is linear in a single unknown change r, so the required rate "
@@ -1050,7 +1064,7 @@ READ_ME_GUIDE = [
                       "leadership exhibit."),
     ("Program Flow", "What the program AS LOGGED is delivering — state x month YoY grids "
                      "for the written rate, mod, and net legs (the descriptive twin of "
-                     "Net Delivery)."),
+                     "Net Delivery). 'All' = the EP-weighted book view."),
     ("Net Delivery", "For net-target combos: the month-by-month rate leg and the pricing "
                      "change that satisfies the target, plus the suggested filing."),
     ("Bridge", "The selected combo's answer: projected LR -> CY plan LR, factor by factor."),
