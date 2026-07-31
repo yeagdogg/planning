@@ -22,11 +22,12 @@ from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.worksheet.datavalidation import DataValidation
 
 from .build_workbook import Ctx, Layout as L, SHEETS
+from .sheets_calc import FLOW_PUB
 from .xlstyle import (
     ALIGN_C, BORDER_THIN, F_LABEL, F_SMALL_IT, FAIL_RED, FILL_NAVY, FILL_PANEL,
-    GREY_DARK, NAVY, font, formula, header_row, input_cell, jump, label, link,
-    nav_bar, presentation_setup, print_setup, put, quote_sheet as _q, section,
-    set_widths, title,
+    GREY_DARK, NAVY, col, font, formula, header_row, input_cell, jump, label,
+    link, nav_bar, presentation_setup, print_setup, put, quote_sheet as _q,
+    section, set_widths, title,
 )
 
 PCT_S = "+0.0%;-0.0%;0.0%"
@@ -46,11 +47,13 @@ def pf_tot(cfg) -> int:
 
 
 def grid_starts(cfg) -> list[int]:
-    """Section rows of the three grids (rate leg, mod leg, delivered)."""
+    """Section rows of the three grids (rate leg, mod leg, delivered). Each
+    grid block: section, note, month header, nd roster rows, and one IN VIEW
+    total row (D60)."""
     nd = n_disp(cfg)
     g1 = pf_tot(cfg) + 4
-    g2 = g1 + 3 + nd + 3
-    return [g1, g2, g2 + 3 + nd + 3]
+    g2 = g1 + 3 + nd + 1 + 3
+    return [g1, g2, g2 + 3 + nd + 1 + 3]
 
 
 def build_program_flow(ctx: Ctx):
@@ -60,7 +63,12 @@ def build_program_flow(ctx: Ctx):
     title(ws, "A1", f"Program Flow — what the logged program delivers ({ctx.lob.name})",
           "Month-by-month YoY change on renewals from the rate changes and mod path AS "
           "LOGGED — taken rows plus planned rows at achievement. The descriptive twin of "
-          "Net Delivery: no target, no suggestion, just the flow you are on today.")
+          "Net Delivery: no target, no suggestion, just the flow you are on today. "
+          "'All' = the EP-weighted book view (D60).")
+
+    def pub(key, j=0):
+        cL = col(FLOW_PUB[key] + j)
+        return f"'_calc'!${cL}${L.CALC_RES_FIRST}:${cL}${L.CALC_RES_LAST}"
     nav_bar(ws, 3, 1, ["Control", "State Summary", "Net Delivery", "Flow Dashboard",
                        "Rate Log", "Checks"], step=2)
 
@@ -69,14 +77,16 @@ def build_program_flow(ctx: Ctx):
     c = input_cell(ws, "B5", ctx.we_row["bu"])
     c.alignment = ALIGN_C
     ctx.define("pf_BU", SHEETS.PROGRAM_FLOW, "$B$5",
-               "Program Flow BU in view (flow needs a single BU's rate history)")
+               "Program Flow BU in view ('All' = the EP-weighted book view, D60)")
     dv_bu = DataValidation(type="list", formula1="=lst_bu_all", allow_blank=False,
                            showErrorMessage=True)
     ws.add_data_validation(dv_bu)
     dv_bu.add("B5")
     formula(ws, "A6",
-            '=IF(pf_BU="All","Pick a single business unit — the grids and averages need '
-            'one BU\'s rate history.",'
+            '=IF(pf_BU="All","BOOK VIEW: EP-weighted across BUs (D60). Legs are weighted '
+            'means — rate x mod need not multiply to delivered exactly under mix; '
+            'delivered is the exact statistic. The delta column is per-BU: pick one BU '
+            'for targeting.",'
             'IF(nr_ModAdjMaster="OFF","NOTE: master mod toggle is OFF — mod legs show a '
             'dash and delivered = the rate leg alone.",'
             'IF(SUMPRODUCT(calc_netmode*(calc_bu=pf_BU))>0,"Net-target combo(s) in view: '
@@ -112,25 +122,38 @@ def build_program_flow(ctx: Ctx):
                 f'=IF($A{r}="","",IF(pf_BU="All",SUMIFS(calc_ep,calc_state,$A{r}),'
                 f"SUMIFS(calc_ep,calc_state,$A{r},calc_bu,pf_BU)))",
                 fmt="#,##0;-#,##0;\"\"", align=ALIGN_C, fill=band_fill, border=BORDER_THIN)
-        guard = f'=IF(OR($A{r}="",pf_BU="All"),"",IF($P{r}=0,"—",'
-        formula(ws, f"C{r}",
-                guard + f"IF(INDEX('_calc'!$L:$L,$P{r}),INDEX('_calc'!$M:$M,$P{r}),\"—\")))",
-                fmt=PCT_S, align=ALIGN_C, fill=band_fill, border=BORDER_THIN)
-        formula(ws, f"D{r}",
-                guard + f"INDEX('_calc'!$H:$H,$P{r}+51)-1))",
-                fmt=PCT_S, align=ALIGN_C, fill=band_fill, border=BORDER_THIN)
-        formula(ws, f"E{r}",
-                guard + f"IF(INDEX('_calc'!$O:$O,$P{r})=0,\"—\","
-                        f"INDEX('_calc'!$I:$I,$P{r}+51)-1)))",
-                fmt=PCT_S, align=ALIGN_C, fill=band_fill, border=BORDER_THIN)
-        formula(ws, f"F{r}",
-                guard + f"INDEX('_calc'!$J:$J,$P{r}+51)-1))",
-                fmt=PCT_S, align=ALIGN_C, fill=band_fill, border=BORDER_THIN, bold=True)
-        formula(ws, f"G{r}",
-                guard + f"IF(INDEX('_calc'!$L:$L,$P{r}),"
-                        f"INDEX('_calc'!$J:$J,$P{r}+51)-1-INDEX('_calc'!$M:$M,$P{r}),"
-                        f"\"—\")))",
-                fmt=PCT_S, align=ALIGN_C, fill=band_fill, border=BORDER_THIN)
+        # each metric: =IF(blank,"",IF(All,<EP-weighted book>,<single-BU block read>))
+        sg = f'IF($P{r}=0,"—",'                       # single-BU inner guard
+        stc = f"(calc_state=$A{r})"
+        epd = f"SUMIFS(calc_ep,calc_state,$A{r})"
+
+        def _all_avg(key):
+            return (f'IF({epd}=0,"—",'
+                    f"SUMPRODUCT({stc}*calc_ep*{pub(key)})/{epd}-1)")
+
+        all_c = (f'IF(SUMIFS(calc_netmode,calc_state,$A{r})=0,"—",'
+                 f"SUMIFS(calc_netx,calc_state,$A{r})/"
+                 f"SUMIFS(calc_netmode,calc_state,$A{r}))")
+        me_d = f"SUMPRODUCT({stc}*calc_ep*{pub('modeff')})"
+        all_e = (f'IF({me_d}=0,"—",'
+                 f"SUMPRODUCT({stc}*calc_ep*{pub('modeff')}*{pub('avg_mod')})/{me_d}-1)")
+        one_c = sg + f"IF(INDEX('_calc'!$L:$L,$P{r}),INDEX('_calc'!$M:$M,$P{r}),\"—\"))"
+        one_d = sg + f"INDEX('_calc'!$H:$H,$P{r}+51)-1)"
+        one_e = sg + (f"IF(INDEX('_calc'!$O:$O,$P{r})=0,\"—\","
+                      f"INDEX('_calc'!$I:$I,$P{r}+51)-1))")
+        one_f = sg + f"INDEX('_calc'!$J:$J,$P{r}+51)-1)"
+        one_g = sg + (f"IF(INDEX('_calc'!$L:$L,$P{r}),"
+                      f"INDEX('_calc'!$J:$J,$P{r}+51)-1-INDEX('_calc'!$M:$M,$P{r}),"
+                      f"\"—\"))")
+        for cc, allf, onef, b in (("C", all_c, one_c, False),
+                                  ("D", _all_avg("avg_rate"), one_d, False),
+                                  ("E", all_e, one_e, False),
+                                  ("F", _all_avg("avg_del"), one_f, True),
+                                  ("G", '"—"', one_g, False)):
+            formula(ws, f"{cc}{r}",
+                    f'=IF($A{r}="","",IF(pf_BU="All",{allf},{onef}))',
+                    fmt=PCT_S, align=ALIGN_C, fill=band_fill, border=BORDER_THIN,
+                    bold=b)
     tot = pf_tot(ctx.cfg)
     put(ws, f"A{tot}", "IN VIEW", fnt=font(NAVY, bold=True), align=ALIGN_C)
     formula(ws, f"B{tot}", '=IF(pf_BU="All",SUM(calc_ep),SUMIFS(calc_ep,calc_bu,pf_BU))',
@@ -146,24 +169,27 @@ def build_program_flow(ctx: Ctx):
                "Abs gap: program-basis delivered avg vs the asserted net (0 = non-net)")
     put(ws, f"A{tot + 2}",
         "Averages are written-weighted means of the monthly YoY ratios over the plan "
-        "year (the Net Delivery convention). Deep dive on one combo: set it on Control, "
-        "then see the Flow Dashboard's written legs and locked/planned split.",
+        "year (the Net Delivery convention); under 'All' they are EP-weighted across "
+        "BUs, where delivered is the exact statistic (D60). Deep dive on one combo: set "
+        "it on Control, then see the Flow Dashboard's written legs and locked/planned "
+        "split.",
         fnt=F_SMALL_IT)
 
     # ---- three state x month grids ----
     g1, g2, g3 = grid_starts(ctx.cfg)
     secs = [
-        (g1, "The rate leg — YoY written rate change on renewals",
+        (g1, "rate", "The rate leg — YoY written rate change on renewals",
          "History and planned filings at achievement, day-blended in their effective "
          "months. Steps mark anniversaries; a cliff is a filing finishing its year."),
-        (g2, "The pricing leg — YoY written schedule-mod change on renewals",
+        (g2, "mod", "The pricing leg — YoY written schedule-mod change on renewals",
          "Drift along the anchored mod path (dash = the mod adjustment is off for the "
          "combo). Slow-motion price change, same YoY lens."),
-        (g3, "Delivered net — rate x pricing, the YoY change customers actually see",
+        (g3, "delivered", "Delivered net — rate x pricing, the YoY change customers "
+         "actually see",
          "The product of the two legs. For net-target combos compare against the "
          "asserted net: the shortfall months are Net Delivery's to close."),
     ]
-    for g0, head, note_txt in secs:
+    for g0, key, head, note_txt in secs:
         section(ws, g0, "A", head)
         put(ws, f"A{g0 + 1}", note_txt, fnt=F_SMALL_IT)
         put(ws, f"A{g0 + 2}", "State", fnt=font("FFFFFF", bold=True), fill=FILL_NAVY,
@@ -183,17 +209,44 @@ def build_program_flow(ctx: Ctx):
                        f"/INDEX('_calc'!$N:$N,$P${rs}+{15 + j})")
                 or_ = (f"INDEX('_calc'!$O:$O,$P${rs}+{27 + j})"
                        f"/INDEX('_calc'!$O:$O,$P${rs}+{15 + j})")
-                if g0 == g1:
-                    f = f'=IF($P${rs}=0,"",{nr_}-1)'
-                elif g0 == g2:
-                    f = (f'=IF($P${rs}=0,"",'
-                         f"IF(INDEX('_calc'!$O:$O,$P${rs})=0,\"—\",{or_}-1))")
+                if key == "rate":
+                    one = f'IF($P${rs}=0,"",{nr_}-1)'
+                elif key == "mod":
+                    one = (f'IF($P${rs}=0,"",'
+                           f"IF(INDEX('_calc'!$O:$O,$P${rs})=0,\"—\",{or_}-1))")
                 else:
-                    f = (f'=IF($P${rs}=0,"",{nr_}*'
-                         f"IF(INDEX('_calc'!$O:$O,$P${rs})=1,{or_},1)-1)")
+                    one = (f'IF($P${rs}=0,"",{nr_}*'
+                           f"IF(INDEX('_calc'!$O:$O,$P${rs})=1,{or_},1)-1)")
+                # All view (D60): EP x w weighted mean across the state's BUs
+                # (w cancels within a state — state-keyed seasonality)
+                sw = f"(calc_state=$A{r})*{pub('epw', j)}"
+                if key == "mod":
+                    dn = f"SUMPRODUCT({sw}*{pub('modeff')})"
+                    alv = (f'IF({dn}=0,"—",'
+                           f"SUMPRODUCT({sw}*{pub('modeff')}*{pub('mod', j)})/{dn})")
+                else:
+                    dn = f"SUMPRODUCT({sw})"
+                    alv = (f'IF({dn}=0,"",'
+                           f"SUMPRODUCT({sw}*{pub(key, j)})/{dn})")
+                f = f'=IF($A{r}="","",IF(pf_BU="All",{alv},{one}))'
                 formula(ws, ws.cell(row=r, column=2 + j).coordinate, f,
                         fmt=PCT_S, align=ALIGN_C)
                 ws.cell(row=r, column=2 + j).font = font(GREY_DARK, size=9)
+        # IN VIEW total row (D60): the BU / book-level monthly flow line.
+        # View condition is purely multiplicative (no IF over arrays):
+        # ((pf_BU="All")+(calc_bu=pf_BU)) is 1 for every combo under All,
+        # else 1 only for the picked BU's combos.
+        r_t = g0 + 3 + nd
+        put(ws, f"A{r_t}", "IN VIEW", fnt=font(NAVY, bold=True, size=9), align=ALIGN_C)
+        for j in range(12):
+            vw = f'((pf_BU="All")+(calc_bu=pf_BU))*{pub("epw", j)}'
+            ext = f"*{pub('modeff')}" if key == "mod" else ""
+            dn = f"SUMPRODUCT({vw}{ext})"
+            f = (f'=IF({dn}=0,"{"—" if key == "mod" else ""}",'
+                 f"SUMPRODUCT({vw}{ext}*{pub(key, j)})/{dn})")
+            cc = ws.cell(row=r_t, column=2 + j)
+            formula(ws, cc.coordinate, f, fmt=PCT_S, align=ALIGN_C)
+            cc.font = font(NAVY, bold=True, size=9)
     ws.conditional_formatting.add(
         f"B{g3 + 3}:M{g3 + 2 + nd}",
         ColorScaleRule(start_type="min", start_color="D6E8D5",
@@ -201,11 +254,13 @@ def build_program_flow(ctx: Ctx):
                        end_type="max", end_color="F4B8B8"))
 
     # ---- footer ----
-    fn = g3 + 3 + nd + 1
+    fn = g3 + 3 + nd + 2
     put(ws, f"A{fn}",
         "Program basis (D59): every Rate Log row enters exactly as logged — taken at "
         "filed %, planned at filed % x achievement. A net rate selection changes NOTHING "
-        "here by design; this tab is the reality check against that assertion.",
+        "here by design; this tab is the reality check against that assertion. Under "
+        "'All' (and on IN VIEW rows) legs are EP x weight means — rate x mod need not "
+        "multiply to delivered exactly under mix; delivered is exact (D60).",
         fnt=F_SMALL_IT)
     jump(ws, f"A{fn + 1}", f"{_q(SHEETS.NET_DELIVERY)}!A1",
          "Net combos: see Net Delivery for the filing + pricing walk that closes the gap >")

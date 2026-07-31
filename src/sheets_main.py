@@ -9,7 +9,7 @@ from openpyxl.chart.marker import Marker
 from openpyxl.formatting.rule import ColorScaleRule, DataBarRule, FormulaRule
 from openpyxl.styles import Alignment, Border, Side
 
-from .build_workbook import Ctx, Layout as L
+from .build_workbook import Ctx, Layout as L, SHEETS
 from .xlstyle import (
     ALIGN_C, ALIGN_WRAP, BORDER_THIN, DOWN_BAR, F_HEADER, F_LABEL, F_SMALL_IT, FAIL_RED,
     FILL_GREY, FILL_NAVY, FILL_PANEL, FMT_DATE, FMT_EP_Z, FMT_GEN, FMT_IDX, FMT_IDX_Z,
@@ -495,6 +495,8 @@ def build_portfolio(ctx: Ctx):
     put(ws, "T27",
         "Factor averages don't compound exactly across a mixed book — the mix line is "
         "that honest residual.", fnt=F_SMALL_IT)
+    jump(ws, "T28", f"'{SHEETS.PROGRAM_FLOW}'!A1",
+         "Monthly flow by state and for the book > Program Flow", size=9)
 
     tor = BarChart()
     tor.type = "bar"

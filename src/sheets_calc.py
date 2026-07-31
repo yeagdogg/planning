@@ -1,13 +1,17 @@
 """_calc sheet: hidden engine blocks.
 
 Sections, top to bottom:
-  1. Results table (rows 4..21) — one row per tbl_LR row, read by Portfolio.
-  2. 18 combo engine blocks (one per tbl_LR row), stride 54 rows.
-  3. Scenario-transformed rate logs (4 x 9 columns, 40 rows) + 4 scenario blocks
+  1. Results table (rows CALC_RES_FIRST..CALC_RES_LAST) — one row per tbl_LR
+     row, read by Portfolio / State Summary / Program Flow. Columns A..AL are
+     the D38 annual projection; AM.. are the D60 published program-flow
+     columns (monthly legs + EP x weight products; see FLOW_PUB).
+  2. Combo engine blocks (one per tbl_LR row), stride 54 rows.
+  3. Scenario-transformed rate logs (4 x 9 columns) + 4 scenario blocks
      for the SELECTED combo.
   4. Attribution rank/transformed logs + 3 attribution blocks (magnitude,
      timing, actual-mod) for the selected combo.
   5. Solver base block (taken rows only) with cumulative columns for Mode B.
+  6. Program-flow locked block (taken rows only, keyed on nr_SelKey, D59).
 
 Every block is emitted by sheets_engine.write_cohort_block so the formula
 pattern is identical to the visible Rate Engine. Dynamic anchors are stored in
@@ -22,6 +26,25 @@ from .xlstyle import (FMT_IDX, FMT_INT, FMT_MOD, GREY_DARK, col, font, formula, 
                       put, quote_sheet)
 
 RL = quote_sheet(SHEETS.RATE_LOG)   # the rate-log rows the scenario/attr logs mirror
+
+# D60: published program-flow columns on the results-table rows — the flat,
+# SUMPRODUCT-able projection of each combo's monthly YoY legs. Column INDICES
+# (render with xlstyle.col); monthly families span 12 columns, Jan..Dec P.
+# Single source of truth: sheets_programflow and the harness import this map.
+# Everything published here must stay STRICTLY NUMERIC (SUMPRODUCT *-form
+# aggregation errors on text), so the mod leg is the raw path ratio and any
+# gating happens at the aggregation site via the modeff column.
+FLOW_PUB = dict(
+    delivered=39,   # AM..AX  YoY delivered net leg by plan month
+    rate=51,        # AY..BJ  YoY written rate leg
+    mod=63,         # BK..BV  YoY written mod leg (raw path, ungated)
+    epw=75,         # BW..CH  adjusted plan EP x seasonality weight w(m)
+    modeff=87,      # CI      mod-adjustment-in-force echo (0/1)
+    avg_rate=88,    # CJ      plan-year avg rate RATIO (block results echo)
+    avg_mod=89,     # CK      plan-year avg mod RATIO
+    avg_del=90,     # CL      plan-year avg delivered RATIO
+    gap=91,         # CM      abs(avg delivered - 1 - net x); 0 for non-net
+)
 
 
 def _grey(ws, addr):
@@ -166,6 +189,22 @@ def build_calc(ctx: Ctx):
         f_grey(ws, f"AJ{r}", f"=$O{r}*$V{r}", FMT_IDX)
         f_grey(ws, f"AK{r}", f"=IF($L${t},1,0)", FMT_INT)
         f_grey(ws, f"AL{r}", f"=IF($L${t},$M${t},0)", "0.0%")
+        # D60 published program-flow columns (see FLOW_PUB above)
+        for j in range(12):
+            num, den = t + 27 + j, t + 15 + j
+            f_grey(ws, f"{col(FLOW_PUB['delivered'] + j)}{r}",
+                   f"=$N${num}/$N${den}*IF($O${t}=1,$O${num}/$O${den},1)-1", FMT_IDX)
+            f_grey(ws, f"{col(FLOW_PUB['rate'] + j)}{r}",
+                   f"=$N${num}/$N${den}-1", FMT_IDX)
+            f_grey(ws, f"{col(FLOW_PUB['mod'] + j)}{r}",
+                   f"=$O${num}/$O${den}-1", FMT_IDX)
+            f_grey(ws, f"{col(FLOW_PUB['epw'] + j)}{r}", f"=$V{r}*$H${num}", FMT_IDX)
+        f_grey(ws, f"{col(FLOW_PUB['modeff'])}{r}", f"=$O${t}", FMT_INT)
+        f_grey(ws, f"{col(FLOW_PUB['avg_rate'])}{r}", f"=$H${t + 51}", FMT_IDX)
+        f_grey(ws, f"{col(FLOW_PUB['avg_mod'])}{r}", f"=$I${t + 51}", FMT_IDX)
+        f_grey(ws, f"{col(FLOW_PUB['avg_del'])}{r}", f"=$J${t + 51}", FMT_IDX)
+        f_grey(ws, f"{col(FLOW_PUB['gap'])}{r}",
+               f"=IF($AK{r}=1,ABS(${col(FLOW_PUB['avg_del'])}{r}-1-$AL{r}),0)", FMT_IDX)
     res_names = {
         "calc_key": ("A", "Combo keys, aligned 1:1 with tbl_LR rows"),
         "calc_term": ("B", "Policy term by combo"),
@@ -197,6 +236,11 @@ def build_calc(ctx: Ctx):
         "calc_netmode": ("AK", "1 when the combo carries a net rate selection (D39)"),
         "calc_netx": ("AL", "Net selection x(P) by combo (0 when off)"),
     }
+    ctx.define("pfd_bookgap", "_calc",
+               f"${col(FLOW_PUB['gap'])}${L.CALC_RES_FIRST}:"
+               f"${col(FLOW_PUB['gap'])}${L.CALC_RES_LAST}",
+               "Per-combo abs gap: program-basis delivered avg vs the asserted net "
+               "(0 = non-net) — book-wide, view-independent (D60)")
     for name, (cL, desc) in res_names.items():
         ctx.define(name, "_calc", f"${cL}${L.CALC_RES_FIRST}:${cL}${L.CALC_RES_LAST}", desc)
 
