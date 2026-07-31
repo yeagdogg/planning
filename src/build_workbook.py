@@ -421,11 +421,11 @@ class Layout:
     PF_W_TOTAL = 76
     PF_S_TOTAL = 77
 
-    # ---- Bridge (fixed) ----
-    BR_IN_FIRST = 6
-    BR_WF_HDR = 29
-    BR_WF_FIRST = 30
-    BR_CHART_DATA = 58
+    # ---- Bridge (fixed; answer-first layout — resolver demoted below) ----
+    BR_WF_HDR = 8
+    BR_WF_FIRST = 9
+    BR_IN_FIRST = 38     # resolver block rows (outline-grouped audit detail)
+    BR_CHART_DATA = 60
 
     # ---- Checks (fixed) ----
     CK_HDR = 5

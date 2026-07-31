@@ -6,6 +6,7 @@ import datetime as dt
 
 from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.chart.marker import Marker
+from openpyxl.chart.series import SeriesLabel
 from openpyxl.formatting.rule import CellIsRule
 
 from .build_workbook import GENERATOR_VERSION, Ctx, Layout as L
@@ -54,7 +55,7 @@ def _chart(c, title_text, height=8, width=15, y_title=None):
 # Flow Dashboard
 # ---------------------------------------------------------------------------
 
-CD0 = 63  # chart-data header row
+CD0 = 80  # chart-data header row (monthly detail table)
 
 
 def build_flow_dashboard(ctx: Ctx):
@@ -62,14 +63,16 @@ def build_flow_dashboard(ctx: Ctx):
     p = ctx.p
     title(ws, "B2", "Flow Dashboard — rate and price flow through the plan",
           "Selected BU x state. The plan year is shaded in the index chart. All series "
-          "trace to the Rate Engine and Mod Engine sheets via the chart-data block below.")
+          "trace to the Rate Engine and Mod Engine sheets via the monthly detail table below.")
     link(ws, "J2", "=nr_SelKey", bold=True)
     jump(ws, "L2", "Control!C7", "Change BU/state selection >")
 
-    # ---- chart data block (36 monthly rows) ----
-    put(ws, f"B{CD0 - 1}", "Chart data (formulas — do not edit)", fnt=F_SMALL_IT)
+    # ---- monthly detail table (36 rows; doubles as chart data) ----
+    put(ws, f"B{CD0 - 1}", "Monthly flow detail (formulas — the charts read this table)",
+        fnt=F_SMALL_IT)
     heads = ["Month", "Written idx W", "Earned idx E_m", "Written mod", "Earned mod",
-             "Price idx (written)", "Price idx (earned)", "Plan-year band"]
+             "Price idx (written)", "Price idx (earned)", "Plan year",
+             "YoY earned rate", "YoY earned price", "Unearned runway"]
     for j, h in enumerate(heads):
         put(ws, f"{col(2 + j)}{CD0}", h, fnt=font(GREY_DARK, size=9))
     for j in range(L.N_MONTHS):
@@ -87,7 +90,14 @@ def build_flow_dashboard(ctx: Ctx):
                 f'=IF(OR($D{r}="",$F{r}=""),"",IF(nr_NetMode,$D{r},$D{r}*($F{r}/nr_MInd)))',
                 fmt=FMT_IDX)
         formula(ws, f"I{r}", f"=IF(YEAR($B{r})=nr_PlanYear,1,0)", fmt=FMT_INT)
-        for cL in "BCDEFGHI":
+        pct_m = "+0.0%;-0.0%;0.0%"
+        if j >= 12:  # first 12 reported months have no year-ago comparison
+            formula(ws, f"J{r}", f'=IF(OR($D{r}="",$D{r - 12}=""),"",$D{r}/$D{r - 12}-1)',
+                    fmt=pct_m)
+            formula(ws, f"K{r}", f'=IF(OR($H{r}="",$H{r - 12}=""),"",$H{r}/$H{r - 12}-1)',
+                    fmt=pct_m)
+        formula(ws, f"L{r}", f'=IF(OR($C{r}="",$D{r}=""),"",$C{r}/$D{r}-1)', fmt=pct_m)
+        for cL in "BCDEFGHIJKL":
             ws[f"{cL}{r}"].font = font(GREY_DARK, size=8)
 
     cats = Reference(ws, min_col=2, min_row=CD0 + 1, max_row=CD0 + L.N_MONTHS)
@@ -183,28 +193,112 @@ def build_flow_dashboard(ctx: Ctx):
                 fmt=FMT_IDX, align=ALIGN_C)
         ws[f"I{r}"].font = font(GREY_DARK, size=9)
         formula(ws, f"J{r}", f"=$H{r}/$I{r}-1", fmt="+0.0%;-0.0%;0.0%", align=ALIGN_C)
-    note(ws, f"B{qt + 10}",
-         "Unearned runway = written index at quarter end / earned index of the quarter - 1: "
-         "rate level already locked in on the books but not yet visible in earned premium "
-         "(DECISIONS.md D27). Price = rate index x earned mod / M_ind — the combined net "
-         "price customers actually pay (under a net rate selection the two series coincide "
-         "by construction). YoY uses the same quarter one year earlier.")
+    put(ws, f"B{qt + 10}",
+        "Runway = written level / earned level - 1: rate locked in but not yet earned "
+        "(D27). Price = rate x earned mod / M_ind (series coincide under a net selection). "
+        "YoY compares the same period one year earlier.", fnt=F_SMALL_IT)
 
-    yoy = BarChart()
-    yoy.type = "col"
-    yoy.gapWidth = 50
-    yoy.add_data(Reference(ws, min_col=5, min_row=qt, max_row=qt + 8), titles_from_data=True)
-    yoy.add_data(Reference(ws, min_col=10, min_row=qt, max_row=qt + 8), titles_from_data=True)
-    yoy.set_categories(Reference(ws, min_col=2, min_row=qt + 1, max_row=qt + 8))
-    yoy.series[0].graphicalProperties.solidFill = STEEL
-    yoy.series[1].graphicalProperties.solidFill = NAVY
-    yoy.y_axis.number_format = "0.0%"
-    _chart(yoy, "YoY earned RATE vs PRICE change by quarter — plan year and next",
+    # ---- (b) MONTHLY YoY rate vs price chart (quarterly grain hid the
+    # mid-month steps the engine already computes; the quarterly table above
+    # remains the runway summary) ----
+    yoym = BarChart()
+    yoym.type = "col"
+    yoym.gapWidth = 40
+    m0, m1 = CD0 + 13, CD0 + L.N_MONTHS  # Jan P .. Dec P+1 (24 valid YoY points)
+    yoym.add_data(Reference(ws, min_col=10, min_row=m0, max_row=m1), titles_from_data=False)
+    yoym.add_data(Reference(ws, min_col=11, min_row=m0, max_row=m1), titles_from_data=False)
+    yoym.series[0].tx = SeriesLabel(v="Earned RATE chg, YoY")
+    yoym.series[1].tx = SeriesLabel(v="Earned PRICE chg, YoY")
+    yoym.set_categories(Reference(ws, min_col=2, min_row=m0, max_row=m1))
+    yoym.series[0].graphicalProperties.solidFill = STEEL
+    yoym.series[1].graphicalProperties.solidFill = NAVY
+    yoym.y_axis.number_format = "0.0%"
+    _chart(yoym, "YoY earned RATE vs PRICE change by MONTH — plan year and next",
            height=8.5, width=16, y_title="YoY earned change")
-    ws.add_chart(yoy, "K4")
+    ws.add_chart(yoym, "K4")
+
+    # ---- NEW: unearned-runway line (the most plannable number in the file) ----
+    run = LineChart()
+    run.add_data(Reference(ws, min_col=12, min_row=CD0 + 1, max_row=CD0 + L.N_MONTHS),
+                 titles_from_data=False)
+    run.series[0].tx = SeriesLabel(v="Unearned runway")
+    run.set_categories(Reference(ws, min_col=2, min_row=CD0 + 1, max_row=CD0 + L.N_MONTHS))
+    _line(run.series[0], NAVY)
+    run.legend = None
+    run.y_axis.number_format = "0.0%"
+    _chart(run, "Unearned runway: rate on the books not yet earned (written / earned - 1)",
+           height=8.5, width=14)
+    ws.add_chart(run, "T4")
+
+    # per-chart "what to look for" captions (single overflow lines)
+    captions = [
+        ("B21", "Watch the gap: written (steel) runs ahead of earned (navy) — the gap is "
+                "rate still to earn in."),
+        ("K21", "Monthly grain shows the step when an action lands mid-month; quarterly "
+                "bars hide it."),
+        ("T21", "Converges to zero as filed actions finish earning; jumps when new rate "
+                "goes on the books."),
+        ("B39", "Mod drift reaches earned premium with the same lag as rate — a price "
+                "change in slow motion."),
+        ("K39", "Rate x mod combined: the net price customers actually pay."),
+    ]
+    for addr, text in captions:
+        put(ws, addr, text, fnt=F_SMALL_IT)
+
+    # ---- carryover ledger: why CY P+1 starts above CY P, action by action ----
+    cl = qt + 12
+    section(ws, cl, "B", "Carryover ledger — where the head start into the following year "
+                         "comes from")
+    formula(ws, f"B{cl + 1}",
+            '=IF(nr_NetMode,"Net selection active: the carryover is set by the net renewal '
+            'path — this ledger describes the explicit program counterfactual.",'
+            '"Each action earns partly in the plan year and fully in the next; the '
+            'difference is carryover.")')
+    ws[f"B{cl + 1}"].font = F_SMALL_IT
+    header_row(ws, cl + 2, 2,
+               ["#", "Effective", "Effective %", "Share of plan yr earned",
+                "Share of next yr earned", "Carryover contribution"],
+               widths=None, fill=FILL_GREY, fnt=font(GREY_DARK, bold=True, size=9))
+    wrng = f"{RE}!$H${L.RE_COH_FIRST}:$H${L.RE_COH_LAST}"
+    ecp = f"{RE}!$Q${L.RE_COH_FIRST}:$Q${L.RE_COH_LAST}"
+    ecp1 = f"{RE}!$R${L.RE_COH_FIRST}:$R${L.RE_COH_LAST}"
+    absmi = f"{RE}!$G${L.RE_COH_FIRST}:$G${L.RE_COH_LAST}"
+
+    def _share(r, ec):
+        mj = f"YEAR($C{r})*12+MONTH($C{r})-1"
+        frac = f"(EOMONTH($C{r},0)-$C{r}+1)/DAY(EOMONTH($C{r},0))"
+        return (f'=IF($C{r}="","",(SUMPRODUCT(({absmi}>{mj})*{wrng},{ec})'
+                f"+{frac}*SUMPRODUCT(({absmi}={mj})*{wrng},{ec}))"
+                f"/SUMPRODUCT({wrng},{ec}))")
+
+    for j in range(1, 9):
+        r = cl + 2 + j
+        cnt = f"COUNTIFS(rl_key,nr_SelKey,rl_seq,{j})"
+        put(ws, f"B{r}", j, fnt=font(GREY_DARK, size=9), align=ALIGN_C)
+        formula(ws, f"C{r}", f'=IF({cnt}=0,"",SUMIFS(rl_eff,rl_key,nr_SelKey,rl_seq,{j}))',
+                fmt="m/d/yy", align=ALIGN_C)
+        formula(ws, f"D{r}", f'=IF({cnt}=0,"",SUMIFS(rl_reff,rl_key,nr_SelKey,rl_seq,{j}))',
+                fmt="+0.0%;-0.0%;0.0%", align=ALIGN_C)
+        formula(ws, f"E{r}", _share(r, ecp), fmt=FMT_PCT, align=ALIGN_C)
+        formula(ws, f"F{r}", _share(r, ecp1), fmt=FMT_PCT, align=ALIGN_C)
+        formula(ws, f"G{r}", f'=IF($C{r}="","",EXP(LN(1+$D{r})*($F{r}-$E{r}))-1)',
+                fmt="+0.0%;-0.0%;0.0%", align=ALIGN_C)
+        formula(ws, f"H{r}", f'=IF($C{r}="",0,LN(1+$D{r})*($F{r}-$E{r}))', fmt=FMT_IDX)
+        ws[f"H{r}"].font = font(GREY_DARK, size=8)
+    tot_r = cl + 11
+    label(ws, f"C{tot_r}", "Actions combined", bold=True)
+    formula(ws, f"G{tot_r}", f"=EXP(SUM($H${cl + 3}:$H${cl + 10}))-1",
+            fmt="+0.0%;-0.0%;0.0%", align=ALIGN_C, bold=True, fill=FILL_PANEL)
+    label(ws, f"C{tot_r + 1}", "Timing / compounding interaction (residual)")
+    formula(ws, f"G{tot_r + 1}",
+            f"=(1+nr_YoY_P1)/EXP(SUM($H${cl + 3}:$H${cl + 10}))-1",
+            fmt="+0.0%;-0.0%;0.0%", align=ALIGN_C)
+    label(ws, f"C{tot_r + 2}", "Total carryover (earned rate chg into next year)", bold=True)
+    link(ws, f"G{tot_r + 2}", "=nr_YoY_P1", fmt="+0.0%;-0.0%;0.0%", align=ALIGN_C,
+         bold=True, fill=FILL_PANEL)
 
     set_widths(ws, {"A": 2, "B": 11, "C": 12, "D": 12, "E": 12, "F": 12, "G": 13, "H": 13,
-                    "I": 11})
+                    "I": 11, "J": 12, "K": 12, "L": 12})
     presentation_setup(ws, gridlines_off=True, tab_color=NAVY)
     print_setup(ws)
 

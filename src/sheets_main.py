@@ -12,7 +12,7 @@ from openpyxl.styles import Alignment, Border, Side
 from .build_workbook import Ctx, Layout as L
 from .xlstyle import (
     ALIGN_C, ALIGN_WRAP, BORDER_THIN, DOWN_BAR, F_HEADER, F_LABEL, F_SMALL_IT, FAIL_RED,
-    FILL_NAVY, FILL_PANEL, FMT_DATE, FMT_EP_Z, FMT_GEN, FMT_IDX, FMT_IDX_Z,
+    FILL_GREY, FILL_NAVY, FILL_PANEL, FMT_DATE, FMT_EP_Z, FMT_GEN, FMT_IDX, FMT_IDX_Z,
     FMT_INT, FMT_MOD, FMT_PCT, FMT_PCT_Z, GREY_DARK, NAVY, STEEL, STEEL_LIGHT,
     TOTAL_BAR, UP_BAR, col, font, formula, header_row, input_cell, jump, label, link,
     nav_bar, note, presentation_setup, print_setup, prose, put, section, set_widths, title,
@@ -56,25 +56,36 @@ def _line_color(series, rgb, width_pt=2.25, dashed=False):
 
 
 def build_bridge(ctx: Ctx):
+    """Answer-first layout: the claim sentence and waterfall live above the fold
+    with the chart at their right shoulder; the resolver block (the tbl_LR
+    inputs that physically feed the engines via the nr_* names) is demoted to
+    an outline-grouped audit block below. Harness binds Bridge ONLY via names,
+    so the re-layout is free as long as every name is re-defined here."""
     ws = ctx.wb["Bridge"]
     p = ctx.p
     title(ws, "B2", f"Bridge — projected LR to calendar-year plan LR ({ctx.lob.name})",
-          "Waterfall from the indication's projected loss ratio to the CY plan loss ratio "
-          "for the selected BU x state. All factors trace to the Rate Engine, Mod Engine, "
-          "and Inputs sheets.")
+          "The selected combo's answer, factor by factor. Expand the grouped rows at the "
+          "bottom to audit exactly which inputs feed the engines.")
 
     label(ws, "E4", "Selected:")
     link(ws, "F4", "=nr_SelKey", bold=True)
     jump(ws, "H4", "Control!C7", "Change BU/state selection >")
 
-    # ---- selected inputs block ----
-    section(ws, 5, "B", "Selected combo inputs (tbl_LR via INDEX/MATCH on the BU|State key)")
-    label(ws, "E5", "row in tbl_LR")
-    formula(ws, "F5", "=IF(nr_SelOK,MATCH(nr_SelKey,lr_key,0),0)", fmt=FMT_INT)
-    ws["F5"].font = font(GREY_DARK, size=9)
-    ctx.define("br_selrow", "Bridge", "$F$5", "tbl_LR row of the selected combo (0 = absent)")
+    # ---- answer band ----
+    formula(ws, "B5",
+            '=IF(nr_SelOK,"Projected "&TEXT(nr_LRproj,"0.0%")&"  ->  CY "&nr_PlanYear&'
+            '" plan "&TEXT(nr_CYLR_P,"0.0%")&"   ("&TEXT((nr_CYLR_P-nr_LRcur)*100,'
+            '"+0.0;-0.0;0.0")&" pts vs current level)",'
+            '"Select a BU and state that exist in tbl_LR to see the bridge.")',
+            fmt=FMT_GEN)
+    ws["B5"].font = font(NAVY, bold=True, size=14)
+    ws["B5"].fill = FILL_PANEL
+    for cc in range(3, 9):
+        put(ws, ws.cell(row=5, column=cc).coordinate, None, fill=FILL_PANEL)
+    put(ws, "B6", "Every factor below is calculated on the Rate Engine and Mod Engine "
+                  "for this combo.", fnt=F_SMALL_IT)
 
-    R = "$F$5"
+    R = "$F${0}".format(L.BR_IN_FIRST - 2)   # br_selrow, on the resolver section row
     rows = [
         ("Business unit", "=nr_SelBU", FMT_GEN, None, None, True),
         ("State", "=nr_SelState", FMT_GEN, None, None, True),
@@ -132,16 +143,44 @@ def build_bridge(ctx: Ctx):
          f"N(INDEX(lr_netp1,{R}))))", FMT_PCT,
          "nr_NetSelP1", "Net selection for P+1 cohorts (defaults to the P selection)", False),
     ]
+    # ---- resolver block (demoted audit detail; outline-grouped) ----
+    res_sec = L.BR_IN_FIRST - 2
+    section(ws, res_sec, "B",
+            "Selection resolver — the tbl_LR inputs feeding the engines (audit detail)")
+    put(ws, f"D{res_sec + 1}",
+        "These cells ARE the engine inputs (named nr_*); they resolve the Control "
+        "selection against tbl_LR. Grey = machinery, not results.", fnt=F_SMALL_IT)
+    label(ws, f"E{res_sec}", "row in tbl_LR")
+    formula(ws, f"F{res_sec}", "=IF(nr_SelOK,MATCH(nr_SelKey,lr_key,0),0)", fmt=FMT_INT)
+    ws[f"F{res_sec}"].font = font(GREY_DARK, size=9)
+    ctx.define("br_selrow", "Bridge", f"$F${res_sec}",
+               "tbl_LR row of the selected combo (0 = absent)")
+
     r = L.BR_IN_FIRST
     for lbl, f, fmt, name, desc, is_link in rows:
         label(ws, f"B{r}", lbl)
-        (link if is_link else formula)(ws, f"C{r}", f, fmt=fmt, border=BORDER_THIN)
+        c = (link if is_link else formula)(ws, f"C{r}", f, fmt=fmt, border=BORDER_THIN)
+        c.font = font(GREY_DARK, size=10)
         if name:
             ctx.define(name, "Bridge", f"$C${r}", desc)
         r += 1
-    put(ws, "D19",
-        '=IF(AND(nr_AOther<>1,nr_AOtherLbl=""),"WARNING: A_other <> 1 requires a label","")',
-        fnt=font(FAIL_RED, size=9, italic=True))
+    # companion notes render the sentinel semantics as text WITHOUT touching the
+    # numeric cells the engines consume
+    companions = {
+        10: '=IF(N($C{r})=0,"blank -> backward anchor sits on the M_0 -> M_1 line","")',
+        11: '=IF(N($C{r})=0,"blank -> M_1 carried flat beyond the plan year","")',
+        13: '=IF(AND(nr_AOther<>1,nr_AOtherLbl=""),'
+            '"WARNING: A_other <> 1 requires a label","")',
+        17: '=IF($C{r},"NET SELECTION ACTIVE — supersedes planned rows from 1/1",'
+            '"explicit rate program")',
+    }
+    for idx, tmpl in companions.items():
+        rr_ = L.BR_IN_FIRST + idx
+        put(ws, f"D{rr_}", tmpl.format(r=rr_),
+            fnt=font(FAIL_RED if idx == 13 else GREY_DARK, size=9, italic=True))
+    for rr_ in range(res_sec + 1, L.BR_IN_FIRST + len(rows)):
+        ws.row_dimensions[rr_].outlineLevel = 1
+        ws.row_dimensions[rr_].hidden = True
 
     # ---- waterfall table ----
     section(ws, L.BR_WF_HDR - 1, "B", "The bridge — plan year and the indicative following year")
@@ -155,12 +194,12 @@ def build_bridge(ctx: Ctx):
                   (7, '="LR after ("&(nr_PlanYear+1)&")"'),
                   (8, '="Step ("&(nr_PlanYear+1)&")"')):
         ws.cell(row=L.BR_WF_HDR, column=cc).value = f
-    wf = L.BR_WF_FIRST  # 27
+    wf = L.BR_WF_FIRST
     steps = [
         ("Projected LR (as input)", None, "=nr_LRproj", None, "=nr_LRproj"),
         ("Convert to current rate level x(1+s)", '=IF(nr_Basis="proposed",1+nr_SelS,1)', None,
          '=IF(nr_Basis="proposed",1+nr_SelS,1)', None),
-        (f"Net trend (applies to {p + 1} only)", "=1", None, "=1+nr_Trend", None),
+        ('="Net trend (applies to "&(nr_PlanYear+1)&" only)"', "=1", None, "=1+nr_Trend", None),
         ('=IF(nr_NetMode,"Rate + price earn-in (net)  A_net","Rate earn-in  A_rate")',
          "=nr_Arate_P", None, "=nr_Arate_P1", None),
         ('=IF(nr_NetMode,"Mod drift (merged into A_net)","Schedule mod drift  A_mod")',
@@ -184,7 +223,7 @@ def build_bridge(ctx: Ctx):
         else:
             formula(ws, f"D{rr}", lr_p, fmt=FMT_PCT, align=ALIGN_C)
             formula(ws, f"G{rr}", lr_p1, fmt=FMT_PCT, align=ALIGN_C)
-    tot = wf + 6  # 33
+    tot = wf + 6
     put(ws, f"B{tot}", f"CY plan loss ratio", fnt=font(NAVY, bold=True), fill=FILL_PANEL)
     formula(ws, f"D{tot}", f"=$D{tot - 1}", fmt=FMT_PCT, align=ALIGN_C, bold=True,
             fill=FILL_PANEL)
@@ -195,34 +234,77 @@ def build_bridge(ctx: Ctx):
     ctx.define("nr_CYLR_P", "Bridge", f"$D${tot}", "CY plan loss ratio for the plan year")
     ctx.define("nr_CYLR_P1", "Bridge", f"$G${tot}",
                "Indicative CY LR for plan year + 1 (assumes no new indication)")
-    note(ws, f"B{tot + 2}",
-         "The following-year column is indicative: it holds the indication fixed and applies "
-         "the net trend input once (default 0.0% — a visible caveat, not a forecast).")
+    # canonical P+1 caveat (other sheets point here rather than repeating it)
+    prose(ws, f"B{tot + 2}",
+          "The following-year column is indicative: it holds the indication fixed and "
+          "applies the net trend input once (default 0.0% — a visible caveat, not a "
+          "forecast).", size=9, width=34)
+    ws[f"B{tot + 2}"].font = F_SMALL_IT
 
-    # ---- communication metrics ----
+    # ---- communication metrics (live year labels, D44) ----
     section(ws, tot + 4, "B", "Communication metrics")
     for i, (lbl, f, fmt) in enumerate([
-        ("CY earned rate chg vs indication level", "=nr_EChgVsInd", PCT_SIGNED_Z),
-        (f"Earned rate chg {p - 1} -> {p}", "=nr_YoY_P", PCT_SIGNED_Z),
-        (f"Earned rate chg {p} -> {p + 1} (carryover + new actions)", "=nr_YoY_P1", PCT_SIGNED_Z),
+        ('="CY earned rate chg vs indication level"', "=nr_EChgVsInd", PCT_SIGNED_Z),
+        ('="Earned rate chg "&(nr_PlanYear-1)&" -> "&nr_PlanYear', "=nr_YoY_P", PCT_SIGNED_Z),
+        ('="Earned rate chg "&nr_PlanYear&" -> "&(nr_PlanYear+1)&" (carryover + new actions)"',
+         "=nr_YoY_P1", PCT_SIGNED_Z),
     ]):
-        label(ws, f"B{tot + 5 + i}", lbl)
+        formula(ws, f"B{tot + 5 + i}", lbl)
+        ws[f"B{tot + 5 + i}"].font = F_LABEL
         link(ws, f"D{tot + 5 + i}", f, fmt=fmt, align=ALIGN_C)
 
-    # ---- waterfall chart data + chart ----
-    cd = L.BR_CHART_DATA  # 55
+    # ---- rate changes for this combo (chronological slots via rl_seq) ----
+    act = tot + 9
+    section(ws, act, "B", "Rate changes for this combo — chronological")
+    jump(ws, f"F{act}", "Inputs!A1", "edit these on Inputs >", size=9)
+    header_row(ws, act + 1, 2,
+               ["#", "Effective", "Filed %", "Status", "In indication?", "Effective %"],
+               widths=None, fill=FILL_GREY, fnt=font(GREY_DARK, bold=True, size=9))
+    for j in range(1, 9):
+        rr = act + 1 + j
+        cnt = f"COUNTIFS(rl_key,nr_SelKey,rl_seq,{j})"
+        put(ws, f"B{rr}", j, fnt=font(GREY_DARK, size=9), align=ALIGN_C)
+        formula(ws, f"C{rr}", f'=IF({cnt}=0,"",SUMIFS(rl_eff,rl_key,nr_SelKey,rl_seq,{j}))',
+                fmt="m/d/yy", align=ALIGN_C)
+        formula(ws, f"D{rr}", f'=IF({cnt}=0,"",SUMIFS(rl_filed,rl_key,nr_SelKey,rl_seq,{j}))',
+                fmt=FMT_PCT, align=ALIGN_C)
+        formula(ws, f"E{rr}",
+                f'=IF({cnt}=0,"",IF(COUNTIFS(rl_key,nr_SelKey,rl_seq,{j},rl_status,'
+                f'"planned")>0,"planned","taken"))', align=ALIGN_C)
+        formula(ws, f"F{rr}",
+                f'=IF({cnt}=0,"",IF(COUNTIFS(rl_key,nr_SelKey,rl_seq,{j},rl_cons,"Y")>0,'
+                f'"Y","N"))', align=ALIGN_C)
+        formula(ws, f"G{rr}", f'=IF({cnt}=0,"",SUMIFS(rl_reff,rl_key,nr_SelKey,rl_seq,{j}))',
+                fmt="+0.0%;-0.0%;0.0%", align=ALIGN_C)
+    formula(ws, f"B{act + 10}",
+            '=IF(COUNTIFS(rl_key,nr_SelKey)>8,"Showing the first 8 of "&'
+            'COUNTIFS(rl_key,nr_SelKey)&" changes - see the rate log for the rest.",'
+            'IF(nr_NetMode,"Net selection active: planned rows on/after 1/1 of the plan '
+            'year are superseded (D39).",""))')
+    ws[f"B{act + 10}"].font = F_SMALL_IT
+
+    # ---- waterfall chart data + chart (staging grouped-hidden below) ----
+    cd = L.BR_CHART_DATA
     put(ws, f"B{cd - 1}", "Waterfall chart data (formulas — do not edit)", fnt=F_SMALL_IT)
     cats = [("Projected LR", f"$D${wf}", None, True),
             ("Basis", f"$D${wf}", f"$D${wf + 1}", False),
-            ("Rate earn-in", f"$D${wf + 2}", f"$D${wf + 3}", False),
-            ("Mod drift", f"$D${wf + 3}", f"$D${wf + 4}", False),
+            ('=IF(nr_NetMode,"Net earn-in","Rate earn-in")',
+             f"$D${wf + 2}", f"$D${wf + 3}", False),
+            ('=IF(nr_NetMode,"Mod (in net)","Mod drift")',
+             f"$D${wf + 3}", f"$D${wf + 4}", False),
             ("Other", f"$D${wf + 4}", f"$D${wf + 5}", False),
-            (f"CY {p} plan LR", f"$D${tot}", None, True)]
+            ('="CY "&nr_PlanYear&" plan LR"', f"$D${tot}", None, True)]
     for j, h in enumerate(["Step", "base", "up", "down", "total"]):
         put(ws, f"{col(2 + j)}{cd}", h, fnt=font(GREY_DARK, size=9))
     for i, (lbl, a, b, is_total) in enumerate(cats):
         rr = cd + 1 + i
-        put(ws, f"B{rr}", lbl, fnt=font(GREY_DARK, size=9))
+        # live category labels: the chart reads these cells, so net-mode and
+        # plan-year relabeling reach the chart too (not just the table)
+        if lbl.startswith("="):
+            formula(ws, f"B{rr}", lbl)
+        else:
+            put(ws, f"B{rr}", lbl)
+        ws[f"B{rr}"].font = font(GREY_DARK, size=9)
         if is_total:
             formula(ws, f"C{rr}", "=0", fmt=FMT_PCT)
             formula(ws, f"D{rr}", "=0", fmt=FMT_PCT)
@@ -255,8 +337,12 @@ def build_bridge(ctx: Ctx):
                  y_title="Loss ratio", height=9, width=15)
     ws.add_chart(chart, "J5")
 
+    for rr in range(cd - 1, cd + 7):
+        ws.row_dimensions[rr].outlineLevel = 1
+        ws.row_dimensions[rr].hidden = True
+
     set_widths(ws, {"A": 2, "B": 34, "C": 13, "D": 12, "E": 11, "F": 12, "G": 13, "H": 11})
-    presentation_setup(ws, gridlines_off=True, tab_color=NAVY)
+    presentation_setup(ws, gridlines_off=True, freeze="A8", tab_color=NAVY)
     print_setup(ws)
 
 
