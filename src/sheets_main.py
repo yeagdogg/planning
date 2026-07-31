@@ -256,7 +256,7 @@ def build_bridge(ctx: Ctx):
     # ---- rate changes for this combo (chronological slots via rl_seq) ----
     act = tot + 9
     section(ws, act, "B", "Rate changes for this combo — chronological")
-    jump(ws, f"F{act}", "Inputs!A1", "edit these on Inputs >", size=9)
+    jump(ws, f"F{act}", "'Rate Log'!A1", "edit these on the Rate Log >", size=9)
     header_row(ws, act + 1, 2,
                ["#", "Effective", "Filed %", "Status", "In indication?", "Effective %"],
                widths=None, fill=FILL_GREY, fnt=font(GREY_DARK, bold=True, size=9))

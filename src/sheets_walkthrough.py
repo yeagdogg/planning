@@ -157,7 +157,7 @@ def build_walkthrough(ctx: Ctx):
     link(ws, f"H{r}", "=nr_CRLind", fmt=FMT_IDX, align=ALIGN_C, bold=True, fill=FILL_PANEL)
     _expl(ws, r, "Computed as EXP(SUMPRODUCT(LN(1 + change))) over considered rows — the "
                  "exact product identity, blank-row safe (Methodology 4).", size=9)
-    jump(ws, f"I{r}", "Inputs!A1", "rate log >", size=9)
+    jump(ws, f"I{r}", f"{quote_sheet(SHEETS.RATE_LOG)}!A1", "rate log >", size=9)
     r += 2
 
     # ---- W4: three cohorts under the microscope ----

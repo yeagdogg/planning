@@ -16,9 +16,12 @@ ctx.lay_dyn for the visible sheets (Scenarios / Solver / Attribution) to link.
 
 from __future__ import annotations
 
-from .build_workbook import Ctx, Layout as L
+from .build_workbook import Ctx, Layout as L, SHEETS
 from .sheets_engine import LogRefs, write_cohort_block, write_mod_anchor_cells
-from .xlstyle import FMT_IDX, FMT_INT, FMT_MOD, GREY_DARK, col, font, formula, label, put
+from .xlstyle import (FMT_IDX, FMT_INT, FMT_MOD, GREY_DARK, col, font, formula, label,
+                      put, quote_sheet)
+
+RL = quote_sheet(SHEETS.RATE_LOG)   # the rate-log rows the scenario/attr logs mirror
 
 
 def _grey(ws, addr):
@@ -204,27 +207,27 @@ def build_calc(ctx: Ctx):
             r = r0 + j
             ir = L.RL_FIRST + j
             f_grey(ws, f"{cEff}{r}",
-                   f'=IF(Inputs!$C${ir}="","",IF(Inputs!$E${ir}="planned",'
-                   f"EDATE(Inputs!$C${ir},N(INDEX(sc_shift,{s}))),Inputs!$C${ir}))", "mm/dd/yyyy")
+                   f'=IF({RL}!$C${ir}="","",IF({RL}!$E${ir}="planned",'
+                   f"EDATE({RL}!$C${ir},N(INDEX(sc_shift,{s}))),{RL}!$C${ir}))", "mm/dd/yyyy")
             f_grey(ws, f"{cEm}{r}",
                    f'=IF(${cEff}{r}="","",DATE(YEAR(${cEff}{r}),MONTH(${cEff}{r}),1))',
                    "mm/dd/yyyy")
             f_grey(ws, f"{cAch}{r}",
-                   f'=IF(N(INDEX(sc_ach,{s}))=0,IF(Inputs!$G${ir}="",1,Inputs!$G${ir}),'
+                   f'=IF(N(INDEX(sc_ach,{s}))=0,IF({RL}!$G${ir}="",1,{RL}!$G${ir}),'
                    f"INDEX(sc_ach,{s}))", "0.0%")
             f_grey(ws, f"{cReff}{r}",
-                   f'=IF(Inputs!$C${ir}="",0,IF(Inputs!$E${ir}="planned",'
-                   f"(Inputs!$D${ir}+N(INDEX(sc_dpts,{s})))*${cAch}{r},Inputs!$D${ir}))", "0.0%")
+                   f'=IF({RL}!$C${ir}="",0,IF({RL}!$E${ir}="planned",'
+                   f"({RL}!$D${ir}+N(INDEX(sc_dpts,{s})))*${cAch}{r},{RL}!$D${ir}))", "0.0%")
             f_grey(ws, f"{cLn}{r}",
-                   f'=IF(Inputs!$C${ir}="",0,IF(1+${cReff}{r}>0,LN(1+${cReff}{r}),0))', FMT_IDX)
+                   f'=IF({RL}!$C${ir}="",0,IF(1+${cReff}{r}>0,LN(1+${cReff}{r}),0))', FMT_IDX)
             f_grey(ws, f"{cDay}{r}",
                    f'=IF(${cEff}{r}="",0,EOMONTH(${cEff}{r},0)-${cEff}{r}+1)', FMT_INT)
             f_grey(ws, f"{cEcnt}{r}",
-                   f'=IF(${cEff}{r}="",0,COUNTIFS(rl_key,Inputs!$J${ir},'
+                   f'=IF(${cEff}{r}="",0,COUNTIFS(rl_key,{RL}!$J${ir},'
                    f'${cEm}${r0}:${cEm}${r0 + L.RL_ROWS - 1},${cEm}{r},'
                    f'${cEff}${r0}:${cEff}${r0 + L.RL_ROWS - 1},"<"&${cEff}{r}))', FMT_INT)
             f_grey(ws, f"{cScnt}{r}",
-                   f'=IF(${cEff}{r}="",0,COUNTIFS(Inputs!$J${L.RL_FIRST}:$J${ir},Inputs!$J${ir},'
+                   f'=IF(${cEff}{r}="",0,COUNTIFS({RL}!$J${L.RL_FIRST}:$J${ir},{RL}!$J${ir},'
                    f"${cEm}${r0}:${cEm}{r},${cEm}{r},${cEff}${r0}:${cEff}{r},${cEff}{r}))",
                    FMT_INT)
             f_grey(ws, f"{cFirst}{r}",
@@ -287,25 +290,25 @@ def build_calc(ctx: Ctx):
         r = r0 + j
         ir = L.RL_FIRST + j
         f_grey(ws, f"A{r}",
-               f'=IF(OR(Inputs!$J${ir}<>nr_SelKey,Inputs!$E${ir}<>"planned",Inputs!$C${ir}=""),0,'
-               f'COUNTIFS(Inputs!$J${L.RL_FIRST}:$J${ir},nr_SelKey,'
-               f'Inputs!$E${L.RL_FIRST}:$E${ir},"planned"))', FMT_INT)
+               f'=IF(OR({RL}!$J${ir}<>nr_SelKey,{RL}!$E${ir}<>"planned",{RL}!$C${ir}=""),0,'
+               f'COUNTIFS({RL}!$J${L.RL_FIRST}:$J${ir},nr_SelKey,'
+               f'{RL}!$E${L.RL_FIRST}:$E${ir},"planned"))', FMT_INT)
         f_grey(ws, f"B{r}",
-               f"=IF($A{r}=0,N(Inputs!$K${ir}),IF(ISBLANK(INDEX(att_actpct,$A{r})),"
-               f"N(Inputs!$K${ir}),INDEX(att_actpct,$A{r})))", "0.0%")
+               f"=IF($A{r}=0,N({RL}!$K${ir}),IF(ISBLANK(INDEX(att_actpct,$A{r})),"
+               f"N({RL}!$K${ir}),INDEX(att_actpct,$A{r})))", "0.0%")
         f_grey(ws, f"C{r}",
-               f'=IF(Inputs!$C${ir}="",0,IF(1+$B{r}>0,LN(1+$B{r}),0))', FMT_IDX)
+               f'=IF({RL}!$C${ir}="",0,IF(1+$B{r}>0,LN(1+$B{r}),0))', FMT_IDX)
         f_grey(ws, f"D{r}",
-               f'=IF(Inputs!$C${ir}="","",IF($A{r}=0,Inputs!$C${ir},'
-               f"IF(ISBLANK(INDEX(att_actdate,$A{r})),Inputs!$C${ir},INDEX(att_actdate,$A{r}))))",
+               f'=IF({RL}!$C${ir}="","",IF($A{r}=0,{RL}!$C${ir},'
+               f"IF(ISBLANK(INDEX(att_actdate,$A{r})),{RL}!$C${ir},INDEX(att_actdate,$A{r}))))",
                "mm/dd/yyyy")
         f_grey(ws, f"E{r}", f'=IF($D{r}="","",DATE(YEAR($D{r}),MONTH($D{r}),1))', "mm/dd/yyyy")
         f_grey(ws, f"F{r}", f'=IF($D{r}="",0,EOMONTH($D{r},0)-$D{r}+1)', FMT_INT)
         f_grey(ws, f"G{r}",
-               f'=IF($D{r}="",0,COUNTIFS(rl_key,Inputs!$J${ir},'
+               f'=IF($D{r}="",0,COUNTIFS(rl_key,{RL}!$J${ir},'
                f'$E${r0}:$E${r0 + L.RL_ROWS - 1},$E{r},$D${r0}:$D${r0 + L.RL_ROWS - 1},"<"&$D{r}))', FMT_INT)
         f_grey(ws, f"H{r}",
-               f'=IF($D{r}="",0,COUNTIFS(Inputs!$J${L.RL_FIRST}:$J${ir},Inputs!$J${ir},'
+               f'=IF($D{r}="",0,COUNTIFS({RL}!$J${L.RL_FIRST}:$J${ir},{RL}!$J${ir},'
                f"$E${r0}:$E{r},$E{r},$D${r0}:$D{r},$D{r}))", FMT_INT)
         f_grey(ws, f"I{r}", f'=IF($D{r}="",0,IF(AND($G{r}=0,$H{r}=1),1,0))', FMT_INT)
     ctx.lay_dyn["att_rank"] = f"'_calc'!$A${r0}:$A${r0 + L.RL_ROWS - 1}"

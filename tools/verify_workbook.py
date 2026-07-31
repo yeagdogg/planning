@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src import engine  # noqa: E402
 from src.build_workbook import (  # noqa: E402
-    Layout as L, degenerate_combo, load_config, output_path, sample_lr_rows,
+    Layout as L, SHEETS, degenerate_combo, load_config, output_path, sample_lr_rows,
     sample_rate_rows, sample_seasonality_rows, sample_to_combo,
 )
 from tools.recalc import recalc  # noqa: E402
@@ -433,7 +433,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
         muts = {("Control", "C7"): tgt["bu"], ("Control", "C8"): tgt["state"]}
         for r in rows_xl:
             for colL in "ABCDEFGH":
-                muts[("Inputs", f"{colL}{r}")] = None
+                muts[(SHEETS.RATE_LOG, f"{colL}{r}")] = None
         blank_m = engine.run_bridge(
             p, replace(combo_of(tgt["bu"], tgt["state"]), rate_changes=()), "monthly")
 
@@ -605,8 +605,8 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
             ("Control", "C7"): "BU-X", ("Control", "C8"): "ZZ"}
     for i, rr in enumerate(rate_rows):
         if rr["bu"] == "BU-B" and rr["state"] == ren_state:
-            muts[("Inputs", f"A{L.RL_FIRST + i}")] = "BU-X"
-            muts[("Inputs", f"B{L.RL_FIRST + i}")] = "ZZ"
+            muts[(SHEETS.RATE_LOG, f"A{L.RL_FIRST + i}")] = "BU-X"
+            muts[(SHEETS.RATE_LOG, f"B{L.RL_FIRST + i}")] = "ZZ"
     ren_m = engine.run_bridge(p, combo_of("BU-B", ren_state), "monthly")  # values unchanged
 
     def a9f(wb):

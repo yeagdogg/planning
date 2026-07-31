@@ -378,14 +378,14 @@ class Layout:
     LR_FIRST = 12
     LR_ROWS = 69
     LR_LAST = 80
-    RL_HDR = 84
-    RL_FIRST = 85
+    RL_HDR = 6            # Rate Log sheet (own sheet; fixed header)
+    RL_FIRST = 7
     RL_ROWS = 240
-    RL_LAST = 324
-    SE_HDR = 328
-    SE_FIRST = 329
+    RL_LAST = 246
+    SE_HDR = 84
+    SE_FIRST = 85
     SE_ROWS = 24
-    SE_LAST = 352
+    SE_LAST = 108
 
     # ---- Rate Engine sheet (fixed) ----
     RE_COH_HDR = 16
@@ -441,11 +441,13 @@ class Layout:
         cls.LR_FIRST = cls.LR_HDR + 1
         cls.LR_ROWS = len(cfg.business_units) * len(cfg.states) + cfg.spare_lr_rows
         cls.LR_LAST = cls.LR_FIRST + cls.LR_ROWS - 1
-        cls.RL_HDR = cls.LR_LAST + 4
+        # the rate log lives on its OWN sheet (fixed header rows there);
+        # seasonality follows tbl_LR directly on Inputs
+        cls.RL_HDR = 6
         cls.RL_FIRST = cls.RL_HDR + 1
         cls.RL_ROWS = cfg.rate_log_rows
         cls.RL_LAST = cls.RL_FIRST + cls.RL_ROWS - 1
-        cls.SE_HDR = cls.RL_LAST + 4
+        cls.SE_HDR = cls.LR_LAST + 4
         cls.SE_FIRST = cls.SE_HDR + 1
         cls.SE_ROWS = len(cfg.states) + cfg.spare_seasonality_rows
         cls.SE_LAST = cls.SE_FIRST + cls.SE_ROWS - 1
@@ -503,10 +505,10 @@ class Ctx:
 
 
 SHEET_ORDER = [
-    SHEETS.README, SHEETS.CONTROL, SHEETS.INPUTS, SHEETS.RATE_ENGINE,
-    SHEETS.MOD_ENGINE, SHEETS.BRIDGE, SHEETS.WALKTHROUGH, SHEETS.FLOW,
-    SHEETS.PORTFOLIO, SHEETS.STATE_SUMMARY, SHEETS.SCENARIOS, SHEETS.SOLVER,
-    SHEETS.ATTRIBUTION, SHEETS.CHECKS, SHEETS.METHODOLOGY,
+    SHEETS.README, SHEETS.CONTROL, SHEETS.INPUTS, SHEETS.RATE_LOG,
+    SHEETS.RATE_ENGINE, SHEETS.MOD_ENGINE, SHEETS.BRIDGE, SHEETS.WALKTHROUGH,
+    SHEETS.FLOW, SHEETS.PORTFOLIO, SHEETS.STATE_SUMMARY, SHEETS.SCENARIOS,
+    SHEETS.SOLVER, SHEETS.ATTRIBUTION, SHEETS.CHECKS, SHEETS.METHODOLOGY,
     SHEETS.LISTS, SHEETS.CALC, SHEETS.ORACLE,
 ]
 HIDDEN_SHEETS = {SHEETS.LISTS, SHEETS.CALC, SHEETS.ORACLE}
@@ -519,7 +521,7 @@ HIDDEN_SHEETS = {SHEETS.LISTS, SHEETS.CALC, SHEETS.ORACLE}
 
 def build(cfg: Config, lob_name: str) -> Workbook:
     from . import (sheets_calc, sheets_engine, sheets_inputs, sheets_main,
-                   sheets_report, sheets_walkthrough)
+                   sheets_ratelog, sheets_report, sheets_walkthrough)
 
     Layout.configure(cfg)
     lob = cfg.lob(lob_name)
@@ -565,6 +567,7 @@ def build(cfg: Config, lob_name: str) -> Workbook:
     # Build order: reference data first, then engines, then presentation.
     sheets_inputs.build_lists(ctx)
     sheets_inputs.build_inputs(ctx)
+    sheets_ratelog.build_rate_log(ctx)
     sheets_inputs.build_control(ctx)
     sheets_engine.build_rate_engine(ctx)
     sheets_engine.build_mod_engine(ctx)
@@ -622,4 +625,10 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # ``python -m src.build_workbook`` loads this file TWICE: as __main__ and
+    # (via the builders' relative imports) as src.build_workbook — two separate
+    # Layout classes. Delegate to the canonical module so configure() runs on
+    # the SAME Layout object the sheet builders read; otherwise they silently
+    # fall back to the class-body defaults (D46).
+    from src.build_workbook import main as _canonical_main
+    sys.exit(_canonical_main())

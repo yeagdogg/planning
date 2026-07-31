@@ -871,8 +871,10 @@ def build_methodology(ctx: Ctx):
 
 READ_ME_GUIDE = [
     ("Control", "Pick the plan year, BU and state; global toggles; the six headline KPIs."),
-    ("Inputs", "Enter or paste the book: loss ratios and mods (tbl_LR), rate changes, "
-               "seasonality, policy term."),
+    ("Inputs", "Enter or paste the book: loss ratios and mods (tbl_LR), seasonality, and "
+               "the policy term."),
+    ("Rate Log", "Enter or paste rate changes — every row shows its combo's plan LR "
+                 "moving as you type."),
     ("Portfolio", "Every BU x state combo at once — heatmapped, with EP-weighted totals."),
     ("State Summary", "One row per state with a BU filter ('All' = EP-weighted) — the "
                       "leadership exhibit."),
@@ -1002,11 +1004,10 @@ def build_readme(ctx: Ctx):
     section(ws, r, "B", "Quick start")
     r += 1
     steps = [
-        "Replace the SAMPLE rows on the Inputs sheet with your book: tbl_LR (one row per "
-        "BU x state), the rate change log (one row per change), tbl_Seasonality (optional, "
-        "by state), and the policy term. Do not insert or delete rows — spare rows are "
-        "provided. Rename BUs and states directly in tbl_LR: every dropdown and exhibit "
-        "follows the live roster automatically.",
+        "Replace the SAMPLE rows with your book: tbl_LR, seasonality, and the policy term "
+        "on Inputs; the rate change log (one row per change) on the Rate Log sheet. Do not "
+        "insert or delete rows — spare rows are provided. Rename BUs and states directly "
+        "in tbl_LR: every dropdown and exhibit follows the live roster automatically.",
         "On Control, pick the plan year, BU, and state, and set the global toggles "
         "(seasonality, the mod-adjustment master switch, the default net trend).",
         "Read the KPI row on Control; audit any figure through Rate Engine -> Mod Engine "

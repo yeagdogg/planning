@@ -22,11 +22,12 @@ def _assert_layout_consistent(c):
     n_combos = len(c.business_units) * len(c.states)
     assert L.LR_ROWS == n_combos + c.spare_lr_rows
     assert L.LR_LAST == L.LR_FIRST + L.LR_ROWS - 1
-    # each table starts 4 rows after the previous one ends (caption + header gap)
-    assert L.RL_HDR == L.LR_LAST + 4
+    # the rate log lives on its own sheet with a fixed header
+    assert L.RL_HDR == 6
     assert L.RL_FIRST == L.RL_HDR + 1
     assert L.RL_LAST == L.RL_FIRST + c.rate_log_rows - 1
-    assert L.SE_HDR == L.RL_LAST + 4
+    # seasonality follows tbl_LR directly on Inputs
+    assert L.SE_HDR == L.LR_LAST + 4
     assert L.SE_ROWS == len(c.states) + c.spare_seasonality_rows
     assert L.SE_LAST == L.SE_FIRST + L.SE_ROWS - 1
     # parameters live ABOVE the tables (term input is never a long scroll away)
@@ -63,3 +64,17 @@ def test_layout_configure_is_idempotent(cfg):
     L.configure(cfg)
     assert first == (L.LR_LAST, L.RL_LAST, L.SE_LAST, L.TERM_ROW,
                      L.CALC_BLOCK_FIRST, L.PF_LAST)
+
+
+def test_class_defaults_match_shipped_configure(cfg):
+    """`python -m src.build_workbook` can load the module twice (__main__ and
+    src.build_workbook). The __main__ guard now delegates to the canonical
+    module, but keep the class-body defaults in lockstep with the shipped
+    config anyway so any OTHER unconfigured import can never silently build a
+    different geometry (the D46 dual-module trap)."""
+    defaults = {k: getattr(L, k) for k in vars(L)
+                if k.isupper() and isinstance(getattr(L, k), int)}
+    L.configure(cfg)
+    mismatched = {k: (v, getattr(L, k)) for k, v in defaults.items()
+                  if getattr(L, k) != v}
+    assert not mismatched, f"class defaults diverge from configure(): {mismatched}"

@@ -162,16 +162,18 @@ def build_inputs(ctx: Ctx):
     ws = ctx.wb["Inputs"]
     p = ctx.p
     title(ws, "A1", f"Inputs — {ctx.lob.name}",
-          "All actuarial inputs live here — blue font = enter values; yellow fill = required. "
-          "One row per BU x state. Structure is fixed; do not insert or delete rows.")
-    nav_bar(ws, 3, 1, ["Control", "Bridge", "State Summary", "Checks", "Read Me"], step=2)
+          "Loss-ratio and mod inputs (one row per BU x state), seasonality, and the policy "
+          "term — blue font = enter values; yellow fill = required. Rate changes live on "
+          "the Rate Log sheet. Structure is fixed; do not insert or delete rows.")
+    nav_bar(ws, 3, 1, ["Control", "Rate Log", "Bridge", "State Summary", "Checks",
+                       "Read Me"], step=2)
     put(ws, "A4",
         "SAMPLE DATA: every populated row below is illustrative and should be replaced with "
         f"your book. {ctx.we_key} carries the documented worked example used by the Checks sheet.",
         fnt=font(FAIL_RED, bold=True, italic=True))
-    put(ws, "A5" if False else "T4",
-        "Each dataset is one contiguous paste block (tbl_LR A:R, tbl_RateLog A:H) — keys and "
-        "engine helpers sit to the right and recalculate on their own.",
+    put(ws, "T4",
+        "tbl_LR A:R is one contiguous paste block — keys, helpers, and live results sit to "
+        "the right. The rate change log lives on the Rate Log sheet.",
         fnt=F_SMALL_IT)
 
     # ------------------------------------------------------------------ tbl_LR
@@ -265,71 +267,8 @@ def build_inputs(ctx: Ctx):
             ws[f"{cL}{r}"].font = font(GREY_DARK, size=9)
             ws[f"{cL}{r}"].alignment = ALIGN_C
 
-    # -------------------------------------------------------------- tbl_RateLog
-    section(ws, L.RL_HDR - 1, "A",
-            "tbl_RateLog — one row per rate change per BU x state   "
-            "(planned rows: effective change = filed % x achievement %). "
-            "Columns A:H are one contiguous paste block.")
-    header_row(ws, L.RL_HDR, 1, rl_headers(), widths=[9, 8, 11, 9, 12, 12, 13, 34])
-    ws.row_dimensions[L.RL_HDR].height = 30
-    header_row(ws, L.RL_HDR, 10, RL_HELPER_HEADERS,
-               widths=[14, 8, 8, 11, 12, 10, 9, 7, 11, 6], fill=FILL_GREY,
-               fnt=font(GREY_DARK, bold=True, size=9))
-    put(ws, f"J{L.RL_HDR - 1}", "engine helpers (formulas — do not edit)", fnt=F_SMALL_IT)
-    ws.column_dimensions["I"].width = 2
-    for i in range(L.RL_ROWS):
-        r = L.RL_FIRST + i
-        row = ctx.rate_rows[i] if i < len(ctx.rate_rows) else None
-        input_cell(ws, f"A{r}", row and row["bu"])
-        input_cell(ws, f"B{r}", row and row["state"])
-        input_cell(ws, f"C{r}", row and row["eff"], fmt=FMT_DATE)
-        input_cell(ws, f"D{r}", row and row["filed"], fmt=FMT_PCT)
-        input_cell(ws, f"E{r}", row and row["status"])
-        input_cell(ws, f"F{r}", row and row["considered"])
-        input_cell(ws, f"G{r}", row and row["achievement"], fmt=FMT_PCT, required=False)
-        input_cell(ws, f"H{r}", (row["comment"] if row else None), required=False)
-        ws[f"H{r}"].alignment = ALIGN_L
-        # helpers J..S (right of the paste block, D40)
-        formula(ws, f"J{r}", f'=IF(OR($A{r}="",$B{r}=""),"",$A{r}&"|"&$B{r})', border=BORDER_THIN)
-        formula(ws, f"K{r}", f'=IF($C{r}="","",$D{r}*IF($E{r}="planned",IF($G{r}="",1,$G{r}),1))',
-                fmt=FMT_PCT)
-        formula(ws, f"L{r}", f'=IF($C{r}="",0,IF(1+$K{r}>0,LN(1+$K{r}),0))', fmt=FMT_IDX)
-        formula(ws, f"M{r}", f'=IF($C{r}="","",DATE(YEAR($C{r}),MONTH($C{r}),1))', fmt=FMT_DATE)
-        formula(ws, f"N{r}", f'=IF($C{r}="",0,EOMONTH($C{r},0)-$C{r}+1)', fmt=FMT_INT)
-        formula(ws, f"O{r}", f'=IF($C{r}="",0,COUNTIFS(rl_key,$J{r},rl_effmonth,$M{r},rl_eff,"<"&$C{r}))',
-                fmt=FMT_INT)
-        formula(ws, f"P{r}", f'=IF($C{r}="",0,COUNTIFS($J${L.RL_FIRST}:$J{r},$J{r},$M${L.RL_FIRST}:$M{r},$M{r},$C${L.RL_FIRST}:$C{r},$C{r}))',
-                fmt=FMT_INT)
-        formula(ws, f"Q{r}", f'=IF($C{r}="",0,IF(AND($O{r}=0,$P{r}=1),1,0))', fmt=FMT_INT)
-        formula(ws, f"R{r}", f'=IF($C{r}="",0,IF(COUNTIFS(rl_key,$J{r},rl_effmonth,$M{r})>1,1,0))',
-                fmt=FMT_INT)
-        formula(ws, f"S{r}",
-                f'=IF($C{r}="",0,COUNTIFS(rl_key,$J{r},rl_eff,"<"&$C{r})'
-                f"+COUNTIFS($J${L.RL_FIRST}:$J{r},$J{r},$C${L.RL_FIRST}:$C{r},$C{r}))",
-                fmt=FMT_INT)
-        for cL in "JKLMNOPQRS":
-            ws[f"{cL}{r}"].font = font(GREY_DARK, size=9)
-    tbl = Table(displayName="tbl_RateLog", ref=f"A{L.RL_HDR}:H{L.RL_LAST}")
-    tbl.tableStyleInfo = TABLE_STYLE
-    ws.add_table(tbl)
-    rl_names = {
-        "rl_bu": ("A", "tbl_RateLog business unit"), "rl_state": ("B", "tbl_RateLog state"),
-        "rl_eff": ("C", "Rate change effective date (start of day)"),
-        "rl_filed": ("D", "Filed rate change (decimal fraction)"),
-        "rl_status": ("E", "taken | planned"),
-        "rl_cons": ("F", "Considered in the indication? (Y/N)"),
-        "rl_ach": ("G", "Achievement % (planned rows; blank = 100%)"),
-        "rl_key": ("J", "Helper: BU|State key (right of the paste block, D40)"),
-        "rl_reff": ("K", "Helper: effective change = filed x achievement (planned only)"),
-        "rl_ln1p": ("L", "Helper: ln(1 + effective change); 0 for blank rows"),
-        "rl_effmonth": ("M", "Helper: first day of the effective month"),
-        "rl_daysafter": ("N", "Helper: days in effective month on/after the change"),
-        "rl_first": ("Q", "Helper: 1 for the first change in its BU|State cohort month"),
-        "rl_dup": ("R", "Helper: 1 when >1 change shares a BU|State cohort month"),
-        "rl_seq": ("S", "Helper: chronological rank of the change within its BU|State key"),
-    }
-    for name, (colL, desc) in rl_names.items():
-        ctx.define(name, "Inputs", f"${colL}${L.RL_FIRST}:${colL}${L.RL_LAST}", desc)
+    # tbl_RateLog moved to its own "Rate Log" sheet (sheets_ratelog.build_rate_log):
+    # identical paste block A:H, its own frozen header, and same-row live results.
 
     # --------------------------------------------------------- tbl_Seasonality
     section(ws, L.SE_HDR - 1, "A",
@@ -394,17 +333,6 @@ def build_inputs(ctx: Ctx):
     _dv(ws, "decimal", [f"Q{fr}:Q{lr_}", f"R{fr}:R{lr_}"], operator="between",
         formula1="-0.5", formula2="1",
         error="Net rate selection must lie in [-50%, +100%] (decimal fraction; blank = off).")
-    fr, lr_ = L.RL_FIRST, L.RL_LAST
-    _dv(ws, "list", [f"A{fr}:A{lr_}"], formula1="=lst_bu")
-    _dv(ws, "list", [f"B{fr}:B{lr_}"], formula1="=lst_state")
-    _dv(ws, "list", [f"E{fr}:E{lr_}"], formula1="=lst_status")
-    _dv(ws, "list", [f"F{fr}:F{lr_}"], formula1="=lst_yn")
-    _dv(ws, "decimal", [f"D{fr}:D{lr_}"], operator="between", formula1="-0.5", formula2="2",
-        error="Filed change must lie in [-50%, +200%] (decimal fraction).")
-    _dv(ws, "decimal", [f"G{fr}:G{lr_}"], operator="between", formula1="0", formula2="1.5",
-        error="Achievement must lie in [0%, 150%].")
-    _dv(ws, "date", [f"C{fr}:C{lr_}"], operator="between",
-        formula1="DATE(1990,1,1)", formula2="DATE(2100,12,31)", error="Enter a real date.")
     _dv(ws, "decimal", [rng(2, L.SE_FIRST, 13, L.SE_LAST)], operator="between",
         formula1="0", formula2="100", error="Seasonality weights are non-negative.")
     _dv(ws, "list", [f"A{L.SE_FIRST}:A{L.SE_LAST}"], formula1="=lst_state")
@@ -432,7 +360,7 @@ def build_control(ctx: Ctx):
     # One-click navigation back to the analysis sheets (D45): change the
     # selection below, then jump straight to the sheet you came from.
     label(ws, "B4", "Jump to:", bold=True)
-    for i, sheet in enumerate(["Inputs", "Rate Engine", "Mod Engine", "Bridge",
+    for i, sheet in enumerate(["Inputs", "Rate Log", "Rate Engine", "Mod Engine", "Bridge",
                                "Flow Dashboard", "State Summary", "Portfolio", "Scenarios",
                                "Solver", "Attribution", "Checks", "Methodology", "Read Me"]):
         target = f"'{sheet}'!A1" if " " in sheet else f"{sheet}!A1"
