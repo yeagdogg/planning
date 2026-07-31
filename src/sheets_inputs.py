@@ -361,10 +361,10 @@ def build_control(ctx: Ctx):
     # selection below, then jump straight to the sheet you came from.
     label(ws, "B4", "Jump to:", bold=True)
     for i, sheet in enumerate(["Inputs", "Rate Log", "Portfolio", "State Summary",
-                               "Net Delivery", "Bridge", "Walkthrough", "One-Pager",
-                               "Flow Dashboard", "Scenarios", "Compare", "Solver",
-                               "Attribution", "Rate Engine", "Mod Engine", "Checks",
-                               "Methodology", "Read Me"]):
+                               "Program Flow", "Net Delivery", "Bridge", "Walkthrough",
+                               "One-Pager", "Flow Dashboard", "Scenarios", "Compare",
+                               "Solver", "Attribution", "Rate Engine", "Mod Engine",
+                               "Checks", "Methodology", "Read Me"]):
         target = f"'{sheet}'!A1" if " " in sheet else f"{sheet}!A1"
         jump(ws, ws.cell(row=4, column=3 + i).coordinate, target, sheet, size=9)
 

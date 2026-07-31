@@ -372,6 +372,10 @@ def build_net_delivery(ctx: Ctx):
     c.alignment = ALIGN_C
     ctx.define("nd_BU", SHEETS.NET_DELIVERY, "$B$5",
                "Net Delivery BU in view (delivery needs a single BU; All = roll-up only)")
+    dv_bu = DataValidation(type="list", formula1="=lst_bu_all", allow_blank=False,
+                           showErrorMessage=True)
+    ws.add_data_validation(dv_bu)
+    dv_bu.add("B5")
     label(ws, "D5", "Default effective date")
     input_cell(ws, "E5", None, fmt=FMT_DATE, required=False)
     ctx.define("nd_DefaultDateRaw", SHEETS.NET_DELIVERY, "$E$5",
