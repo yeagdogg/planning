@@ -333,6 +333,9 @@ def build_bridge(ctx: Ctx):
     chart.series[3].graphicalProperties.solidFill = TOTAL_BAR
     chart.legend = None
     chart.y_axis.number_format = "0%"
+    # the staging rows are outline-hidden; without this the chart would treat
+    # them as filtered-out and plot nothing
+    chart.plotVisOnly = False
     _style_chart(chart, "Projected LR -> CY plan loss ratio (stacked-column waterfall)",
                  y_title="Loss ratio", height=9, width=15)
     ws.add_chart(chart, "J5")

@@ -1,9 +1,9 @@
-# ---------------------------------------------------------------------------
-# Calendar-Year Plan Loss Ratio Workbook — generator configuration
+﻿# ---------------------------------------------------------------------------
+# Calendar-Year Plan Loss Ratio Workbook â€” generator configuration
 #
 # This file defines STRUCTURE only. All actuarial inputs (loss ratios, rate
 # logs, mods, seasonality weights) live in the generated workbooks' input
-# tables and are maintained there by the team (brief §4).
+# tables and are maintained there by the team (brief Â§4).
 #
 # Dimensioning (user direction, DECISIONS.md D37): ONE WORKBOOK PER LINE OF
 # BUSINESS; within each workbook, inputs are one row per BUSINESS UNIT x STATE.
@@ -20,7 +20,7 @@ business_units:
   - BU-B
   - BU-C
 
-# Rename to your actual writing states (sample list of 21; add/remove freely —
+# Rename to your actual writing states (sample list of 21; add/remove freely â€”
 # table capacities scale automatically on regeneration).
 states:
   - AZ
@@ -46,7 +46,7 @@ states:
   - TX
 
 # One workbook is generated per LOB; term_months is that workbook's policy
-# term (default 12; Inland Marine demonstrates the 6-month override, §10).
+# term (default 12; Inland Marine demonstrates the 6-month override, Â§10).
 lobs:
   - name: Property
   - name: General Liability
@@ -73,7 +73,7 @@ output:
   directory: output
   filename: "Plan_LR_Workbook_{plan_year}_{lob}"
 
-# classic (default): Excel-2007-era functions only — LibreOffice-verifiable.
+# classic (default): Excel-2007-era functions only â€” LibreOffice-verifiable.
 # modern is reserved (not implemented; the generator will refuse it).
 formula_mode: classic
 
@@ -85,4 +85,4 @@ theme:
   font: Calibri
 
 # Version stamped on Read Me; bump when regenerating with structural changes.
-version: "2.0.0"
+version: 2.1.0

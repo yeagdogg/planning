@@ -922,22 +922,26 @@ READ_ME_GUIDE = [
                "the policy term."),
     ("Rate Log", "Enter or paste rate changes — every row shows its combo's plan LR "
                  "moving as you type."),
-    ("Portfolio", "Every BU x state combo at once — heatmapped, with EP-weighted totals."),
+    ("Portfolio", "Every BU x state combo at once, plus the Decision Board: top movers, "
+                  "contribution to the book, the portfolio bridge."),
     ("State Summary", "One row per state with a BU filter ('All' = EP-weighted) — the "
                       "leadership exhibit."),
     ("Bridge", "The selected combo's answer: projected LR -> CY plan LR, factor by factor."),
     ("Walkthrough", "The fully worked example — every calculation for the selected combo, "
                     "start to finish."),
+    ("One-Pager", "A print-ready brief of the selected combo — the page you hand a VP."),
+    ("Flow Dashboard", "When rate and price actually earn in — monthly flow charts, the "
+                       "runway, the carryover ledger."),
+    ("Scenarios", "Four what-if lever sets side by side against Base (S1 ships seeded as "
+                  "a demo)."),
+    ("Compare", "Any two combos side by side across the full factor chain."),
+    ("Solver", "Inverse planning: the required change for a target CY LR, and timing "
+               "sensitivity — can follow Control or solve any combo."),
+    ("Attribution", "After the year closes: decompose actual vs plan into rate, timing, "
+                    "mod, and loss."),
     ("Rate Engine", "Audit trail: 48 writing cohorts x earning matrix behind the earned "
                     "rate level."),
     ("Mod Engine", "Audit trail: the written schedule-mod path and the earned mod."),
-    ("Flow Dashboard", "When rate and price actually earn in — monthly flow charts and the "
-                       "runway table."),
-    ("Scenarios", "Four what-if lever sets side by side against Base."),
-    ("Solver", "Inverse planning: the required change for a target CY LR, and timing "
-               "sensitivity."),
-    ("Attribution", "After the year closes: decompose actual vs plan into rate, timing, "
-                    "mod, and loss."),
     ("Checks", "The trust panel — must show ALL CHECKS PASS."),
     ("Methodology", "The full writeup: formulas as implemented, conventions, named ranges."),
 ]

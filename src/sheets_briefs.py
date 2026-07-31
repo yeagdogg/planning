@@ -142,7 +142,7 @@ def build_one_pager(ctx: Ctx):
             '"Drivers: rate earn-in "&TEXT(nr_LRcur*(nr_Arate_P-1)*100,"+0.0;-0.0;0.0")'
             '&" pts, schedule-mod drift "&TEXT(nr_LRcur*nr_Arate_P*(nr_Amod_P-1)*100,'
             '"+0.0;-0.0;0.0")&" pts; the year earns "&TEXT(nr_EChgVsInd,'
-            '"+0.0%;-0.0%;0.0%")&" vs the indication'&"'"&'"s assumed level.")')
+            "\"+0.0%;-0.0%;0.0%\")&\" vs the indication's assumed level.\")")
     ws["B33"].font = font(NAVY, size=11)
 
     # ---- charts: the bridge waterfall (reads Bridge staging) + runway ----
@@ -162,6 +162,7 @@ def build_one_pager(ctx: Ctx):
     wf.series[3].graphicalProperties.solidFill = TOTAL_BAR
     wf.legend = None
     wf.y_axis.number_format = "0%"
+    wf.plotVisOnly = False   # source staging rows on the Bridge are outline-hidden
     wf.title = "Projected -> plan loss ratio"
     wf.style = 2
     wf.height = 7

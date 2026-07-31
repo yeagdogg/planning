@@ -504,12 +504,14 @@ class Ctx:
         return self.cfg.plan_year
 
 
+# Final tab order (approved redesign): orientation -> inputs -> the all-combo
+# answers -> the selected-combo deep-dive chain -> what-ifs -> audit -> docs.
 SHEET_ORDER = [
     SHEETS.README, SHEETS.CONTROL, SHEETS.INPUTS, SHEETS.RATE_LOG,
-    SHEETS.RATE_ENGINE, SHEETS.MOD_ENGINE, SHEETS.BRIDGE, SHEETS.WALKTHROUGH,
-    SHEETS.FLOW, SHEETS.PORTFOLIO, SHEETS.STATE_SUMMARY, SHEETS.SCENARIOS,
-    SHEETS.SOLVER, SHEETS.ATTRIBUTION, SHEETS.CHECKS, SHEETS.METHODOLOGY,
-    SHEETS.LISTS, SHEETS.CALC, SHEETS.ORACLE,
+    SHEETS.PORTFOLIO, SHEETS.STATE_SUMMARY, SHEETS.BRIDGE, SHEETS.WALKTHROUGH,
+    SHEETS.ONE_PAGER, SHEETS.FLOW, SHEETS.SCENARIOS, SHEETS.COMPARE,
+    SHEETS.SOLVER, SHEETS.ATTRIBUTION, SHEETS.RATE_ENGINE, SHEETS.MOD_ENGINE,
+    SHEETS.CHECKS, SHEETS.METHODOLOGY, SHEETS.LISTS, SHEETS.CALC, SHEETS.ORACLE,
 ]
 HIDDEN_SHEETS = {SHEETS.LISTS, SHEETS.CALC, SHEETS.ORACLE}
 
@@ -520,8 +522,8 @@ HIDDEN_SHEETS = {SHEETS.LISTS, SHEETS.CALC, SHEETS.ORACLE}
 
 
 def build(cfg: Config, lob_name: str) -> Workbook:
-    from . import (sheets_calc, sheets_engine, sheets_inputs, sheets_main,
-                   sheets_ratelog, sheets_report, sheets_walkthrough)
+    from . import (sheets_briefs, sheets_calc, sheets_engine, sheets_inputs,
+                   sheets_main, sheets_ratelog, sheets_report, sheets_walkthrough)
 
     Layout.configure(cfg)
     lob = cfg.lob(lob_name)
@@ -580,6 +582,8 @@ def build(cfg: Config, lob_name: str) -> Workbook:
     sheets_main.build_attribution(ctx)
     sheets_report.build_flow_dashboard(ctx)
     sheets_walkthrough.build_walkthrough(ctx)
+    sheets_briefs.build_one_pager(ctx)
+    sheets_briefs.build_compare(ctx)
     sheets_report.build_oracle_sheet(ctx)
     sheets_report.build_checks(ctx)
     sheets_report.build_methodology(ctx)
