@@ -12,6 +12,7 @@ selector split.
 from __future__ import annotations
 
 from openpyxl.chart import BarChart, LineChart, Reference
+from openpyxl.chart.marker import Marker
 from openpyxl.formatting.rule import CellIsRule
 from openpyxl.worksheet.datavalidation import DataValidation
 
@@ -162,7 +163,9 @@ def build_one_pager(ctx: Ctx):
     wf.series[3].graphicalProperties.solidFill = TOTAL_BAR
     wf.legend = None
     wf.y_axis.number_format = "0%"
-    wf.plotVisOnly = False   # source staging rows on the Bridge are outline-hidden
+    # source staging rows on the Bridge are outline-hidden — without this the
+    # chart plots nothing (openpyxl attr is visible_cells_only, NOT plotVisOnly)
+    wf.visible_cells_only = False
     wf.title = "Projected -> plan loss ratio"
     wf.style = 2
     wf.height = 7
@@ -178,6 +181,7 @@ def build_one_pager(ctx: Ctx):
                                  max_row=CD0 + L.N_MONTHS))
     run.series[0].graphicalProperties.line.solidFill = NAVY
     run.series[0].graphicalProperties.line.width = int(2.25 * 12700)
+    run.series[0].marker = Marker(symbol="none")
     run.series[0].smooth = False
     run.legend = None
     run.y_axis.number_format = "0.0%"
@@ -185,6 +189,7 @@ def build_one_pager(ctx: Ctx):
     run.style = 2
     run.height = 7
     run.width = 13
+    run.visible_cells_only = False
     run.x_axis.delete = False
     run.y_axis.delete = False
     ws.add_chart(run, "B51")

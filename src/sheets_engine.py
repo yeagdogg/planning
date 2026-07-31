@@ -556,15 +556,18 @@ def build_mod_engine(ctx: Ctx):
                    titles_from_data=True)
     pathc.set_categories(Reference(flow, min_col=2, min_row=CD0 + 1,
                                    max_row=CD0 + L.N_MONTHS))
+    from openpyxl.chart.marker import Marker as _Marker
     for s, rgb in zip(pathc.series, (STEEL, "1F3864")):
         s.graphicalProperties.line.solidFill = rgb
         s.graphicalProperties.line.width = int(2.25 * 12700)
+        s.marker = _Marker(symbol="none")
         s.smooth = False
     pathc.y_axis.number_format = "0.000"
     pathc.title = "Written vs earned schedule mod path"
     pathc.style = 2
     pathc.height = 7.5
     pathc.width = 13
+    pathc.visible_cells_only = False
     pathc.x_axis.delete = False
     pathc.y_axis.delete = False
     ws.add_chart(pathc, "J14")

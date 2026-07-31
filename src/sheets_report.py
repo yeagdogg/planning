@@ -40,6 +40,9 @@ def _chart(c, title_text, height=8, width=15, y_title=None):
     c.style = 2
     c.height = height
     c.width = width
+    # never let "plot visible cells only" blank a chart with grouped-hidden
+    # sources (openpyxl attr: visible_cells_only; harness-guarded)
+    c.visible_cells_only = False
     if y_title:
         c.y_axis.title = y_title
     # Explicit axis visibility: openpyxl omits <c:delete> for None, and Excel

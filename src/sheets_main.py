@@ -27,6 +27,10 @@ def _style_chart(chart, title_text, x_title=None, y_title=None, height=8.5, widt
     chart.style = 2
     chart.height = height
     chart.width = width
+    # Excel's "plot visible cells only" default would blank any chart whose
+    # staging rows are outline-hidden (openpyxl attr: visible_cells_only —
+    # NOT plotVisOnly, which is silently ignored). Harness-guarded.
+    chart.visible_cells_only = False
     if x_title:
         chart.x_axis.title = x_title
     if y_title:
@@ -333,9 +337,6 @@ def build_bridge(ctx: Ctx):
     chart.series[3].graphicalProperties.solidFill = TOTAL_BAR
     chart.legend = None
     chart.y_axis.number_format = "0%"
-    # the staging rows are outline-hidden; without this the chart would treat
-    # them as filtered-out and plot nothing
-    chart.plotVisOnly = False
     _style_chart(chart, "Projected LR -> CY plan loss ratio (stacked-column waterfall)",
                  y_title="Loss ratio", height=9, width=15)
     ws.add_chart(chart, "J5")

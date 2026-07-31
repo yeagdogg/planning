@@ -152,19 +152,29 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
     check("Checks sheet: ALL CHECKS PASS", nval(wb, "ck_overall") == "ALL CHECKS PASS",
           str(nval(wb, "ck_overall")))
 
-    # Chart axes must stay visible after the Excel resave (D36).
+    # Chart axes must stay visible after the Excel resave (D36), and every
+    # chart must plot hidden cells: "plot visible cells only" would blank any
+    # chart whose staging rows are outline-hidden (openpyxl attr is
+    # visible_cells_only — plotVisOnly is silently ignored).
     import zipfile
     deleted = 0
     total_axes = 0
+    vis_only = []
     with zipfile.ZipFile(path) as z:
         for name in z.namelist():
             if re.match(r"xl/charts/chart\d+\.xml$", name):
                 xml = z.read(name).decode("utf-8", errors="replace")
                 total_axes += len(re.findall(r"<c:(catAx|valAx|dateAx)>", xml))
                 deleted += len(re.findall(r'<c:delete val="1"\s*/>', xml))
+                # openpyxl writes an unprefixed default namespace; Excel's
+                # resave rewrites with the c: prefix — accept either
+                if not re.search(r'<(c:)?plotVisOnly val="0"', xml):
+                    vis_only.append(name)
     check("chart axes visible after Excel resave (1 intentional hide only)",
           total_axes >= 16 and deleted == 1,
           f"{deleted} deleted of {total_axes} axes")
+    check("every chart plots hidden cells (plotVisOnly=0)", not vis_only,
+          "; ".join(vis_only[:5]))
 
     print("Phase C: oracle ties (default state)")
     p = cfg.plan_year

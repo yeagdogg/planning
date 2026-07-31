@@ -13,6 +13,7 @@ row and a harness tie on nr_WalkLR).
 from __future__ import annotations
 
 from openpyxl.chart import LineChart, Reference
+from openpyxl.chart.marker import Marker
 from openpyxl.formatting.rule import CellIsRule
 from openpyxl.styles import Font
 
@@ -400,12 +401,14 @@ def build_walkthrough(ctx: Ctx):
     for s, rgb in zip(mini.series, (STEEL, NAVY)):
         s.graphicalProperties.line.solidFill = rgb
         s.graphicalProperties.line.width = int(2.25 * 12700)
+        s.marker = Marker(symbol="none")
         s.smooth = False
     mini.y_axis.number_format = "0.000"
     mini.title = "Written vs earned mod path"
     mini.style = 2
     mini.height = 6.5
     mini.width = 11
+    mini.visible_cells_only = False
     mini.x_axis.delete = False
     mini.y_axis.delete = False
     ws.add_chart(mini, "K8")
