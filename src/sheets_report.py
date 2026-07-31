@@ -603,6 +603,10 @@ def build_checks(ctx: Ctx):
     A(("Advisory", "Net combo(s) ANYWHERE in the book deliver 1pt+ off their asserted "
        "net on program basis — view-independent (see Net Delivery)", "=0",
        '=COUNTIF(pfd_bookgap,">0.01")', 0, "WARN"))
+    # ---- appended v2.5 check (State Summary visible arithmetic, D61) ----
+    A(("Structure", "State Summary plan LR = the row's own factor product "
+       "(projected LR x rate earn-in x mod drift x other adj)", "=0",
+       "=SUM(ss_mathchk)", 1e-9, "FAIL"))
 
     header_row(ws, L.CK_HDR, 1,
                ["#", "Category", "Check", "Expected", "Actual", "Tolerance", "Status",
@@ -847,6 +851,18 @@ def build_methodology(ctx: Ctx):
          "Communication metrics: CY earned rate change vs indication = E_CY(P)/CRL_ind - 1; "
          "year-over-year earned rate changes E_CY(P)/E_CY(P-1) - 1 and E_CY(P+1)/E_CY(P) - 1 "
          "(the carryover-plus-new-actions figures planning teams quote).",
+         "State Summary shows this bridge as VISIBLE arithmetic (D61): on a row that "
+         "resolves to a single BU x state combo the plan LR cell is literally the product "
+         "of the four factor cells to its left, so the exhibit can be audited by "
+         "multiplying across rather than trusting a lookup — a Checks row ties that "
+         "product to the engine's own value at 1e-9. Where a row aggregates several "
+         "combos (the 'All' view of a state served by more than one BU, and the total "
+         "band) the factors shown are EP-weighted averages, whose product is NOT the "
+         "EP-weighted plan LR; there the exact weighted value is displayed and the 'Mix' "
+         "column carries the difference, the same residual convention as the Portfolio "
+         "bridge. Rate-change slots carry a status token: T = taken, P = planned, and a "
+         "trailing * marks a change the indication did not count (so it moves the plan "
+         "but not CRL_ind).",
          ]),
         ("6b. Net rate selection (optional, per BU x state)", [
          "When a combo's 'Net sel P' input is set (tbl_LR; blank = off), planning switches "
@@ -1061,7 +1077,8 @@ READ_ME_GUIDE = [
     ("Portfolio", "Every BU x state combo at once, plus the Decision Board: top movers, "
                   "contribution to the book, the portfolio bridge."),
     ("State Summary", "One row per state with a BU filter ('All' = EP-weighted) — the "
-                      "leadership exhibit."),
+                      "leadership exhibit. Rate changes carry T/P status tokens and the "
+                      "plan LR is the visible product of the four factors beside it."),
     ("Program Flow", "What the program AS LOGGED is delivering — state x month YoY grids "
                      "for the written rate, mod, and net legs (the descriptive twin of "
                      "Net Delivery). 'All' = the EP-weighted book view."),

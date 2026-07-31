@@ -155,11 +155,12 @@ def build_program_flow(ctx: Ctx):
                     fmt=PCT_S, align=ALIGN_C, fill=band_fill, border=BORDER_THIN,
                     bold=b)
     tot = pf_tot(ctx.cfg)
-    put(ws, f"A{tot}", "IN VIEW", fnt=font(NAVY, bold=True), align=ALIGN_C)
+    put(ws, f"A{tot}", "TOTAL", fnt=font(NAVY, bold=True), align=ALIGN_C)
     formula(ws, f"B{tot}", '=IF(pf_BU="All",SUM(calc_ep),SUMIFS(calc_ep,calc_bu,pf_BU))',
             fmt="#,##0", align=ALIGN_C, bold=True)
     formula(ws, f"C{tot}",
-            '=IF(pf_BU="All",SUMPRODUCT(calc_netmode),'
+            '="all states, "&IF(pf_BU="All","every business unit",pf_BU)&" — "'
+            '&IF(pf_BU="All",SUMPRODUCT(calc_netmode),'
             'SUMPRODUCT(calc_netmode*(calc_bu=pf_BU)))&" net combo(s)"')
     ws[f"C{tot}"].font = F_LABEL
     ctx.define("pfd_states", SHEETS.PROGRAM_FLOW,
@@ -189,9 +190,13 @@ def build_program_flow(ctx: Ctx):
          "The product of the two legs. For net-target combos compare against the "
          "asserted net: the shortfall months are Net Delivery's to close."),
     ]
+    roll = ("Bottom row: every state above collapsed onto one line, weighted by "
+            "adjusted plan EP x written weight — the whole book when the picker is "
+            "'All' (BOOK AVG), otherwise the selected business unit (BU AVG). It is "
+            "an average of the state rows, not a total.")
     for g0, key, head, note_txt in secs:
         section(ws, g0, "A", head)
-        put(ws, f"A{g0 + 1}", note_txt, fnt=F_SMALL_IT)
+        put(ws, f"A{g0 + 1}", f"{note_txt}  {roll}", fnt=F_SMALL_IT)
         put(ws, f"A{g0 + 2}", "State", fnt=font("FFFFFF", bold=True), fill=FILL_NAVY,
             align=ALIGN_C)
         for j in range(12):
@@ -232,12 +237,15 @@ def build_program_flow(ctx: Ctx):
                 formula(ws, ws.cell(row=r, column=2 + j).coordinate, f,
                         fmt=PCT_S, align=ALIGN_C)
                 ws.cell(row=r, column=2 + j).font = font(GREY_DARK, size=9)
-        # IN VIEW total row (D60): the BU / book-level monthly flow line.
+        # roll-up row (D60): the BU / book-level monthly flow line — every
+        # state in view collapsed onto one line, EP x weight weighted.
         # View condition is purely multiplicative (no IF over arrays):
         # ((pf_BU="All")+(calc_bu=pf_BU)) is 1 for every combo under All,
         # else 1 only for the picked BU's combos.
         r_t = g0 + 3 + nd
-        put(ws, f"A{r_t}", "IN VIEW", fnt=font(NAVY, bold=True, size=9), align=ALIGN_C)
+        formula(ws, f"A{r_t}", '=IF(pf_BU="All","BOOK AVG","BU AVG")',
+                align=ALIGN_C)
+        ws[f"A{r_t}"].font = font(NAVY, bold=True, size=9)
         for j in range(12):
             vw = f'((pf_BU="All")+(calc_bu=pf_BU))*{pub("epw", j)}'
             ext = f"*{pub('modeff')}" if key == "mod" else ""
@@ -264,7 +272,7 @@ def build_program_flow(ctx: Ctx):
         fnt=F_SMALL_IT)
     jump(ws, f"A{fn + 1}", f"{_q(SHEETS.NET_DELIVERY)}!A1",
          "Net combos: see Net Delivery for the filing + pricing walk that closes the gap >")
-    set_widths(ws, {"A": 8, "B": 12, "C": 10, "D": 12, "E": 12, "F": 13, "G": 12,
+    set_widths(ws, {"A": 10, "B": 12, "C": 10, "D": 12, "E": 12, "F": 13, "G": 12,
                     "H": 10, "I": 10, "J": 10, "K": 10, "L": 10, "M": 10,
                     "N": 2, "O": 14, "P": 7, "Q": 8})
     presentation_setup(ws, gridlines_off=True, freeze=f"B{PF_SUM_FIRST}",

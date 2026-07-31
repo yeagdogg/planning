@@ -114,8 +114,11 @@ convention to 1e-9, and 63.36% at 4 decimals on annual-term books); **every BU×
 tied to a per-combo oracle run (9 metrics each); solver round-trip (+5.0% at 4/1); chart axes
 intact after the Excel resave; scenario, attribution, seasonality, basis, mod-toggle,
 degenerate-input, and plan-year-change exercises each tied to fresh oracle runs. At last run:
-Property **189 checks / 0 failed** (full), the other five LOB files 56 (or 54 for the
-6-month-term Inland Marine) / 0 failed each (phases A–C), pytest 124/124.
+Property **190 checks / 0 failed** (full), the other five LOB files 57 (or 55 for the
+6-month-term Inland Marine) / 0 failed each (phases A–C), pytest 124/124. The business
+units and states in `config/config.yaml` are addressed positionally, so renaming them to
+your own book keeps every seeded example working (a repeated BU or state is rejected at
+load time).
 
 ## Regeneration workflow (new plan year)
 

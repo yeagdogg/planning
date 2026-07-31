@@ -46,6 +46,11 @@ FLOW_PUB = dict(
     gap=91,         # CM      abs(avg delivered - 1 - net x); 0 for non-net
 )
 
+# A_other x EP, the last weighted product State Summary needed to show its
+# bridge chain as visible arithmetic (D61). Appended AFTER the D60 flow block
+# so no published column moves.
+W_AOTHER_COL = 92   # CN
+
 
 def _grey(ws, addr):
     ws[addr].font = font(GREY_DARK, size=9)
@@ -205,6 +210,7 @@ def build_calc(ctx: Ctx):
         f_grey(ws, f"{col(FLOW_PUB['avg_del'])}{r}", f"=$J${t + 51}", FMT_IDX)
         f_grey(ws, f"{col(FLOW_PUB['gap'])}{r}",
                f"=IF($AK{r}=1,ABS(${col(FLOW_PUB['avg_del'])}{r}-1-$AL{r}),0)", FMT_IDX)
+        f_grey(ws, f"{col(W_AOTHER_COL)}{r}", f"=$R{r}*$V{r}", FMT_IDX)
     res_names = {
         "calc_key": ("A", "Combo keys, aligned 1:1 with tbl_LR rows"),
         "calc_term": ("B", "Policy term by combo"),
@@ -236,6 +242,10 @@ def build_calc(ctx: Ctx):
         "calc_netmode": ("AK", "1 when the combo carries a net rate selection (D39)"),
         "calc_netx": ("AL", "Net selection x(P) by combo (0 when off)"),
     }
+    ctx.define("calc_w_aother", "_calc",
+               f"${col(W_AOTHER_COL)}${L.CALC_RES_FIRST}:"
+               f"${col(W_AOTHER_COL)}${L.CALC_RES_LAST}",
+               "A_other x EP (State Summary bridge-chain weighting, D61)")
     ctx.define("pfd_bookgap", "_calc",
                f"${col(FLOW_PUB['gap'])}${L.CALC_RES_FIRST}:"
                f"${col(FLOW_PUB['gap'])}${L.CALC_RES_LAST}",

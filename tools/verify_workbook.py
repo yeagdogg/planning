@@ -37,8 +37,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src import engine  # noqa: E402
 from src.build_workbook import (  # noqa: E402
-    Layout as L, SHEETS, degenerate_combo, load_config, output_path, sample_lr_rows,
-    sample_rate_rows, sample_seasonality_rows, sample_to_combo,
+    Layout as L, SHEETS, _bu, degenerate_combo, load_config, output_path,
+    sample_lr_rows, sample_rate_rows, sample_seasonality_rows, sample_to_combo,
 )
 from tools.recalc import recalc  # noqa: E402
 
@@ -56,6 +56,13 @@ BANNED_RE = re.compile(r"(?<![A-Z0-9_.])(" + "|".join(BANNED_FUNCS) + r")\(")
 PASS = 0
 FAIL = 0
 FAILURES: list[str] = []
+
+
+def _states(cfg):
+    """Configured states in order, de-duplicated — the workbook's live
+    roster extracts UNIQUES, so a repeated state in the config would
+    otherwise walk the exhibit past its last live row (D62)."""
+    return list(dict.fromkeys(cfg.states))
 
 
 def check(desc: str, ok: bool, detail: str = ""):
@@ -180,7 +187,7 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
     p = cfg.plan_year
     lr_rows = sample_lr_rows(cfg, lob)
     rate_rows = sample_rate_rows(cfg, lob)
-    we = next(r for r in lr_rows if r["bu"] == "BU-A" and r["state"] == cfg.states[0])
+    we = next(r for r in lr_rows if r["bu"] == _bu(cfg, 0) and r["state"] == cfg.states[0])
     combo = sample_to_combo(cfg, lob, we, rate_rows)
     m = engine.run_bridge(p, combo, "monthly")
     c = engine.run_bridge(p, combo, "continuous")
@@ -273,7 +280,7 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
         results[(lrr["bu"], lrr["state"])] = (lrr["ep"], om)
     bad = 0
     tot_ep = tot_l27 = tot_l28 = 0.0
-    for si, state in enumerate(cfg.states):
+    for si, state in enumerate(_states(cfg)):
         rows_ = [(ep, om) for (bu, s), (ep, om) in results.items() if s == state]
         eps = sum(ep for ep, _ in rows_)
         w27 = sum(ep * om.cy_lr_p for ep, om in rows_) / eps
@@ -281,7 +288,7 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
         wcrl = sum(ep * om.crl_ind for ep, om in rows_) / eps
         wecy = sum(ep * om.e_cy[p] for ep, om in rows_) / eps
         r = 8 + si
-        for colL, exp in (("B", eps), ("O", wcrl), ("P", wecy), ("U", w27), ("Y", w28)):
+        for colL, exp in (("B", eps), ("T", wcrl), ("U", wecy), ("AA", w27), ("AF", w28)):
             if not approx(ss[f"{colL}{r}"].value, exp, 1e-6):
                 bad += 1
                 if bad <= 4:
@@ -294,16 +301,34 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
           f"{bad} mismatches")
     tot_row = 8 + len(cfg.states) + 3 + 1   # 3 live-roster spare rows (D42)
     check("State Summary (All): total row EP-weighted correctly",
-          approx(ss[f"U{tot_row}"].value, tot_l27 / tot_ep, 1e-9)
-          and approx(ss[f"Y{tot_row}"].value, tot_l28 / tot_ep, 1e-9)
+          approx(ss[f"AA{tot_row}"].value, tot_l27 / tot_ep, 1e-9)
+          and approx(ss[f"AF{tot_row}"].value, tot_l28 / tot_ep, 1e-9)
           and approx(ss[f"B{tot_row}"].value, tot_ep, 1e-6))
+    # D61: the visible bridge chain reproduces the engine on single-combo rows
+    bad = 0
+    for si, state in enumerate(_states(cfg)):
+        r = 8 + si
+        rows_ = [(ep, om) for (bu, s), (ep, om) in results.items() if s == state]
+        prod = (ss[f"W{r}"].value * ss[f"X{r}"].value * ss[f"Y{r}"].value
+                * ss[f"Z{r}"].value)
+        exact = (sum(ep * om.cy_lr_p for ep, om in rows_)
+                 / sum(ep for ep, _ in rows_))
+        # more than one BU per state in the All view -> mix is real and shown
+        mix = ss[f"AB{r}"].value
+        if len(rows_) > 1:
+            if not approx(mix, (exact - prod) * 100.0, 1e-9):
+                bad += 1
+        elif mix not in (None, ""):
+            bad += 1
+    check("State Summary: Mix column is the exact residual of the visible product",
+          bad == 0, f"{bad} mismatches")
     # Net Delivery (D57): the showcase net combo's closed forms, monthly grid,
     # and reconciliation must tie the oracle at the default 4/1/P date
     if len(cfg.states) > 8:
         from src.sheets_netdelivery import block_top
         net_state = cfg.states[8]
         net_row = next((x for x in lr_rows
-                        if x["bu"] == "BU-C" and x["state"] == net_state), None)
+                        if x["bu"] == _bu(cfg, 2) and x["state"] == net_state), None)
         if net_row is not None and net_row.get("netp") is not None:
             ncmb = sample_to_combo(cfg, lob, net_row, rate_rows)
             d0 = dt.date(p, 4, 1)
@@ -371,8 +396,8 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
           bad == 0, f"{bad} mismatched cohorts")
     pfs = wb[SHEETS.PROGRAM_FLOW]
     bad = 0
-    for i, stname in enumerate(cfg.states):
-        rowdef = next(x for x in lr_rows if x["bu"] == "BU-A" and x["state"] == stname)
+    for i, stname in enumerate(_states(cfg)):
+        rowdef = next(x for x in lr_rows if x["bu"] == _bu(cfg, 0) and x["state"] == stname)
         cpf = engine.program_flow_by_month(p, sample_to_combo(cfg, lob, rowdef, rate_rows))
         r = PF_SUM_FIRST + i
         ok = (approx(pfs[f"D{r}"].value, cpf.avg_rate_ratio - 1.0, 1e-9)
@@ -462,7 +487,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
     lr_rows = sample_lr_rows(cfg, lob)
     rate_rows = sample_rate_rows(cfg, lob)
     season_rows = sample_seasonality_rows(cfg)
-    we = next(r for r in lr_rows if r["bu"] == "BU-A" and r["state"] == st[0])
+    we = next(r for r in lr_rows if r["bu"] == _bu(cfg, 0) and r["state"] == st[0])
     base_combo = sample_to_combo(cfg, lob, we, rate_rows)
     base_m = engine.run_bridge(p, base_combo, "monthly")
     scratch = scratch_dir / "exercise.xlsx"
@@ -510,8 +535,8 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
     # 4. seasonality ON for a state with a seeded profile
     se_state = season_rows[0]["state"] if season_rows else None
     if se_state:
-        se_on = combo_of("BU-A", se_state, seasonality_on=True, season_rows=season_rows)
-        se_off = combo_of("BU-A", se_state)
+        se_on = combo_of(_bu(cfg, 0), se_state, seasonality_on=True, season_rows=season_rows)
+        se_off = combo_of(_bu(cfg, 0), se_state)
         se_on_m = engine.run_bridge(p, se_on, "monthly")
         se_off_m = engine.run_bridge(p, se_off, "monthly")
 
@@ -533,12 +558,12 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
 
     # 5. selector subsample: every BU x first 3 states + every showcase combo
     picks = {(bu, s) for bu in cfg.business_units for s in st[:3]}
-    for special in [("BU-B", st[1] if len(st) > 1 else st[0]),
-                    ("BU-B", st[2] if len(st) > 2 else st[0]),
-                    ("BU-A", st[3] if len(st) > 3 else st[0]),
-                    ("BU-A", st[5] if len(st) > 5 else st[0]),
-                    ("BU-C", st[6] if len(st) > 6 else st[0]),
-                    ("BU-C", st[8] if len(st) > 8 else st[0]),  # net-selection showcase
+    for special in [(_bu(cfg, 1), st[1] if len(st) > 1 else st[0]),
+                    (_bu(cfg, 1), st[2] if len(st) > 2 else st[0]),
+                    (_bu(cfg, 0), st[3] if len(st) > 3 else st[0]),
+                    (_bu(cfg, 0), st[5] if len(st) > 5 else st[0]),
+                    (_bu(cfg, 2), st[6] if len(st) > 6 else st[0]),
+                    (_bu(cfg, 2), st[8] if len(st) > 8 else st[0]),  # net-selection showcase
                     degenerate_combo(cfg)]:
         picks.add(special)
     for bu, state in sorted(picks):
@@ -564,7 +589,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
     # 6b. blank out an existing combo's rate log -> neutral factors
     tgt = next((r for r in lr_rows
                 if any(rr["bu"] == r["bu"] and rr["state"] == r["state"] for rr in rate_rows)
-                and (r["bu"], r["state"]) != ("BU-A", st[0])), None)
+                and (r["bu"], r["state"]) != (_bu(cfg, 0), st[0])), None)
     if tgt:
         rows_xl = [L.RL_FIRST + i for i, rr in enumerate(rate_rows)
                    if rr["bu"] == tgt["bu"] and rr["state"] == tgt["state"]]
@@ -680,28 +705,32 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
 
     # 9b. State Summary filtered to one BU: rows equal that BU's combos exactly,
     # and the rate-change slots replay the chronological log
-    fbu = "BU-B"
+    fbu = _bu(cfg, 1)
 
     def a9b(wb):
         ss = wb["State Summary"]
         bad = 0
-        for si, state in enumerate(cfg.states):
+        for si, state in enumerate(_states(cfg)):
             r = 8 + si
             om = engine.run_bridge(p, combo_of(fbu, state), "monthly")
             row_lr = next(x for x in lr_rows if x["bu"] == fbu and x["state"] == state)
-            for colL, exp in (("B", row_lr["ep"]), ("U", om.cy_lr_p), ("Y", om.cy_lr_p1),
-                              ("O", om.crl_ind), ("P", om.e_cy[p])):
+            for colL, exp in (("B", row_lr["ep"]), ("AA", om.cy_lr_p),
+                              ("AF", om.cy_lr_p1), ("T", om.crl_ind),
+                              ("U", om.e_cy[p])):
                 if not approx(ss[f"{colL}{r}"].value, exp, 1e-6):
                     bad += 1
             log = sorted([rr for rr in rate_rows
                           if rr["bu"] == fbu and rr["state"] == state],
                          key=lambda rr: rr["eff"])
-            n_cell = ss[f"N{r}"].value
-            if (n_cell or 0) != len(log):
+            n_tk = sum(1 for rr in log if rr["status"] == "taken")
+            if (ss[f"R{r}"].value or 0) != n_tk:
+                bad += 1
+            if (ss[f"S{r}"].value or 0) != len(log) - n_tk:
                 bad += 1
             for j, rr in enumerate(log[:4]):
-                d = ss.cell(row=r, column=6 + j * 2).value
-                v = ss.cell(row=r, column=7 + j * 2).value
+                d = ss.cell(row=r, column=6 + j * 3).value
+                v = ss.cell(row=r, column=7 + j * 3).value
+                tok = ss.cell(row=r, column=8 + j * 3).value
                 eff_pct = rr["filed"] * ((1.0 if rr["achievement"] is None
                                           else rr["achievement"])
                                          if rr["status"] == "planned" else 1.0)
@@ -709,15 +738,25 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
                     bad += 1
                 if not approx(v, eff_pct, 1e-12):
                     bad += 1
-        check(f"[State Summary {fbu}] rows, totals, and rate slots tie", bad == 0,
-              f"{bad} mismatches")
+                # D61 status token: T/P plus * when outside the indication
+                exp_tok = ("P" if rr["status"] == "planned" else "T") + (
+                    "" if rr["considered"] in ("Y", True) else "*")
+                if tok != exp_tok:
+                    bad += 1
+            # single-BU rows are single-combo: the plan LR must BE the product
+            prod = (ss[f"W{r}"].value * ss[f"X{r}"].value * ss[f"Y{r}"].value
+                    * ss[f"Z{r}"].value)
+            if not approx(prod, om.cy_lr_p, 1e-9):
+                bad += 1
+        check(f"[State Summary {fbu}] rows, totals, rate slots, and status tokens tie",
+              bad == 0, f"{bad} mismatches")
     run(f"State Summary filter {fbu}", {("State Summary", "B4"): fbu}, a9b)
 
     # 9c. trend default inheritance: blank combos inherit 2%, explicit entries win
     trend_m = engine.run_bridge(
         p, sample_to_combo(cfg, lob, we, rate_rows, trend_default=0.02), "monthly")
     ovr_state = st[1] if len(st) > 1 else st[0]
-    ovr_row = next(r for r in lr_rows if r["bu"] == "BU-B" and r["state"] == ovr_state)
+    ovr_row = next(r for r in lr_rows if r["bu"] == _bu(cfg, 1) and r["state"] == ovr_state)
     ovr_m = engine.run_bridge(
         p, sample_to_combo(cfg, lob, ovr_row, rate_rows, trend_default=0.02), "monthly")
     ovr_calc_row = L.CALC_RES_FIRST + lr_rows.index(ovr_row)
@@ -761,15 +800,15 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
     # 9f. in-book rename of a BU and a state (D42): every dropdown list, the
     # selectors, and the State Summary must follow without regeneration
     ren_state = st[1] if len(st) > 1 else st[0]
-    ren_row = next(x for x in lr_rows if x["bu"] == "BU-B" and x["state"] == ren_state)
+    ren_row = next(x for x in lr_rows if x["bu"] == _bu(cfg, 1) and x["state"] == ren_state)
     ren_lr_xl = L.LR_FIRST + lr_rows.index(ren_row)
     muts = {("Inputs", f"A{ren_lr_xl}"): "BU-X", ("Inputs", f"B{ren_lr_xl}"): "ZZ",
             ("Control", "C7"): "BU-X", ("Control", "C8"): "ZZ"}
     for i, rr in enumerate(rate_rows):
-        if rr["bu"] == "BU-B" and rr["state"] == ren_state:
+        if rr["bu"] == _bu(cfg, 1) and rr["state"] == ren_state:
             muts[(SHEETS.RATE_LOG, f"A{L.RL_FIRST + i}")] = "BU-X"
             muts[(SHEETS.RATE_LOG, f"B{L.RL_FIRST + i}")] = "ZZ"
-    ren_m = engine.run_bridge(p, combo_of("BU-B", ren_state), "monthly")  # values unchanged
+    ren_m = engine.run_bridge(p, combo_of(_bu(cfg, 1), ren_state), "monthly")  # values unchanged
 
     def a9f(wb):
         ls = wb["_lists"]
@@ -788,8 +827,8 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
         if zz_row:
             check("[rename] ZZ row EP and CY LR tie the renamed combo",
                   approx(ss[f"B{zz_row}"].value, ren_row["ep"], 1e-6)
-                  and approx(ss[f"U{zz_row}"].value, ren_m.cy_lr_p, 1e-9),
-                  f"EP={ss[f'B{zz_row}'].value} U={ss[f'U{zz_row}'].value}")
+                  and approx(ss[f"AA{zz_row}"].value, ren_m.cy_lr_p, 1e-9),
+                  f"EP={ss[f'B{zz_row}'].value} LR={ss[f'AA{zz_row}'].value}")
     run("in-book rename BU/state", muts, a9f)
 
     # 9g. Net Delivery exercises (D57)
@@ -797,7 +836,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
         from src.sheets_netdelivery import ND_FIRST, block_top
         net_state = st[8]
         net_row = next((x for x in lr_rows
-                        if x["bu"] == "BU-C" and x["state"] == net_state), None)
+                        if x["bu"] == _bu(cfg, 2) and x["state"] == net_state), None)
         if net_row is not None and net_row.get("netp") is not None:
             ncmb = sample_to_combo(cfg, lob, net_row, rate_rows)
             si8 = list(st).index(net_state)
@@ -816,7 +855,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
                 check("[net delivery: WE net 8%] suggested r* ties oracle",
                       approx(got, r_we, 1e-9), f"wb={got} oracle={r_we}")
             run("net delivery: worked example net-on",
-                {("Inputs", f"Q{we_row_xl}"): 0.08, ("Net Delivery", "B5"): "BU-A"},
+                {("Inputs", f"Q{we_row_xl}"): 0.08, ("Net Delivery", "B5"): _bu(cfg, 0)},
                 a9g1)
 
             # (ii) a mid-month state date exercises the day-blend p
@@ -840,7 +879,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
             empty_rl = L.RL_FIRST + len(rate_rows)
             muts3 = {("Net Delivery", f"D{row_si8}"): d_co,
                      ("Net Delivery", f"E{row_si8}"): 0.03,
-                     ("Rate Log", f"A{empty_rl}"): "BU-C",
+                     ("Rate Log", f"A{empty_rl}"): _bu(cfg, 2),
                      ("Rate Log", f"B{empty_rl}"): net_state,
                      ("Rate Log", f"C{empty_rl}"): inj.effective,
                      ("Rate Log", f"D{empty_rl}"): 0.02,
@@ -1002,7 +1041,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
     if len(st) > 8:
         net_state5 = st[8]
         net_row5 = next((x for x in lr_rows
-                         if x["bu"] == "BU-C" and x["state"] == net_state5), None)
+                         if x["bu"] == _bu(cfg, 2) and x["state"] == net_state5), None)
         if net_row5 is not None and net_row5.get("netp") is not None:
             ncmb5 = sample_to_combo(cfg, lob, net_row5, rate_rows)
             pf_net = engine.program_flow_by_month(p, ncmb5)
@@ -1025,8 +1064,8 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
                 check("[program flow: net combo] zero FAILs (WARN advisories allowed)",
                       nval(wb, "ck_overall") == "ALL CHECKS PASS")
             run("program flow: net combo in view",
-                {("Control", "C7"): "BU-C", ("Control", "C8"): net_state5,
-                 ("Program Flow", "B5"): "BU-C"}, a9h5)
+                {("Control", "C7"): _bu(cfg, 2), ("Control", "C8"): net_state5,
+                 ("Program Flow", "B5"): _bu(cfg, 2)}, a9h5)
 
     # 10. plan-year change (fingerprint must go N/A, engines recompute cleanly)
     p2 = p + 1
@@ -1053,9 +1092,9 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
               f"wb={nval(wb, 'nr_CYLR_P')} oracle={m_pm1.cy_lr_p}")
         check(f"[plan year {pm1}] E_CY ties oracle",
               approx(nval(wb, "nr_ECY_P"), m_pm1.e_cy[pm1], 1e-9))
-        ss_hdr = wb["State Summary"].cell(row=7, column=21).value
+        ss_hdr = wb["State Summary"].cell(row=7, column=27).value
         check(f"[plan year {pm1}] State Summary header relabels live",
-              ss_hdr == f"CY {pm1} plan LR", str(ss_hdr))
+              ss_hdr == f"=  CY {pm1} plan LR", str(ss_hdr))
         pf_hdr = wb["Portfolio"].cell(row=L.PF_HDR, column=7).value
         check(f"[plan year {pm1}] Portfolio header relabels live",
               pf_hdr == f"CY {pm1} plan LR", str(pf_hdr))

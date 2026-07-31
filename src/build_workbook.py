@@ -36,7 +36,7 @@ from . import engine
 from .engine import ComboInputs, ModInputs, RateChange
 from .xlstyle import quote_sheet
 
-GENERATOR_VERSION = "2.4.0"
+GENERATOR_VERSION = "2.5.0"
 
 
 class SHEETS:
@@ -141,6 +141,17 @@ def load_config(path: str | Path) -> Config:
         _validate_dim_name("business unit", b)
     for s in states:
         _validate_dim_name("state", s)
+    # a repeated dimension value silently breaks the workbook rather than the
+    # build: keys stop being unique, every MATCH resolves to the first row, and
+    # the live roster (which extracts UNIQUES) runs one row short of the
+    # configured count. Fail loudly at load instead (D62).
+    for kind, values in (("business unit", bus), ("state", states)):
+        dupes = sorted({v for v in values if list(values).count(v) > 1})
+        if dupes:
+            raise ValueError(
+                f"duplicate {kind}(s) in the config: {', '.join(dupes)} - each "
+                f"{kind} must appear once (BU x state is the row key)."
+            )
     out = raw.get("output", {})
     out_lobs = out.get("lobs", "all")
     if out_lobs == "all":
@@ -192,6 +203,17 @@ LOB_BASE = {
 _DEFAULT_BASE = dict(lr=0.63, mind=0.950, ep=25)
 
 
+def _bu(cfg: Config, i: int) -> str:
+    """The i-th configured business unit, clamped to the roster.
+
+    Sample seeding addresses BUs POSITIONALLY, never by literal name: the
+    config is meant to be renamed to a real book (D62), and the seeded
+    worked example / showcase combos must follow the rename.
+    """
+    bus = cfg.business_units
+    return bus[min(i, len(bus) - 1)]
+
+
 def _clamp_mod(x: float) -> float:
     return round(min(1.5, max(0.5, x)), 3)
 
@@ -216,19 +238,19 @@ def sample_lr_rows(cfg: Config, lob: LobCfg) -> list[dict]:
             netp=None, netp1=None,  # blank = explicit rate program (D39)
         )
         # showcase combos (state indices are positions in the configured list)
-        if bu == "BU-A" and state == st[0]:
+        if bu == _bu(cfg, 0) and state == st[0]:
             row.update(lr_proj=0.65, s=0.05, m_ind=0.850, m0=0.860, m1=0.890)  # §9
-        elif bu == "BU-B" and len(st) > 1 and state == st[1]:
+        elif bu == _bu(cfg, 1) and len(st) > 1 and state == st[1]:
             row.update(basis="proposed", s=0.08, trend=0.01)  # explicit trend override demo
-        elif bu == "BU-B" and len(st) > 2 and state == st[2]:
+        elif bu == _bu(cfg, 1) and len(st) > 2 and state == st[2]:
             row.update(a_other=1.02, a_other_label="Commission timing")
-        elif bu == "BU-A" and len(st) > 3 and state == st[3]:
+        elif bu == _bu(cfg, 0) and len(st) > 3 and state == st[3]:
             row.update(modadj="OFF", m0=m_ind, m1=m_ind)
-        elif bu == "BU-A" and len(st) > 5 and state == st[5]:
+        elif bu == _bu(cfg, 0) and len(st) > 5 and state == st[5]:
             row.update(m_prior=_clamp_mod(m0 - 0.010), m2=_clamp_mod(m1 + 0.005))
-        elif bu == "BU-C" and len(st) > 6 and state == st[6]:
+        elif bu == _bu(cfg, 2) and len(st) > 6 and state == st[6]:
             row.update(s=0.065)  # matches the seed-pattern rate-log row (D36)
-        elif bu == "BU-C" and len(st) > 8 and state == st[8]:
+        elif bu == _bu(cfg, 2) and len(st) > 8 and state == st[8]:
             # net-rate-selection showcase (D39): +10% taken 10/1/(P-1) in the
             # log, product targets +10% NET from 1/1/P — specifics TBD
             row.update(netp=0.10)
@@ -238,7 +260,7 @@ def sample_lr_rows(cfg: Config, lob: LobCfg) -> list[dict]:
 
 def degenerate_combo(cfg: Config) -> tuple[str, str]:
     """The showcase combo seeded with NO rate-log rows (factors = 1.000)."""
-    return ("BU-C", cfg.states[min(4, len(cfg.states) - 1)])
+    return (_bu(cfg, 2), cfg.states[min(4, len(cfg.states) - 1)])
 
 
 def sample_rate_rows(cfg: Config, lob: LobCfg) -> list[dict]:
@@ -251,39 +273,39 @@ def sample_rate_rows(cfg: Config, lob: LobCfg) -> list[dict]:
 
     rows = [
         # §9 worked example (BU-A | first state)
-        row("BU-A", st[0], -2, 7, 1, 0.04, "taken", "Y", comment="Worked example (§9)"),
-        row("BU-A", st[0], -1, 7, 1, 0.06, "taken", "Y", comment="Worked example (§9)"),
-        row("BU-A", st[0], 0, 4, 1, 0.05, "planned", "N", 1.00, "Planned spring increase"),
+        row(_bu(cfg, 0), st[0], -2, 7, 1, 0.04, "taken", "Y", comment="Worked example (§9)"),
+        row(_bu(cfg, 0), st[0], -1, 7, 1, 0.06, "taken", "Y", comment="Worked example (§9)"),
+        row(_bu(cfg, 0), st[0], 0, 4, 1, 0.05, "planned", "N", 1.00, "Planned spring increase"),
     ]
     if len(st) > 6:
-        rows.append(row("BU-C", st[6], -1, 7, 1, 0.065, "planned", "N", 1.00,
+        rows.append(row(_bu(cfg, 2), st[6], -1, 7, 1, 0.065, "planned", "N", 1.00,
                         "Pattern: indication's selected change entered as a planned row"))
     if len(st) > 2:
-        rows.append(row("BU-B", st[2], -1, 4, 1, 0.050, "taken", "Y"))
-        rows.append(row("BU-B", st[2], 0, 5, 15, 0.030, "planned", "N", 1.00,
+        rows.append(row(_bu(cfg, 1), st[2], -1, 4, 1, 0.050, "taken", "Y"))
+        rows.append(row(_bu(cfg, 1), st[2], 0, 5, 15, 0.030, "planned", "N", 1.00,
                         "Mid-month effective date example"))
     if len(st) > 3:
-        rows.append(row("BU-B", st[3], -1, 10, 1, 0.080, "taken", "Y"))
-        rows.append(row("BU-B", st[3], 0, 3, 1, 0.060, "planned", "N", 0.80,
+        rows.append(row(_bu(cfg, 1), st[3], -1, 10, 1, 0.080, "taken", "Y"))
+        rows.append(row(_bu(cfg, 1), st[3], 0, 3, 1, 0.060, "planned", "N", 0.80,
                         "80% achievement assumed"))
     if len(st) > 5:
-        rows.append(row("BU-A", st[5], -1, 6, 1, 0.045, "taken", "Y"))
+        rows.append(row(_bu(cfg, 0), st[5], -1, 6, 1, 0.045, "taken", "Y"))
     if len(st) > 8:
-        rows.append(row("BU-C", st[8], -1, 10, 1, 0.10, "taken", "N",
+        rows.append(row(_bu(cfg, 2), st[8], -1, 10, 1, 0.10, "taken", "N",
                         comment="Net-selection showcase: fall filing (after the indication) "
                                 "feeds the +10% net target"))
 
     # deterministic coverage across the remaining book: most combos get a taken
     # row in P-1; roughly a quarter also carry a planned row in P.
-    special = {("BU-A", st[0]), degenerate_combo(cfg)}
+    special = {(_bu(cfg, 0), st[0]), degenerate_combo(cfg)}
     if len(st) > 2:
-        special.add(("BU-B", st[2]))
+        special.add((_bu(cfg, 1), st[2]))
     if len(st) > 3:
-        special.add(("BU-B", st[3]))
+        special.add((_bu(cfg, 1), st[3]))
     if len(st) > 6:
-        special.add(("BU-C", st[6]))
+        special.add((_bu(cfg, 2), st[6]))
     if len(st) > 8:
-        special.add(("BU-C", st[8]))
+        special.add((_bu(cfg, 2), st[8]))
     for i, (bu, state) in enumerate(cfg.combos):
         if (bu, state) in special:
             continue
@@ -538,7 +560,7 @@ def build(cfg: Config, lob_name: str) -> Workbook:
     season_rows = sample_seasonality_rows(cfg)
 
     # ---- oracle bake for the worked-example combo (BU-A | first state) -----
-    we_row = next(r for r in lr_rows if r["bu"] == "BU-A" and r["state"] == cfg.states[0])
+    we_row = next(r for r in lr_rows if r["bu"] == _bu(cfg, 0) and r["state"] == cfg.states[0])
     we_key = f"{we_row['bu']}|{we_row['state']}"
     combo = sample_to_combo(cfg, lob, we_row, rate_rows)
     if cfg.plan_year == 2027 and lob.term_months == 12:
