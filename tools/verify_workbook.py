@@ -334,6 +334,70 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
             check("[net delivery] solve residual is zero",
                   approx(ncs[f"P{rr}"].value, 0.0, 1e-9))
 
+    # Program Flow (D59): dashboard written legs, the locked block, and the
+    # tab's summary averages + worked-example grid rows tie program_flow_by_month
+    from src.sheets_programflow import PF_SUM_FIRST, grid_starts
+    pfr = engine.program_flow_by_month(p, combo)
+    fd = wb["Flow Dashboard"]
+    bad = 0
+    for j, prow in enumerate(pfr.rows):
+        r = 93 + j
+        ok = (approx(fd[f"M{r}"].value, prow["rate_leg"], 1e-9)
+              and approx(fd[f"O{r}"].value, prow["delivered"], 1e-9)
+              and approx(fd[f"P{r}"].value, prow["locked_leg"], 1e-9)
+              and approx(fd[f"Q{r}"].value, prow["planned_residual"], 1e-9))
+        ml = prow["mod_leg"]
+        ok = ok and (fd[f"N{r}"].value == "—" if ml is None
+                     else approx(fd[f"N{r}"].value, ml, 1e-9))
+        if not ok:
+            bad += 1
+    check("[program flow] dashboard cols M..Q tie oracle for all 24 YoY months",
+          bad == 0, f"{bad} mismatched months")
+    check("[program flow] delta-vs-net column blank for the non-net WE combo",
+          fd["R93"].value in (None, ""), f"R93={fd['R93'].value!r}")
+    check("[program flow] fd_avgdel ties the oracle plan-year average",
+          approx(nval(wb, "fd_avgdel"), pfr.avg_delivered_ratio - 1.0, 1e-9),
+          f"wb={nval(wb, 'fd_avgdel')} oracle={pfr.avg_delivered_ratio - 1.0}")
+    # locked block: 48 cohorts tie a taken-only engine (range from the name)
+    tk_ref = next(iter(wb.defined_names["fd_tkw"].destinations))[1]
+    tk_first = int(tk_ref.split(":")[0].rsplit("$", 1)[1])
+    tk_eng = engine.MonthlyEngine(p, combo, changes_override=tuple(
+        rc for rc in combo.rate_changes if rc.status == "taken"))
+    cs = wb["_calc"]
+    bad = sum(0 if approx(cs[f"N{tk_first + i}"].value,
+                          tk_eng.written_index(tk_eng.cohorts[i]), 1e-9) else 1
+              for i in range(48))
+    check("[program flow] locked block ties the taken-only engine (48 cohorts)",
+          bad == 0, f"{bad} mismatched cohorts")
+    pfs = wb[SHEETS.PROGRAM_FLOW]
+    bad = 0
+    for i, stname in enumerate(cfg.states):
+        rowdef = next(x for x in lr_rows if x["bu"] == "BU-A" and x["state"] == stname)
+        cpf = engine.program_flow_by_month(p, sample_to_combo(cfg, lob, rowdef, rate_rows))
+        r = PF_SUM_FIRST + i
+        ok = (approx(pfs[f"D{r}"].value, cpf.avg_rate_ratio - 1.0, 1e-9)
+              and approx(pfs[f"F{r}"].value, cpf.avg_delivered_ratio - 1.0, 1e-9))
+        ok = ok and (pfs[f"E{r}"].value == "—" if cpf.avg_mod_ratio is None
+                     else approx(pfs[f"E{r}"].value, cpf.avg_mod_ratio - 1.0, 1e-9))
+        if not ok:
+            bad += 1
+    check("[program flow] summary averages tie oracle for every live state",
+          bad == 0, f"{bad} mismatched states")
+    g1, g2, g3 = grid_starts(cfg)
+    bad = 0
+    for j in range(12):
+        prow = pfr.rows[j]
+        ok = (approx(pfs.cell(row=g1 + 3, column=2 + j).value, prow["rate_leg"], 1e-9)
+              and approx(pfs.cell(row=g3 + 3, column=2 + j).value,
+                         prow["delivered"], 1e-9))
+        ml = prow["mod_leg"]
+        v2 = pfs.cell(row=g2 + 3, column=2 + j).value
+        ok = ok and (v2 == "—" if ml is None else approx(v2, ml, 1e-9))
+        if not ok:
+            bad += 1
+    check("[program flow] worked-example grid rows tie oracle (3 grids x 12 months)",
+          bad == 0, f"{bad} mismatched months")
+
     # live dimension lists (D42): _lists uniques match the seeded roster
     ls = wb["_lists"]
     got_bus = [ls[f"A{3 + i}"].value for i in range(len(cfg.business_units))]
@@ -789,6 +853,123 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
                 check("[net delivery: All view] Checks still ALL PASS",
                       nval(wb, "ck_overall") == "ALL CHECKS PASS")
             run("net delivery: All view", {("Net Delivery", "B5"): "All"}, a9g5)
+
+    # 9h. Program Flow / dashboard written-legs exercises (D59)
+    from src.sheets_programflow import grid_starts as pf_grid_starts
+    pf_g1, pf_g2, pf_g3 = pf_grid_starts(cfg)
+    pf_rl0 = L.RL_FIRST + len(rate_rows)
+
+    # (i) a NEW planned row on the WE combo moves the dashboard legs and the
+    # grid; the locked leg follows the (unchanged) taken program
+    add = engine.RateChange(dt.date(p, 8, 10), 0.04, "planned", False)
+    pf_add = engine.program_flow_by_month(
+        p, replace(base_combo, rate_changes=base_combo.rate_changes + (add,)))
+    muts_add = {("Rate Log", f"A{pf_rl0}"): we["bu"],
+                ("Rate Log", f"B{pf_rl0}"): we["state"],
+                ("Rate Log", f"C{pf_rl0}"): add.effective,
+                ("Rate Log", f"D{pf_rl0}"): add.filed_pct,
+                ("Rate Log", f"E{pf_rl0}"): "planned",
+                ("Rate Log", f"F{pf_rl0}"): "N"}
+
+    def a9h1(wb):
+        fd = wb["Flow Dashboard"]
+        bad = sum(0 if (approx(fd[f"M{93 + j}"].value, pr["rate_leg"], 1e-9)
+                        and approx(fd[f"O{93 + j}"].value, pr["delivered"], 1e-9)
+                        and approx(fd[f"P{93 + j}"].value, pr["locked_leg"], 1e-9))
+                  else 1 for j, pr in enumerate(pf_add.rows))
+        check("[program flow: appended planned row] dashboard M/O/P tie fresh oracle",
+              bad == 0, f"{bad} mismatched months")
+        pfs = wb[SHEETS.PROGRAM_FLOW]
+        bad = sum(0 if approx(pfs.cell(row=pf_g1 + 3, column=2 + j).value,
+                              pf_add.rows[j]["rate_leg"], 1e-9) else 1
+                  for j in range(12))
+        check("[program flow: appended planned row] grid A row ties fresh oracle",
+              bad == 0, f"{bad} mismatched months")
+    run("program flow: appended planned row", muts_add, a9h1)
+
+    # (ii) master mod OFF: mod legs dash, delivered collapses to the rate leg
+    pf_off = engine.program_flow_by_month(
+        p, replace(base_combo, mod_adjustment_enabled=False))
+
+    def a9h2(wb):
+        fd = wb["Flow Dashboard"]
+        check("[program flow: mod master OFF] dashboard mod leg dashes",
+              fd["N93"].value == "—", f"N93={fd['N93'].value!r}")
+        bad = sum(0 if approx(fd[f"O{93 + j}"].value, pr["delivered"], 1e-9) else 1
+                  for j, pr in enumerate(pf_off.rows))
+        check("[program flow: mod master OFF] delivered = rate-only, ties oracle",
+              bad == 0, f"{bad} mismatched months")
+        check("[program flow: mod master OFF] grid B dashes",
+              wb[SHEETS.PROGRAM_FLOW].cell(row=pf_g2 + 3, column=2).value == "—")
+    run("program flow: mod master OFF", {("Control", "C13"): "OFF"}, a9h2)
+
+    # (iii) mixed-status cohort month on the LOCKED block: a planned row
+    # EARLIER in the same month as a taken row must not disturb the taken-only
+    # day-blend (D58 exercised on the D59 block through a real recalc)
+    mixtk = (engine.RateChange(dt.date(p - 1, 6, 5), 0.03, "planned", False),
+             engine.RateChange(dt.date(p - 1, 6, 20), 0.02, "taken", False))
+    pf_mix = engine.program_flow_by_month(
+        p, replace(base_combo, rate_changes=base_combo.rate_changes + mixtk))
+    muts_mixtk = {}
+    for i, rc in enumerate(mixtk):
+        rr_ = pf_rl0 + i
+        muts_mixtk.update({("Rate Log", f"A{rr_}"): we["bu"],
+                           ("Rate Log", f"B{rr_}"): we["state"],
+                           ("Rate Log", f"C{rr_}"): rc.effective,
+                           ("Rate Log", f"D{rr_}"): rc.filed_pct,
+                           ("Rate Log", f"E{rr_}"): rc.status,
+                           ("Rate Log", f"F{rr_}"): "N"})
+
+    def a9h3(wb):
+        fd = wb["Flow Dashboard"]
+        bad = sum(0 if (approx(fd[f"P{93 + j}"].value, pr["locked_leg"], 1e-9)
+                        and approx(fd[f"M{93 + j}"].value, pr["rate_leg"], 1e-9))
+                  else 1 for j, pr in enumerate(pf_mix.rows))
+        check("[program flow: mixed-status month] locked leg ties taken-only oracle "
+              "(D58 on the locked block)", bad == 0, f"{bad} mismatched months")
+    run("program flow: mixed-status cohort month (locked block)", muts_mixtk, a9h3)
+
+    # (iv) fabrication guard: the All view shows nothing computable
+    def a9h4(wb):
+        pfs = wb[SHEETS.PROGRAM_FLOW]
+        blank = all(pfs[f"{cL}{9}"].value in (None, "", "—") for cL in "CDEFG")
+        check("[program flow: All view] summary metrics blank, never fabricated",
+              blank, str([pfs[f'{cL}9'].value for cL in 'CDEFG']))
+        check("[program flow: All view] grid cells blank",
+              pfs.cell(row=pf_g3 + 3, column=2).value in (None, ""))
+        check("[program flow: All view] Checks still ALL PASS",
+              nval(wb, "ck_overall") == "ALL CHECKS PASS")
+    run("program flow: All view", {("Program Flow", "B5"): "All"}, a9h4)
+
+    # (v) net combo in view: delta columns populate on program basis
+    if len(st) > 8:
+        net_state5 = st[8]
+        net_row5 = next((x for x in lr_rows
+                         if x["bu"] == "BU-C" and x["state"] == net_state5), None)
+        if net_row5 is not None and net_row5.get("netp") is not None:
+            ncmb5 = sample_to_combo(cfg, lob, net_row5, rate_rows)
+            pf_net = engine.program_flow_by_month(p, ncmb5)
+            x5, x15 = ncmb5.net_sel_p, ncmb5.net_x1
+            from src.sheets_programflow import PF_SUM_FIRST as pf_first5
+            si5 = list(st).index(net_state5)
+
+            def a9h5(wb):
+                fd = wb["Flow Dashboard"]
+                bad = sum(0 if approx(fd[f"R{93 + j}"].value,
+                                      pr["delivered"] - (x5 if j < 12 else x15), 1e-9)
+                          else 1 for j, pr in enumerate(pf_net.rows))
+                check("[program flow: net combo] dashboard delta-vs-assertion ties "
+                      "oracle (x for P, x1 for P+1)", bad == 0,
+                      f"{bad} mismatched months")
+                gv = wb[SHEETS.PROGRAM_FLOW][f"G{pf_first5 + si5}"].value
+                ov = pf_net.avg_delivered_ratio - 1.0 - x5
+                check("[program flow: net combo] summary delta ties oracle",
+                      approx(gv, ov, 1e-9), f"wb={gv} oracle={ov}")
+                check("[program flow: net combo] zero FAILs (WARN advisories allowed)",
+                      nval(wb, "ck_overall") == "ALL CHECKS PASS")
+            run("program flow: net combo in view",
+                {("Control", "C7"): "BU-C", ("Control", "C8"): net_state5,
+                 ("Program Flow", "B5"): "BU-C"}, a9h5)
 
     # 10. plan-year change (fingerprint must go N/A, engines recompute cleanly)
     p2 = p + 1

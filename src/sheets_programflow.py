@@ -36,26 +36,26 @@ PF_SUM_HDR = 8                          # summary table header row
 PF_SUM_FIRST = 9                        # first roster row
 
 
-def n_disp(ctx) -> int:
+def n_disp(cfg) -> int:
     """Display slots: live states + 3 roster spares (the _lists convention)."""
-    return len(ctx.cfg.states) + 3
+    return len(cfg.states) + 3
 
 
-def pf_tot(ctx) -> int:
-    return PF_SUM_FIRST + n_disp(ctx) + 1
+def pf_tot(cfg) -> int:
+    return PF_SUM_FIRST + n_disp(cfg) + 1
 
 
-def grid_starts(ctx) -> list[int]:
+def grid_starts(cfg) -> list[int]:
     """Section rows of the three grids (rate leg, mod leg, delivered)."""
-    nd = n_disp(ctx)
-    g1 = pf_tot(ctx) + 4
+    nd = n_disp(cfg)
+    g1 = pf_tot(cfg) + 4
     g2 = g1 + 3 + nd + 3
     return [g1, g2, g2 + 3 + nd + 3]
 
 
 def build_program_flow(ctx: Ctx):
     ws = ctx.wb[SHEETS.PROGRAM_FLOW]
-    nd = n_disp(ctx)
+    nd = n_disp(ctx.cfg)
     cbf, stride = L.CALC_BLOCK_FIRST, L.CALC_BLOCK_STRIDE
     title(ws, "A1", f"Program Flow — what the logged program delivers ({ctx.lob.name})",
           "Month-by-month YoY change on renewals from the rate changes and mod path AS "
@@ -131,7 +131,7 @@ def build_program_flow(ctx: Ctx):
                         f"INDEX('_calc'!$J:$J,$P{r}+51)-1-INDEX('_calc'!$M:$M,$P{r}),"
                         f"\"—\")))",
                 fmt=PCT_S, align=ALIGN_C, fill=band_fill, border=BORDER_THIN)
-    tot = pf_tot(ctx)
+    tot = pf_tot(ctx.cfg)
     put(ws, f"A{tot}", "IN VIEW", fnt=font(NAVY, bold=True), align=ALIGN_C)
     formula(ws, f"B{tot}", '=IF(pf_BU="All",SUM(calc_ep),SUMIFS(calc_ep,calc_bu,pf_BU))',
             fmt="#,##0", align=ALIGN_C, bold=True)
@@ -151,7 +151,7 @@ def build_program_flow(ctx: Ctx):
         fnt=F_SMALL_IT)
 
     # ---- three state x month grids ----
-    g1, g2, g3 = grid_starts(ctx)
+    g1, g2, g3 = grid_starts(ctx.cfg)
     secs = [
         (g1, "The rate leg — YoY written rate change on renewals",
          "History and planned filings at achievement, day-blended in their effective "

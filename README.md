@@ -52,10 +52,14 @@ src/sheets_engine.py       Rate Engine, Mod Engine + the shared cohort-block wri
 src/sheets_calc.py         hidden _calc engine blocks (portfolio/scenario/attribution/solver)
 src/sheets_main.py         Bridge, Portfolio (+ Decision Board), State Summary, Scenarios,
                            Solver, Attribution builders
+src/sheets_netdelivery.py  Net Delivery tab + hidden _netcalc blocks (D57)
+src/sheets_programflow.py  Program Flow tab: state x month delivered-flow grids (D59)
 src/sheets_walkthrough.py  Walkthrough: the fully worked example, live for the selection
 src/sheets_briefs.py       One-Pager (print-ready brief) and Compare builders
 src/sheets_report.py       Flow Dashboard, _oracle, Checks, Methodology, Read Me builders
 tests/test_engine.py       pytest suite: worked example, property tests, identities
+tests/test_net_delivery.py net delivery closed forms vs brute force (D57/D58)
+tests/test_program_flow.py program-flow legs, locked leg, ratio averages (D59)
 tests/test_layout.py       Layout geometry (incl. the D56 dual-module guard)
 tests/test_style.py        prose row-height calibration (nothing may clip)
 tools/recalc.py            headless recalculation (Excel COM, LibreOffice fallback)
@@ -110,8 +114,8 @@ convention to 1e-9, and 63.36% at 4 decimals on annual-term books); **every BU×
 tied to a per-combo oracle run (9 metrics each); solver round-trip (+5.0% at 4/1); chart axes
 intact after the Excel resave; scenario, attribution, seasonality, basis, mod-toggle,
 degenerate-input, and plan-year-change exercises each tied to fresh oracle runs. At last run:
-Property **104 checks / 0 failed** (full), the other five LOB files 35 (or 33 for the
-6-month-term Inland Marine) / 0 failed each (phases A–C), pytest 59/59.
+Property **184 checks / 0 failed** (full), the other five LOB files 53 (or 51 for the
+6-month-term Inland Marine) / 0 failed each (phases A–C), pytest 119/119.
 
 ## Regeneration workflow (new plan year)
 

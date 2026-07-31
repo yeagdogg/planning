@@ -588,6 +588,17 @@ def build_checks(ctx: Ctx):
     A(("Advisory", "Net Delivery feasibility flags in view (mod/rate bounds, thin share)",
        "=0", '=IF(nd_BU="All",0,SUMPRODUCT((ndd_flags<>"")*(ndd_flags<>"—")*1))',
        0, "WARN"))
+    # ---- appended v2.3 checks (Program Flow, D59) ----
+    A(("Structure", "Locked (taken-only) block = Solver base block when the Solver "
+       "follows Control", "=0",
+       "=IF(slv_key<>nr_SelKey,0,SUMPRODUCT(ABS(fd_tkw-slv_widx)))", 1e-9, "FAIL"))
+    A(("Structure", "Flow Dashboard avg YoY delivered = _calc block results (selected "
+       "combo)", "=0",
+       f"=IF(br_selrow=0,0,ABS(INDEX('_calc'!$J:$J,{L.CALC_BLOCK_FIRST}+(br_selrow-1)"
+       f"*{L.CALC_BLOCK_STRIDE}+51)-1-fd_avgdel))", 1e-9, "FAIL"))
+    A(("Advisory", "Net combo(s) in the Program Flow view deliver 1pt+ off the asserted "
+       "net on program basis (see Net Delivery)", "=0",
+       '=IF(pf_BU="All",0,COUNTIF(pfd_gap,">0.01"))', 0, "WARN"))
 
     header_row(ws, L.CK_HDR, 1,
                ["#", "Category", "Check", "Expected", "Actual", "Tolerance", "Status",
@@ -603,6 +614,13 @@ def build_checks(ctx: Ctx):
             return "'Mod Engine'!A1", "Mod Engine"
         if kind_ == "ATTR":
             return "Attribution!A1", "Attribution"
+        # order matters below: pfd_ contains fd_, ndd_/ndl_ contain nd_
+        if "pfd_" in f_ or "pf_" in f_:
+            return "'Program Flow'!A1", "Program Flow"
+        if "fd_" in f_:
+            return "'Flow Dashboard'!A1", "Flow Dashboard"
+        if "ndd_" in f_ or "ndl_" in f_ or "nd_" in f_:
+            return "'Net Delivery'!A1", "Net Delivery"
         if "rl_" in f_:
             return "'Rate Log'!A1", "Rate Log"
         if "lr_" in f_ or "se_" in f_ or "nr_Sel" in f_:
@@ -868,6 +886,23 @@ def build_methodology(ctx: Ctx):
          "the earned shape via the 'plan LR if you book this program' reconciliation "
          "(a single filed change cannot match both averages at once).",
          ]),
+        ("6d. Program Flow (descriptive, D59)", [
+         "The descriptive twin of 6c: no target and no new change — the month-by-month "
+         "YoY change on renewals from the program AS LOGGED. Rate leg = W(m)/W(m-12) - 1 "
+         "on PROGRAM basis: every Rate Log row enters as logged, taken at filed %, "
+         "planned at filed % x achievement. Mod leg = M_w(m)/M_w(m-12) - 1 along the "
+         "anchored written-mod path (dash when the mod adjustment is off). Delivered "
+         "net = the product. Net-mode supersession is deliberately NOT applied: for a "
+         "net-target combo the gap between program-basis delivery and the asserted "
+         "(1+x) is the exhibit's point, and Net Delivery prescribes what closes it.",
+         "The Flow Dashboard's monthly detail carries the same legs for the selected "
+         "combo plus a LOCKED leg — the rate leg recomputed on taken rows only (the "
+         "Solver's D13 filter with the status-aware first-change flag, D58) — and the "
+         "planned residual, (1 + rate leg)/(1 + locked) - 1: how much of each month's "
+         "YoY still rides on planned actions. Per-state plan-year averages are "
+         "written-weighted means of the monthly RATIOS (the Net Delivery delivered-"
+         "average convention, not the calendar-year aggregate-ratio convention).",
+         ]),
         ("7. Solver (E1)", [
          "The CY earned index is linear in a single unknown change r, so the required rate "
          "solves in closed form: E(r) = (C_pre + (1+r) C_post) / D. The base index W0 uses "
@@ -1013,6 +1048,9 @@ READ_ME_GUIDE = [
                   "contribution to the book, the portfolio bridge."),
     ("State Summary", "One row per state with a BU filter ('All' = EP-weighted) — the "
                       "leadership exhibit."),
+    ("Program Flow", "What the program AS LOGGED is delivering — state x month YoY grids "
+                     "for the written rate, mod, and net legs (the descriptive twin of "
+                     "Net Delivery)."),
     ("Net Delivery", "For net-target combos: the month-by-month rate leg and the pricing "
                      "change that satisfies the target, plus the suggested filing."),
     ("Bridge", "The selected combo's answer: projected LR -> CY plan LR, factor by factor."),
@@ -1108,9 +1146,10 @@ def build_readme(ctx: Ctx):
         jump(ws, f"B{r}", f"{_q(name)}!A1", name, bold=True)
         para(r, desc)
         r += 1
-    put(ws, f"B{r}", "_lists / _calc / _oracle", fnt=font(GREY_DARK, size=9))
-    para(r, "Hidden machinery: validation lists, the per-combo engine blocks, and the baked "
-            "oracle constants. Nothing to edit there.", size=9)
+    put(ws, f"B{r}", "_lists / _calc / _netcalc / _oracle", fnt=font(GREY_DARK, size=9))
+    para(r, "Hidden machinery: validation lists, the per-combo engine blocks, the Net "
+            "Delivery blocks, and the baked oracle constants. Nothing to edit there.",
+        size=9)
     r += 2
 
     section(ws, r, "B", "What this workbook does")
