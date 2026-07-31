@@ -242,9 +242,17 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
         check("Solver Mode B latest qualifying month is April",
               sv["D42"].value == f"Apr {p}", str(sv["D42"].value))
 
-    # scenarios with blank levers reproduce base
+    # S1 ships seeded (+2 pts on planned rows) as a self-teaching demo; the
+    # remaining blank-lever scenarios must reproduce Base exactly
     sc = wb["Scenarios"]
-    ok_s = all(approx(sc[f"{cL}14"].value, m.cy_lr_p, 1e-9) for cL in "DEFG")
+    s1_combo = replace(combo, rate_changes=tuple(
+        replace(rc, filed_pct=rc.filed_pct + 0.02) if rc.status == "planned" else rc
+        for rc in combo.rate_changes))
+    s1_m = engine.run_bridge(p, s1_combo, "monthly")
+    check("seeded S1 (+2 pts on planned rows) ties oracle",
+          approx(sc["D14"].value, s1_m.cy_lr_p, 1e-9),
+          f"wb={sc['D14'].value} oracle={s1_m.cy_lr_p}")
+    ok_s = all(approx(sc[f"{cL}14"].value, m.cy_lr_p, 1e-9) for cL in "EFG")
     check("blank-lever scenarios reproduce Base CY LR", ok_s)
 
     # State Summary in 'All' mode: EP-weighted aggregates per state (D38)

@@ -6,7 +6,7 @@ import datetime as dt
 
 from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.chart.marker import Marker
-from openpyxl.formatting.rule import ColorScaleRule, DataBarRule
+from openpyxl.formatting.rule import ColorScaleRule, DataBarRule, FormulaRule
 from openpyxl.styles import Alignment, Border, Side
 
 from .build_workbook import Ctx, Layout as L
@@ -715,12 +715,28 @@ def build_scenarios(ctx: Ctx):
         ("Adjust net rate selection (+/- pts)", FMT_PCT, "sc_dnet",
          "Scenario lever: added to the net selection x for P and P+1 (D39)"),
     ]
+    hints = ["e.g. 0.02 = +2.0 pts  (S1 ships seeded — clear to reset)",
+             "e.g. 2 = two months later", "e.g. 0.80 = 80% achieved",
+             "e.g. 0.02 = +2 mod pts on M_1 and M_2", "e.g. 0.01 = +1 pt net target"]
     for i, (lbl, fmt, name, desc) in enumerate(levers):
         r = 6 + i
         label(ws, f"B{r}", lbl)
         for cc in range(3, 7):
-            input_cell(ws, f"{col(cc)}{r}", None, fmt=fmt, required=False)
+            # S1 ships with a demonstrative +2 pts so the tab teaches itself
+            seed = 0.02 if (i == 0 and cc == 3) else None
+            input_cell(ws, f"{col(cc)}{r}", seed, fmt=fmt, required=False)
+        put(ws, f"G{r}", hints[i], fnt=font(GREY_DARK, size=9, italic=True))
         ctx.define(name, "Scenarios", f"$C${r}:$F${r}", desc)
+    from openpyxl.worksheet.datavalidation import DataValidation as _DV
+    for r, kind, lo, hi, msg in ((6, "decimal", "-0.5", "0.5", "Enter rate points as a decimal fraction in [-50%, +50%]."),
+                                 (7, "whole", "-12", "12", "Shift is in whole months, -12..12."),
+                                 (8, "decimal", "0", "1.5", "Achievement lies in [0%, 150%]."),
+                                 (9, "decimal", "-0.5", "0.5", "Mod shift lies in [-0.5, +0.5]."),
+                                 (10, "decimal", "-0.5", "0.5", "Net adjustment lies in [-50%, +50%].")):
+        _dv_ = _DV(type=kind, operator="between", formula1=lo, formula2=hi,
+                   allow_blank=True, showErrorMessage=True, error=msg)
+        ws.add_data_validation(_dv_)
+        _dv_.add(f"C{r}:F{r}")
 
     section(ws, 12, "B", "Results")
     put(ws, "B13", "Metric", fnt=F_HEADER, fill=FILL_NAVY)
@@ -761,18 +777,20 @@ def build_scenarios(ctx: Ctx):
                     "When the selected combo carries a net rate selection, only the D-net "
                     "lever moves results (planned-row levers are superseded, D39).")
 
+    # chart the DELTAS (five near-identical LR levels are visually null; the
+    # zero axis line is Base)
     chart = BarChart()
     chart.type = "col"
     chart.gapWidth = 60
-    data = Reference(ws, min_col=3, min_row=14, max_col=7, max_row=14)
-    cats = Reference(ws, min_col=3, min_row=13, max_col=7, max_row=13)
+    data = Reference(ws, min_col=4, min_row=15, max_col=7, max_row=15)
+    cats = Reference(ws, min_col=4, min_row=13, max_col=7, max_row=13)
     chart.add_data(data, from_rows=True, titles_from_data=False)
     chart.set_categories(cats)
     chart.series[0].graphicalProperties.solidFill = STEEL
     chart.legend = None
-    chart.y_axis.number_format = "0.0%"
-    _style_chart(chart, "Plan-year loss ratio by scenario", y_title="CY plan LR",
-                 height=8, width=13)
+    chart.y_axis.number_format = "0.00"
+    _style_chart(chart, "Change vs Base (pts of loss ratio) — zero line = Base",
+                 y_title="Change vs Base (pts)", height=8, width=13)
     ws.add_chart(chart, "B24")
 
     set_widths(ws, {"A": 2, "B": 40, "C": 11, "D": 11, "E": 11, "F": 11, "G": 11})
@@ -791,18 +809,37 @@ def build_solver(ctx: Ctx):
     title(ws, "B2", "Solver — inverse plan (closed form, no iteration)",
           "Because the CY earned index is linear in a single unknown change r, the required "
           "rate solves in closed form.")
-    label(ws, "B3", "Selected:")
-    link(ws, "C3", "=nr_SelKey", bold=True)
-    jump(ws, "E3", "Control!C7", "Change BU/state selection >")
-    put(ws, "B4",
-        "Convention (DECISIONS.md D13): the Solver replaces the ENTIRE planned-rate program "
-        "with a single action at the chosen date. Its base index W0 uses taken rows only.",
-        fnt=font(FAIL_RED, size=9, italic=True), align=ALIGN_WRAP)
-    formula(ws, "B5",
-            '=IF(nr_NetMode,"NOTE: the selected combo carries a NET RATE SELECTION - Solver '
-            'results describe the explicit-program counterfactual (planned rows + classic '
-            'A_mod), not the net path (D39).","")')
-    ws["B5"].font = font(FAIL_RED, size=9, italic=True)
+    # The Solver is the one tab with a LOCAL selection override: it gets used
+    # standalone in filing conversations. An input cell cannot default via a
+    # formula (typing destroys it), so the mechanism is Follow-Control? Y/N
+    # plus override dropdowns; slv_key resolves the combo everything below uses.
+    label(ws, "B3", "Solving for")
+    link(ws, "C3", "=slv_key", bold=True)
+    jump(ws, "E3", "Control!C7", "Change Control selection >")
+    label(ws, "B4", "Follow the Control selection? (Y/N)")
+    input_cell(ws, "C4", "Y")
+    prose(ws, "D4",
+          "Convention (D13): the Solver replaces the ENTIRE planned-rate program with a "
+          "single action at the chosen date. Its base index W0 uses taken rows only.",
+          size=9, width=30)
+    ws["D4"].font = font(FAIL_RED, size=9, italic=True)
+    label(ws, "B5", "Override BU | state (used when N)")
+    input_cell(ws, "C5", ctx.we_row["bu"], required=False)
+    input_cell(ws, "D5", ctx.we_row["state"], required=False)
+    put(ws, "F4", "resolved key", fnt=font(GREY_DARK, size=8))
+    formula(ws, "G4", '=IF(UPPER($C$4)="N",$C$5&"|"&$D$5,nr_SelKey)')
+    ws["G4"].font = font(GREY_DARK, size=9)
+    ctx.define("slv_key", "Solver", "$G$4",
+               "Combo the Solver solves for (Control selection, or the local override)")
+    put(ws, "F5", "resolved state", fnt=font(GREY_DARK, size=8))
+    formula(ws, "G5", '=IF(UPPER($C$4)="N",$D$5,nr_SelState)')
+    ws["G5"].font = font(GREY_DARK, size=9)
+    ctx.define("slv_state", "Solver", "$G$5", "State of the combo the Solver solves for")
+    from openpyxl.worksheet.datavalidation import DataValidation as _DV
+    for _rng, _f in (("C4", '"Y,N"'), ("C5", "=lst_bu"), ("D5", "=lst_state")):
+        _dv_ = _DV(type="list", formula1=_f, allow_blank=True, showErrorMessage=True)
+        ws.add_data_validation(_dv_)
+        _dv_.add(_rng)
 
     # ---- Mode A ----
     section(ws, 6, "B", "Mode A — required rate for a target CY LR")
@@ -838,18 +875,43 @@ def build_solver(ctx: Ctx):
         formula(ws, f"G{r}", f, fmt=fmt)
         ws[f"G{r}"].font = font(GREY_DARK, size=9)
 
+    # local combo resolver: everything Mode A/B needs about the SOLVE combo,
+    # served from the all-combo _calc results table (no new engine compute)
+    locals_ = [
+        ("combo row (_calc)", "slv_row",
+         "=IF(COUNTIF(calc_key,slv_key)=0,0,MATCH(slv_key,calc_key,0))", FMT_INT,
+         "Row of the solve combo in the _calc results table (0 = absent)"),
+        ("CRL_ind (combo)", "slv_crl", "=IF(slv_row=0,1,INDEX(calc_crl,slv_row))", FMT_IDX,
+         "Indication rate level of the solve combo"),
+        ("LR at current level (combo)", "slv_lrcur",
+         "=IF(slv_row=0,0,INDEX(calc_lrcur,slv_row))", FMT_PCT,
+         "Basis-normalized projected LR of the solve combo"),
+        ("A_mod in force (combo)", "slv_amod",
+         "=IF(slv_row=0,1,INDEX(calc_amod_p,slv_row))", FMT_IDX,
+         "Mod drift factor of the solve combo"),
+        ("A_other (combo)", "slv_aother",
+         "=IF(slv_row=0,1,INDEX(calc_aother,slv_row))", FMT_IDX,
+         "Other adjustment factor of the solve combo"),
+    ]
+    for i, (lbl, name, f, fmt, desc) in enumerate(locals_):
+        rr_ = 19 + i
+        put(ws, f"F{rr_}", lbl, fnt=font(GREY_DARK, size=9))
+        formula(ws, f"G{rr_}", f, fmt=fmt)
+        ws[f"G{rr_}"].font = font(GREY_DARK, size=9)
+        ctx.define(name, "Solver", f"$G${rr_}", desc)
+
     outputs = [
-        ("Old-rate earned exposure before the date (C_pre)",
+        ("Old-rate earned exposure before the date (C_pre, cohort-months)",
          "=SUMPRODUCT((slv_absmi<$G$7)*slv_w*slv_ecp*slv_widx)+$G$18*(1-$G$15)*$G$16", FMT_IDX,
          None),
-        ("Earnable exposure on/after the date (C_post)",
+        ("Earnable exposure on/after the date (C_post, cohort-months)",
          "=SUMPRODUCT((slv_absmi>$G$7)*slv_w*slv_ecp*slv_widx)+$G$18*$G$15*$G$17", FMT_IDX, None),
-        ("Total CY earned exposure (D)", "=slv_den", FMT_IDX, None),
-        ("Mod drift factor in force (A_mod)", "=nr_Amod_P", FMT_IDX, None),
+        ("Total CY earned exposure (D, cohort-months)", "=slv_den", FMT_IDX, None),
+        ("Mod drift factor in force (A_mod)", "=slv_amod", FMT_IDX, None),
         ("Rate earn-in factor needed (A_rate)",
-         "=IF(OR(nr_LRcur=0,$C$7=\"\"),0,$C$7/(nr_LRcur*$C$14*nr_AOther))",
+         "=IF(OR(slv_lrcur=0,$C$7=\"\"),0,$C$7/(slv_lrcur*$C$14*slv_aother))",
          FMT_IDX, None),
-        ("Earned rate level needed (E_CY)", "=IF($C$15=0,0,nr_CRLind/$C$15)", FMT_IDX, None),
+        ("Earned rate level needed (E_CY)", "=IF($C$15=0,0,slv_crl/$C$15)", FMT_IDX, None),
         ("REQUIRED CHANGE r",
          '=IF(OR($C$12=0,$C$16=0),"n/a",($C$16*$C$13-$C$11)/$C$12-1)', "0.000%", "nr_SolverR"),
         ("Filed-rate equivalent (r / achievement)",
@@ -883,6 +945,11 @@ def build_solver(ctx: Ctx):
     section(ws, 25, "B",
             "Mode B — timing sensitivity: the FULL-YEAR plan LR under each possible "
             "start month for the same change")
+    formula(ws, "B24",
+            '=IF(slv_row=0,"",IF(INDEX(calc_netmode,slv_row)=1,"NOTE: this combo carries a '
+            'NET RATE SELECTION - Solver results describe the explicit-program '
+            'counterfactual (planned rows + classic A_mod), not the net path (D39).",""))')
+    ws["B24"].font = font(FAIL_RED, size=9, italic=True)
     label(ws, "B26", "Rate change r to time")
     input_cell(ws, "C26", 0.05, fmt=FMT_PCT)
     note(ws, "D26",
@@ -904,7 +971,7 @@ def build_solver(ctx: Ctx):
              align=ALIGN_C)
         formula(ws, f"F{r}", f"=($D{r}+(1+$C$26)*$E{r})/slv_den", fmt=FMT_IDX, align=ALIGN_C)
         formula(ws, f"G{r}",
-                f"=IF(nr_LRcur=0,0,nr_LRcur*(nr_CRLind/$F{r})*$C$14*nr_AOther)",
+                f"=IF(slv_lrcur=0,0,slv_lrcur*(slv_crl/$F{r})*$C$14*slv_aother)",
                 fmt=FMT_PCT, align=ALIGN_C)
         formula(ws, f"H{r}", f'=IF($C$7="","-",IF($G{r}<=$C$7,"YES","no"))', align=ALIGN_C)
         formula(ws, f"I{r}", f'=IF($H{r}="YES",{m},0)', fmt=FMT_INT)
@@ -961,6 +1028,15 @@ def build_attribution(ctx: Ctx):
             'steps 1-3 are suspended (factors = 1) because rate and mods are merged in the '
             'net path; plan-vs-actual deviation flows to the residual (D39).","")')
     ws["E3"].font = font(FAIL_RED, size=9, italic=True)
+
+    formula(ws, "B4",
+            '=IF(N(att_actlr)=0,"AWAITING ACTUALS — enter the actual CY "&nr_PlanYear&'
+            '" loss ratio below; the decomposition stays greyed until then.","")')
+    ws["B4"].font = font("BF8F00", bold=True, size=10)
+    # grey the decomposition while no actual LR is entered (visual state only)
+    ws.conditional_formatting.add(
+        "B25:E31",
+        FormulaRule(formula=["N(att_actlr)=0"], font=font("BFBFBF")))
 
     section(ws, 5, "B", "Actuals — mod path and outcome (blank = as planned)")
     att_inputs = [

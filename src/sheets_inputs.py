@@ -451,7 +451,9 @@ def build_control(ctx: Ctx):
     label(ws, "E6", "Selected key")
     formula(ws, "F6", '=$C$7&"|"&$C$8')
     label(ws, "E7", "Combo found in tbl_LR?")
-    formula(ws, "F7", "=COUNTIF(lr_key,$F$6)>0")
+    formula(ws, "F7", '=IF($G$7,"yes","NO — add the row to tbl_LR")')
+    formula(ws, "G7", "=COUNTIF(lr_key,$F$6)>0")
+    ws["G7"].font = font(GREY_DARK, size=8)
     label(ws, "E8", "Policy term (months)")
     link(ws, "F8", "=nr_TermMonths", fmt="0")
     label(ws, "E9", "Line of business")
@@ -469,7 +471,7 @@ def build_control(ctx: Ctx):
     ctx.define("nr_SelState", "Control", "$C$8", "Selected state")
     ctx.define("nr_SelScenario", "Control", "$C$9", "Scenario surfaced in the Control KPI row")
     ctx.define("nr_SelKey", "Control", "$F$6", "Selected BU|State key")
-    ctx.define("nr_SelOK", "Control", "$F$7", "TRUE when the selected combo exists in tbl_LR")
+    ctx.define("nr_SelOK", "Control", "$G$7", "TRUE when the selected combo exists in tbl_LR")
 
     # Toggles
     section(ws, 11, "B", "Global toggles")
@@ -499,31 +501,42 @@ def build_control(ctx: Ctx):
         '=IF(nr_SelOK,"","WARNING: the selected BU | state has no row in tbl_LR - engines show neutral factors until a row is added.")',
         fnt=font(FAIL_RED, bold=True))
 
-    # KPI cards
+    # KPI cards — plain-English captions; values blank to "—" on a bad
+    # selection so a missing combo can never fabricate plausible numbers
     section(ws, 17, "B", "Key results — selected BU x state")
+    ok = "nr_SelOK"
     cards = [
         ('=IF(nr_BasisDisp="As input","Projected LR (as input)","Projected LR (current level)")',
-         '=IF(nr_BasisDisp="As input",nr_LRproj,nr_LRcur)', FMT_PCT,
+         f'=IF({ok},IF(nr_BasisDisp="As input",nr_LRproj,nr_LRcur),"—")', FMT_PCT,
          "from the rate level indication"),
-        (f'="CY "&nr_PlanYear&" plan loss ratio"', "=nr_CYLR_P", FMT_PCT,
-         "projected LR x A_rate x A_mod x A_other"),
-        ('="CY earned rate chg vs indication"', "=nr_EChgVsInd", "+0.0%;-0.0%;0.0%",
-         "E_CY(P) / CRL_ind - 1"),
-        (f'="Carryover into "&(nr_PlanYear+1)', "=nr_YoY_P1", "+0.0%;-0.0%;0.0%",
-         "E_CY(P+1) / E_CY(P) - 1"),
-        ('="Written mod: current -> projected"',
-         '=TEXT(nr_M0,"0.000")&"  ->  "&TEXT(nr_M1,"0.000")', FMT_GEN,
-         "M_0 (as-of) -> M_1 (12/31/P)"),
-        ('="Checks status"', "='Checks'!$C$3", FMT_GEN, "see the Checks sheet"),
+        (f'="CY "&nr_PlanYear&" plan loss ratio"', f'=IF({ok},nr_CYLR_P,"—")', FMT_PCT,
+         "projected LR x rate earn-in x mod drift x other"),
+        ('="CY earned rate chg vs indication"', f'=IF({ok},nr_EChgVsInd,"—")',
+         "+0.0%;-0.0%;0.0%",
+         "how the year's earned rate compares with the level the indication assumed"),
+        (f'="Carryover into "&(nr_PlanYear+1)', f'=IF({ok},nr_YoY_P1,"—")', "+0.0%;-0.0%;0.0%",
+         "earned rate change already locked in for next year"),
+        ('="Written mod: current / projected"', None, FMT_GEN,
+         "current written mod  /  projected at plan-year end"),
+        ('="Checks status"', "=ck_overall", FMT_GEN, "see the Checks sheet"),
     ]
     for i, (lbl_f, val_f, fmt, sub) in enumerate(cards):
         c1 = 2 + i * 2  # B, D, F, H, J, L
         put(ws, ws.cell(row=18, column=c1).coordinate, lbl_f, fnt=F_SMALL,
             fill=FILL_PANEL_2, align=ALIGN_L)
         put(ws, ws.cell(row=18, column=c1 + 1).coordinate, None, fill=FILL_PANEL_2)
-        put(ws, ws.cell(row=19, column=c1).coordinate, val_f,
-            fnt=font("1F3864", bold=True, size=16), fmt=fmt, fill=FILL_PANEL, align=ALIGN_L)
-        put(ws, ws.cell(row=19, column=c1 + 1).coordinate, None, fill=FILL_PANEL)
+        if val_f is None:  # the mod card: TWO numeric cells, chartable and formattable
+            put(ws, ws.cell(row=19, column=c1).coordinate, f'=IF({ok},nr_M0,"—")',
+                fnt=font("1F3864", bold=True, size=16), fmt=FMT_MOD, fill=FILL_PANEL,
+                align=ALIGN_L)
+            put(ws, ws.cell(row=19, column=c1 + 1).coordinate, f'=IF({ok},nr_M1,"—")',
+                fnt=font("1F3864", bold=True, size=16), fmt=FMT_MOD, fill=FILL_PANEL,
+                align=ALIGN_L)
+        else:
+            put(ws, ws.cell(row=19, column=c1).coordinate, val_f,
+                fnt=font("1F3864", bold=True, size=16), fmt=fmt, fill=FILL_PANEL,
+                align=ALIGN_L)
+            put(ws, ws.cell(row=19, column=c1 + 1).coordinate, None, fill=FILL_PANEL)
         put(ws, ws.cell(row=20, column=c1).coordinate, sub, fnt=F_SMALL_IT, fill=FILL_PANEL)
         put(ws, ws.cell(row=20, column=c1 + 1).coordinate, None, fill=FILL_PANEL)
     ws.conditional_formatting.add(
@@ -553,9 +566,59 @@ def build_control(ctx: Ctx):
         label(ws, f"B{r}", lbl_t)
         link(ws, f"C{r}", fp_, fmt=fmt, align=ALIGN_C, bold=(i == len(rows) - 1))
         link(ws, f"D{r}", fp1, fmt=fmt, align=ALIGN_C, bold=(i == len(rows) - 1))
-    note(ws, "B30",
-         f"The CY {p + 1} column is indicative only: it assumes no new indication and applies "
-         "the net trend input once. Trend defaults to 0.0% — enter one in tbl_LR for a meaningful P+1 view.")
+    put(ws, "B30",
+        "Next-year column is indicative — see the canonical caveat on the Bridge.",
+        fnt=F_SMALL_IT)
+
+    # Compare block: side-by-side with ANY other combo, served from the
+    # all-combo _calc results (a data feature — no second engine, no selector
+    # split; every deep-dive tab still shows one agreed selection)
+    section(ws, 22, "F", "Compare with another combo")
+    label(ws, "F23", "This view")
+    formula(ws, "G23", "=nr_SelKey", fmt=FMT_GEN)
+    ws["G23"].font = font(NAVY, bold=True)
+    label(ws, "F24", "Compare to: business unit")
+    input_cell(ws, "G24", "", required=False)
+    label(ws, "F25", "Compare to: state")
+    input_cell(ws, "G25", "", required=False)
+    formula(ws, "I24", '=IF(OR($G$24="",$G$25=""),"",$G$24&"|"&$G$25)')
+    ws["I24"].font = font(GREY_DARK, size=8)
+    formula(ws, "I25", '=IF($I$24="",0,IF(COUNTIF(calc_key,$I$24)=0,0,'
+                       "MATCH($I$24,calc_key,0)))", fmt=FMT_INT)
+    ws["I25"].font = font(GREY_DARK, size=8)
+    cmp_metrics = [
+        ("Projected LR (current level)", "nr_LRcur", "calc_lrcur", FMT_PCT),
+        ('="CY "&nr_PlanYear&" plan LR"', "nr_CYLR_P", "calc_cylr_p", FMT_PCT),
+        ("Rate earn-in (A_rate)", "nr_Arate_P", "calc_arate_p", FMT_IDX),
+        ("Mod drift (A_mod)", "nr_Amod_P", "calc_amod_p", FMT_IDX),
+        ("Earned rate level (E_CY)", "nr_ECY_P", "calc_ecy_p", FMT_IDX),
+        ("Indication rate level (CRL_ind)", "nr_CRLind", "calc_crl", FMT_IDX),
+        ('="Carryover into "&(nr_PlanYear+1)', "nr_YoY_P1", "calc_carry",
+         "+0.0%;-0.0%;0.0%"),
+        ('="CY "&(nr_PlanYear+1)&" plan LR"', "nr_CYLR_P1", "calc_cylr_p1", FMT_PCT),
+    ]
+    put(ws, "G26", "selected", fnt=F_SMALL)
+    put(ws, "H26", "compare", fnt=F_SMALL)
+    put(ws, "I26", "difference", fnt=F_SMALL)
+    for i, (lbl, sel_name, calc_name, fmt) in enumerate(cmp_metrics):
+        r = 27 + i
+        if lbl.startswith("="):
+            formula(ws, f"F{r}", lbl)
+            ws[f"F{r}"].font = F_LABEL
+        else:
+            label(ws, f"F{r}", lbl)
+        link(ws, f"G{r}", f'=IF(nr_SelOK,{sel_name},"—")', fmt=fmt, align=ALIGN_C)
+        formula(ws, f"H{r}", f'=IF($I$25=0,"—",INDEX({calc_name},$I$25))', fmt=fmt,
+                align=ALIGN_C)
+        formula(ws, f"I{r}",
+                f'=IF(OR($I$25=0,NOT(nr_SelOK)),"",IF(AND(ISNUMBER($G{r}),ISNUMBER($H{r})),'
+                f'$H{r}-$G{r},""))',
+                fmt="+0.0000;-0.0000;0.0000", align=ALIGN_C)
+        ws[f"I{r}"].font = font(GREY_DARK, size=9)
+    put(ws, "F35", "Pick a BU and state to light this up; the compare column reads the "
+                   "same hidden all-combo engine every exhibit uses.", fnt=F_SMALL_IT)
+    _dv(ws, "list", ["G24"], blocking=False, formula1="=lst_bu")
+    _dv(ws, "list", ["G25"], blocking=False, formula1="=lst_state")
 
     # Scenario spotlight
     section(ws, 32, "B", "Scenario spotlight")

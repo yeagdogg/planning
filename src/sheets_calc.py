@@ -167,6 +167,7 @@ def build_calc(ctx: Ctx):
         "calc_cylr_p1": ("O", "CY LR(P+1) indicative by combo"),
         "calc_echg": ("P", "CY earned rate chg vs indication by combo"),
         "calc_carry": ("Q", "Carryover into P+1 by combo"),
+        "calc_aother": ("R", "A_other by combo (1 when blank)"),
         "calc_trend": ("S", "Effective P+1 net trend by combo (blank inherits the default)"),
         "calc_state": ("T", "State echo, aligned with tbl_LR rows"),
         "calc_bu": ("U", "BU echo, aligned with tbl_LR rows"),
@@ -370,11 +371,16 @@ def build_calc(ctx: Ctx):
     # 5. Solver base block (taken rows only) + cumulative columns
     # ------------------------------------------------------------------
     t = ab + 3 * L.CALC_BLOCK_STRIDE
-    put(ws, f"A{t}", "Solver base block — taken rows only (planned program excluded, D13)",
+    put(ws, f"A{t}", "Solver base block — taken rows only (planned program excluded, D13); "
+                     "keyed on slv_key so the Solver can follow Control OR its own override",
         fnt=font(GREY_DARK, bold=True, size=9))
+    # local seasonality for the SOLVE combo's state (may differ from the selection)
+    f_grey(ws, f"M{t}", "=IF(COUNTIF(se_state,slv_state)=0,0,MATCH(slv_state,se_state,0))",
+           FMT_INT)
+    f_grey(ws, f"N{t}", f"=IF($M${t}=0,0,INDEX(se_sum,$M${t}))", "0.00")
     blk = write_cohort_block(
-        ws, ctx, t + 3, LogRefs(key_cond="nr_SelKey", taken_only=True),
-        t_ref="nr_TermMonths", srow_ref="re_srow", ssum_ref="re_ssum",
+        ws, ctx, t + 3, LogRefs(key_cond="slv_key", taken_only=True),
+        t_ref="nr_TermMonths", srow_ref=f"$M${t}", ssum_ref=f"$N${t}",
         anchors=None, include_mod=False, header=True, header_row_at=t + 2)
     bf, bl = blk["first"], blk["last"]
     put(ws, f"S{t + 2}", "w-ec-W0", fnt=font(GREY_DARK, size=8))

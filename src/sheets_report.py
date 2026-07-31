@@ -563,7 +563,8 @@ def build_checks(ctx: Ctx):
                     align=ALIGN_C)
             put(ws, f"F{r}", 1e-6, fnt=font(GREY_DARK, size=9), align=ALIGN_C)
             formula(ws, f"G{r}",
-                    "=IF(OR(NOT(orc_fp),ABS('Solver'!$C$7-orc_cylr_p)>0.000001,"
+                    "=IF(OR(NOT(orc_fp),UPPER('Solver'!$C$4)<>\"Y\","
+                    "ABS('Solver'!$C$7-orc_cylr_p)>0.000001,"
                     "'Solver'!$C$8<>DATE(nr_PlanYear,4,1)),\"N/A\","
                     f'IF(ABS($E{r}-$D{r})<=$F{r},"PASS","FAIL"))', align=ALIGN_C, bold=True)
         elif kind == "SOLVERB":
@@ -571,8 +572,9 @@ def build_checks(ctx: Ctx):
             formula(ws, f"E{r}", "='Solver'!$G$32", fmt=FMT_PCT, align=ALIGN_C)
             put(ws, f"F{r}", 1e-6, fnt=font(GREY_DARK, size=9), align=ALIGN_C)
             formula(ws, f"G{r}",
-                    "=IF(OR(NOT(orc_fp),'Solver'!$C$26<>0.05),\"N/A\","
-                    f'IF(ABS($E{r}-$D{r})<=$F{r},"PASS","FAIL"))', align=ALIGN_C, bold=True)
+                    "=IF(OR(NOT(orc_fp),UPPER('Solver'!$C$4)<>\"Y\",'Solver'!$C$26<>0.05),"
+                    f'"N/A",IF(ABS($E{r}-$D{r})<=$F{r},"PASS","FAIL"))',
+                    align=ALIGN_C, bold=True)
         else:
             formula(ws, f"D{r}", exp_f, fmt=fmt_num, align=ALIGN_C)
             formula(ws, f"E{r}", act_f, fmt=fmt_num, align=ALIGN_C)
