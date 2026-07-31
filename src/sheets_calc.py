@@ -381,8 +381,13 @@ def build_calc(ctx: Ctx):
     f_grey(ws, f"M{t}", "=IF(COUNTIF(se_state,slv_state)=0,0,MATCH(slv_state,se_state,0))",
            FMT_INT)
     f_grey(ws, f"N{t}", f"=IF($M${t}=0,0,INDEX(se_sum,$M${t}))", "0.00")
+    # first="rl_firsttaken": the split flag must be STATUS-AWARE — the plain
+    # rl_first is filter-blind, and a planned row earlier in a taken row's
+    # cohort month would steal the flag, zero the L column, and silently drop
+    # the taken change from that cohort's W0 (D58; oracle filters first).
     blk = write_cohort_block(
-        ws, ctx, t + 3, LogRefs(key_cond="slv_key", taken_only=True),
+        ws, ctx, t + 3, LogRefs(key_cond="slv_key", taken_only=True,
+                                first="rl_firsttaken"),
         t_ref="nr_TermMonths", srow_ref=f"$M${t}", ssum_ref=f"$N${t}",
         anchors=None, include_mod=False, header=True, header_row_at=t + 2)
     bf, bl = blk["first"], blk["last"]

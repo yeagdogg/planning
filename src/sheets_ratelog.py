@@ -39,8 +39,8 @@ def build_rate_log(ctx: Ctx):
 
     header_row(ws, L.RL_HDR, 1, rl_headers(), widths=[9, 8, 11, 9, 12, 12, 13, 34])
     ws.row_dimensions[L.RL_HDR].height = 30
-    header_row(ws, L.RL_HDR, 10, RL_HELPER_HEADERS + ["Plan rank"],
-               widths=[14, 8, 8, 11, 12, 10, 9, 7, 11, 6, 6], fill=FILL_GREY,
+    header_row(ws, L.RL_HDR, 10, RL_HELPER_HEADERS + ["Plan rank", "1st taken"],
+               widths=[14, 8, 8, 11, 12, 10, 9, 7, 11, 6, 6, 7], fill=FILL_GREY,
                fnt=font(GREY_DARK, bold=True, size=9))
     put(ws, f"J{L.RL_HDR - 1}", "engine helpers (formulas — do not edit)", fnt=F_SMALL_IT)
     header_row(ws, L.RL_HDR, 22,
@@ -50,7 +50,6 @@ def build_rate_log(ctx: Ctx):
                fnt=font(GREY_DARK, bold=True, size=9))
     put(ws, f"V{L.RL_HDR - 1}", "live results (formulas — do not edit)", fnt=F_SMALL_IT)
     ws.column_dimensions["I"].width = 2
-    ws.column_dimensions["U"].width = 2
 
     # share-of-year machinery for column X (exact, via the selected combo's
     # Rate Engine block; rows of other combos show blank)
@@ -93,7 +92,18 @@ def build_rate_log(ctx: Ctx):
                 f'=IF(OR($C{r}="",$E{r}<>"planned"),0,'
                 f'COUNTIFS($J${L.RL_FIRST}:$J{r},$J{r},$E${L.RL_FIRST}:$E{r},"planned"))',
                 fmt=FMT_INT)
-        for cL in "JKLMNOPQRST":
+        # first change among the TAKEN rows of this key + cohort month. The
+        # plain first-flag (Q) is status-blind, so a planned row earlier in
+        # the month would steal it and the Solver's taken-only base would
+        # silently drop the taken change from that cohort (D58).
+        formula(ws, f"U{r}",
+                f'=IF(OR($C{r}="",$E{r}<>"taken"),0,'
+                f'IF(AND(COUNTIFS(rl_key,$J{r},rl_effmonth,$M{r},rl_eff,"<"&$C{r},'
+                f'rl_status,"taken")=0,'
+                f"COUNTIFS($J${L.RL_FIRST}:$J{r},$J{r},$M${L.RL_FIRST}:$M{r},$M{r},"
+                f'$C${L.RL_FIRST}:$C{r},$C{r},$E${L.RL_FIRST}:$E{r},"taken")=1),1,0))',
+                fmt=FMT_INT)
+        for cL in "JKLMNOPQRSTU":
             ws[f"{cL}{r}"].font = font(GREY_DARK, size=9)
         # live echo columns V:Y — the same-row feedback loop
         formula(ws, f"V{r}",
@@ -136,6 +146,8 @@ def build_rate_log(ctx: Ctx):
         "rl_dup": ("R", "Helper: 1 when >1 change shares a BU|State cohort month"),
         "rl_seq": ("S", "Helper: chronological rank of the change within its BU|State key"),
         "rl_prank": ("T", "Helper: chronological rank among the key's PLANNED rows"),
+        "rl_firsttaken": ("U", "Helper: 1 for the first TAKEN change in its key + cohort "
+                               "month (the Solver's status-aware split flag, D58)"),
     }
     for name, (colL, desc) in rl_names.items():
         ctx.define(name, SHEETS.RATE_LOG, f"${colL}${L.RL_FIRST}:${colL}${L.RL_LAST}", desc)

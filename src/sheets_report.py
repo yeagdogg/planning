@@ -824,8 +824,10 @@ def build_methodology(ctx: Ctx):
          "solves in closed form: E(r) = (C_pre + (1+r) C_post) / D. The base index W0 uses "
          "taken rows only — the Solver replaces the ENTIRE planned program with one action at "
          "the chosen date (D13). When a taken change shares the effective month, the split "
-         "follows the engine's first-change-date blend exactly (D31). Guard rails warn on "
-         "thin post-effective exposure and on rates beyond the configured reasonability bound.",
+         "follows the engine's first-change-date blend exactly (D31) — measured at the first "
+         "TAKEN change: planned rows never enter the base, so an earlier planned row in the "
+         "same month cannot steal the split (D58). Guard rails warn on thin post-effective "
+         "exposure and on rates beyond the configured reasonability bound.",
          ]),
         ("8. Attribution (E2)", [
          "Sequential multiplicative decomposition of (actual - plan) CY LR, in the stated "

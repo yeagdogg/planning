@@ -23,6 +23,7 @@ from src.engine import (
     net_program_plan_lr,
     required_m1,
     run_bridge,
+    solve_rate_for_target,
     suggest_net_rate,
 )
 
@@ -163,6 +164,50 @@ def test_exact_equivalence_no_history_flat_mods():
     lr_prog = net_program_plan_lr(P, combo, dt.date(P, 1, 1), r, m1p)
     lr_net = run_bridge(P, combo, "monthly").cy_lr_p
     assert lr_prog == pytest.approx(lr_net, abs=1e-12)
+
+
+def _brute_force_solver_r(combo, target, eff, lo=-0.4, hi=0.4):
+    """Numerically invert the D13 counterfactual (taken rows + ONE planned
+    action at eff) through the full forward engine — the independent yardstick
+    for the closed form."""
+    taken = tuple(rc for rc in combo.rate_changes if rc.status == "taken")
+
+    def f(r):
+        cb = replace(combo, rate_changes=taken
+                     + (RateChange(eff, r, "planned", False, 1.0),))
+        return run_bridge(P, cb, "monthly").cy_lr_p - target
+
+    a, b = lo, hi
+    fa = f(a)
+    for _ in range(200):
+        mid = (a + b) / 2.0
+        fm = f(mid)
+        if fa * fm <= 0:
+            b = mid
+        else:
+            a, fa = mid, fm
+    return (a + b) / 2.0
+
+
+@pytest.mark.parametrize("eff", [dt.date(P, 4, 1), dt.date(P, 6, 25)])
+def test_solver_mixed_status_month_matches_brute_force(eff):
+    """D58 oracle pin: PLANNED rows earlier in the same cohort month as TAKEN
+    rows (one mixed month in P-1, one in P containing the solve date itself)
+    must not disturb the taken-only base. The closed form must equal a
+    brute-force bisection of the same D13 counterfactual through the full
+    forward engine."""
+    mixed = (
+        RateChange(dt.date(P - 2, 7, 1), 0.04, "taken", True),
+        RateChange(dt.date(P - 1, 6, 5), 0.03, "planned", False),  # steals rl_first
+        RateChange(dt.date(P - 1, 6, 20), 0.02, "taken", False),   # must still blend
+        RateChange(dt.date(P, 6, 5), 0.025, "planned", False),     # mixed month in P
+        RateChange(dt.date(P, 6, 20), 0.015, "taken", False),
+    )
+    combo = _combo(mixed, net=None)
+    target = 0.62
+    closed = solve_rate_for_target(P, combo, target, eff).required_change
+    brute = _brute_force_solver_r(combo, target, eff)
+    assert closed == pytest.approx(brute, abs=1e-9)
 
 
 def test_by_month_rows_are_coherent():

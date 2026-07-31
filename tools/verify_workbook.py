@@ -543,6 +543,30 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
     run("solver custom", {("Solver", "C7"): 0.61, ("Solver", "C8"): dt.date(p, 5, 15),
                           ("Solver", "C9"): 0.8}, a8)
 
+    # 8b. mixed-status cohort month (D58): a PLANNED row earlier in the same
+    # month as a TAKEN row must not steal the solver base's first-change split
+    mix = (engine.RateChange(dt.date(p - 1, 6, 5), 0.03, "planned", False),
+           engine.RateChange(dt.date(p - 1, 6, 20), 0.02, "taken", False))
+    mix_combo = replace(base_combo, rate_changes=base_combo.rate_changes + mix)
+    mix_r = engine.solve_rate_for_target(
+        p, mix_combo, base_m.cy_lr_p, dt.date(p, 4, 1)).required_change
+    mix_r0 = L.RL_FIRST + len(rate_rows)
+    muts_mix = {}
+    for i, rc in enumerate(mix):
+        rr_ = mix_r0 + i
+        muts_mix.update({("Rate Log", f"A{rr_}"): we["bu"],
+                         ("Rate Log", f"B{rr_}"): we["state"],
+                         ("Rate Log", f"C{rr_}"): rc.effective,
+                         ("Rate Log", f"D{rr_}"): rc.filed_pct,
+                         ("Rate Log", f"E{rr_}"): rc.status,
+                         ("Rate Log", f"F{rr_}"): "N"})
+
+    def a8b(wb):
+        check("[mixed-status month] solver required r ties oracle (D58)",
+              approx(nval(wb, "nr_SolverR"), mix_r, 1e-9),
+              f"wb={nval(wb, 'nr_SolverR')} oracle={mix_r}")
+    run("mixed-status cohort month (solver base)", muts_mix, a8b)
+
     # 9. attribution actuals
     actuals = [engine.PlannedActual(dt.date(p, 4, 1), 0.04, dt.date(p, 6, 1))]
     mods_act = replace(base_combo.mods, m1=0.90)
