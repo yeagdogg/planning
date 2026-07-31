@@ -1096,6 +1096,84 @@ def net_program_plan_lr(
 
 
 # ---------------------------------------------------------------------------
+# Program flow decomposition (DECISIONS.md D59)
+#
+# The DESCRIPTIVE twin of the net delivery decomposition: no target, no new
+# change — just what the program AS LOGGED is delivering on renewals, month
+# by month:
+#
+#   delivered(m) = [W(m)/W(m-12)] x [M_w(m)/M_w(m-12)]
+#
+# Program basis: every log row enters as logged — taken rows at filed %,
+# planned rows at filed % x achievement (the default MonthlyEngine path).
+# Net-mode supersession is deliberately NOT applied: for net combos the gap
+# between program-basis delivery and the asserted (1+x) is the exhibit's
+# point (the Net Delivery tab closes it). The locked leg repeats the rate
+# leg on TAKEN rows only (the Solver's D13 filter, applied FIRST so a
+# planned row cannot steal a taken month's day-blend — D58).
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ProgramFlowResult:
+    plan_year: int
+    mod_on: bool                    # mod adjustment in force (else rate-only)
+    rows: list                      # 24 dicts, Jan P .. Dec P+1 (YoY-able months)
+    avg_rate_ratio: float           # sum w(m)*W(m)/W(m-12) / sum w(m), Jan..Dec P
+    avg_mod_ratio: float | None     # same with M_w; None when mod adjustment off
+    avg_delivered_ratio: float      # rate ratio x mod ratio (rate-only when off)
+
+
+def program_flow_by_month(plan_year: int, combo: ComboInputs) -> ProgramFlowResult:
+    """Monthly written-basis YoY decomposition of the program as logged.
+
+    Rows cover the 24 months Jan P .. Dec P+1 (each has a modeled year-ago
+    base). Per row: ``rate_leg`` = W(m)/W(m-12)-1, ``mod_leg`` =
+    M_w(m)/M_w(m-12)-1 (None when the mod adjustment is off), ``delivered`` =
+    the product-1, ``locked_leg`` = the rate leg on taken rows only, and
+    ``planned_residual`` = (1+rate_leg)/(1+locked_leg)-1.
+
+    The averages are w-weighted means of the monthly RATIOS over Jan..Dec P
+    (the Net Delivery delivered-average convention, mirrored by the workbook's
+    per-block SUMPRODUCT results cells) — NOT the E_CY aggregate-ratio
+    convention used for calendar-year earnings.
+    """
+    eng = MonthlyEngine(plan_year, combo)
+    taken = tuple(rc for rc in combo.rate_changes if rc.status == STATUS_TAKEN)
+    eng_tk = MonthlyEngine(plan_year, combo, changes_override=taken)
+    mod_on = combo.mod_adjustment_enabled
+
+    rows = []
+    num_r = num_m = num_d = den = 0.0
+    for j in range(24):
+        mi = month_index(plan_year, 1) + j
+        wm = eng.w(mi)
+        rate_ratio = eng.written_index(mi) / eng.written_index(mi - 12)
+        mod_ratio = eng.written_mod(mi) / eng.written_mod(mi - 12)
+        locked_ratio = eng_tk.written_index(mi) / eng_tk.written_index(mi - 12)
+        delivered_ratio = rate_ratio * (mod_ratio if mod_on else 1.0)
+        rows.append(dict(
+            mi=mi, w=wm,
+            rate_leg=rate_ratio - 1.0,
+            mod_leg=(mod_ratio - 1.0) if mod_on else None,
+            delivered=delivered_ratio - 1.0,
+            locked_leg=locked_ratio - 1.0,
+            planned_residual=rate_ratio / locked_ratio - 1.0,
+        ))
+        if j < 12:  # plan-year averages only
+            num_r += wm * rate_ratio
+            num_m += wm * mod_ratio
+            num_d += wm * delivered_ratio
+            den += wm
+    return ProgramFlowResult(
+        plan_year=plan_year, mod_on=mod_on, rows=rows,
+        avg_rate_ratio=num_r / den,
+        avg_mod_ratio=(num_m / den) if mod_on else None,
+        avg_delivered_ratio=num_d / den,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Enhancement E2: plan-vs-actual attribution
 # ---------------------------------------------------------------------------
 
