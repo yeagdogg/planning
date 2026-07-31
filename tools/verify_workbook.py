@@ -297,6 +297,43 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
           approx(ss[f"U{tot_row}"].value, tot_l27 / tot_ep, 1e-9)
           and approx(ss[f"Y{tot_row}"].value, tot_l28 / tot_ep, 1e-9)
           and approx(ss[f"B{tot_row}"].value, tot_ep, 1e-6))
+    # Net Delivery (D57): the showcase net combo's closed forms, monthly grid,
+    # and reconciliation must tie the oracle at the default 4/1/P date
+    if len(cfg.states) > 8:
+        from src.sheets_netdelivery import block_top
+        net_state = cfg.states[8]
+        net_row = next((x for x in lr_rows
+                        if x["bu"] == "BU-C" and x["state"] == net_state), None)
+        if net_row is not None and net_row.get("netp") is not None:
+            ncmb = sample_to_combo(cfg, lob, net_row, rate_rows)
+            d0 = dt.date(p, 4, 1)
+            r_star, comp = engine.suggest_net_rate(p, ncmb, d0)
+            m1p = engine.required_m1(p, ncmb, d0, r_star)
+            months = engine.net_delivery_by_month(p, ncmb, d0, r_star)
+            prog = engine.net_program_plan_lr(p, ncmb, d0, r_star, m1p)
+            ncs = wb["_netcalc"]
+            si = list(cfg.states).index(net_state)
+            t = block_top(si)
+            rr = t + 51
+            check("[net delivery] suggested r* ties oracle",
+                  approx(ncs[f"E{rr}"].value, r_star, 1e-9),
+                  f"wb={ncs[f'E{rr}'].value} oracle={r_star}")
+            check("[net delivery] implied year-end mod M_1' ties oracle",
+                  approx(ncs[f"H{rr}"].value, m1p, 1e-9))
+            check("[net delivery] booked-program plan LR ties oracle",
+                  approx(ncs[f"N{rr}"].value, prog, 1e-9))
+            bad_m = sum(
+                0 if (approx(ncs[f"AG{t + 27 + j}"].value, mr["rate_leg"], 1e-9)
+                      and approx(ncs[f"AH{t + 27 + j}"].value,
+                                 mr["price_leg_required"], 1e-9)
+                      and approx(ncs[f"AI{t + 27 + j}"].value, mr["m_required"], 1e-9))
+                else 1
+                for j, mr in enumerate(months))
+            check("[net delivery] all 12 grid months tie oracle (3 measures each)",
+                  bad_m == 0, f"{bad_m} mismatched months")
+            check("[net delivery] solve residual is zero",
+                  approx(ncs[f"P{rr}"].value, 0.0, 1e-9))
+
     # live dimension lists (D42): _lists uniques match the seeded roster
     ls = wb["_lists"]
     got_bus = [ls[f"A{3 + i}"].value for i in range(len(cfg.business_units))]
@@ -639,6 +676,95 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
                   and approx(ss[f"U{zz_row}"].value, ren_m.cy_lr_p, 1e-9),
                   f"EP={ss[f'B{zz_row}'].value} U={ss[f'U{zz_row}'].value}")
     run("in-book rename BU/state", muts, a9f)
+
+    # 9g. Net Delivery exercises (D57)
+    if len(st) > 8:
+        from src.sheets_netdelivery import ND_FIRST, block_top
+        net_state = st[8]
+        net_row = next((x for x in lr_rows
+                        if x["bu"] == "BU-C" and x["state"] == net_state), None)
+        if net_row is not None and net_row.get("netp") is not None:
+            ncmb = sample_to_combo(cfg, lob, net_row, rate_rows)
+            si8 = list(st).index(net_state)
+            t8 = block_top(si8)
+            rr8 = t8 + 51
+            row_si8 = ND_FIRST + si8
+            d0 = dt.date(p, 4, 1)
+
+            # (i) net selection switched ON for the worked example combo
+            we_net = replace(base_combo, net_sel_p=0.08)
+            r_we, _ = engine.suggest_net_rate(p, we_net, d0)
+            t0 = block_top(0)
+
+            def a9g1(wb):
+                got = wb["_netcalc"][f"E{t0 + 51}"].value
+                check("[net delivery: WE net 8%] suggested r* ties oracle",
+                      approx(got, r_we, 1e-9), f"wb={got} oracle={r_we}")
+            run("net delivery: worked example net-on",
+                {("Inputs", f"Q{we_row_xl}"): 0.08, ("Net Delivery", "B5"): "BU-A"},
+                a9g1)
+
+            # (ii) a mid-month state date exercises the day-blend p
+            d_mid = dt.date(p, 5, 15)
+            r_mid, _ = engine.suggest_net_rate(p, ncmb, d_mid)
+
+            def a9g2(wb):
+                got = wb["_netcalc"][f"E{rr8}"].value
+                check("[net delivery: 5/15 date] r* ties oracle (day-blend)",
+                      approx(got, r_mid, 1e-9), f"wb={got} oracle={r_mid}")
+            run("net delivery: mid-month date",
+                {("Net Delivery", f"D{row_si8}"): d_mid}, a9g2)
+
+            # (iii) D's month co-occupied by a NEW taken row (the affine-form
+            # regression case D31/D57) + an r override driving the dual solve
+            inj = engine.RateChange(dt.date(p, 6, 10), 0.02, "taken", False)
+            ncmb3 = replace(ncmb, rate_changes=ncmb.rate_changes + (inj,))
+            d_co = dt.date(p, 6, 20)
+            r_co, _ = engine.suggest_net_rate(p, ncmb3, d_co)
+            m1_ovr = engine.required_m1(p, ncmb3, d_co, 0.03)
+            empty_rl = L.RL_FIRST + len(rate_rows)
+            muts3 = {("Net Delivery", f"D{row_si8}"): d_co,
+                     ("Net Delivery", f"E{row_si8}"): 0.03,
+                     ("Rate Log", f"A{empty_rl}"): "BU-C",
+                     ("Rate Log", f"B{empty_rl}"): net_state,
+                     ("Rate Log", f"C{empty_rl}"): inj.effective,
+                     ("Rate Log", f"D{empty_rl}"): 0.02,
+                     ("Rate Log", f"E{empty_rl}"): "taken",
+                     ("Rate Log", f"F{empty_rl}"): "N"}
+
+            def a9g3(wb):
+                ncs = wb["_netcalc"]
+                check("[net delivery: co-occupied month] r* ties oracle (affine A/B)",
+                      approx(ncs[f"E{rr8}"].value, r_co, 1e-9),
+                      f"wb={ncs[f'E{rr8}'].value} oracle={r_co}")
+                check("[net delivery: r override] M_1' ties oracle dual solve",
+                      approx(ncs[f"H{rr8}"].value, m1_ovr, 1e-9),
+                      f"wb={ncs[f'H{rr8}'].value} oracle={m1_ovr}")
+                check("[net delivery] override is the change in force",
+                      approx(ncs[f"F{rr8}"].value, 0.03, 1e-12))
+            run("net delivery: co-occupied month + override", muts3, a9g3)
+
+            # (iv) master mod toggle OFF -> rate-only target, pricing dashed
+            r_off, _ = engine.suggest_net_rate(
+                p, replace(ncmb, mod_adjustment_enabled=False), d0)
+
+            def a9g4(wb):
+                ncs = wb["_netcalc"]
+                check("[net delivery: mod master OFF] rate-only r* ties oracle",
+                      approx(ncs[f"E{rr8}"].value, r_off, 1e-9),
+                      f"wb={ncs[f'E{rr8}'].value} oracle={r_off}")
+                check("[net delivery: mod master OFF] pricing grid goes dark",
+                      ncs[f"AH{t8 + 27}"].value in (None, ""))
+            run("net delivery: mod master OFF", {("Control", "C13"): "OFF"}, a9g4)
+
+            # (v) fabrication guard: the All view shows nothing computable
+            def a9g5(wb):
+                nd_ws = wb["Net Delivery"]
+                check("[net delivery: All view] suggestions blank, never fabricated",
+                      nd_ws[f"F{row_si8}"].value in (None, ""))
+                check("[net delivery: All view] Checks still ALL PASS",
+                      nval(wb, "ck_overall") == "ALL CHECKS PASS")
+            run("net delivery: All view", {("Net Delivery", "B5"): "All"}, a9g5)
 
     # 10. plan-year change (fingerprint must go N/A, engines recompute cleanly)
     p2 = p + 1

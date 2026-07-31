@@ -752,6 +752,9 @@ def build_state_summary(ctx: Ctx):
     d += 1
     jump(ws, f"A{d}", "'Read Me'!A1",
          "Column definitions and the full glossary: Read Me >")
+    d += 1
+    jump(ws, f"A{d}", "'Net Delivery'!A1",
+         "Net-target combos: how the target is delivered month by month — Net Delivery >")
 
     ws.column_dimensions["AA"].width = 6
     ws.column_dimensions["AB"].width = 10

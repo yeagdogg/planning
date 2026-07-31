@@ -309,6 +309,32 @@ def build_netcalc(ctx: Ctx):
     # names for the band block + the residual aggregate
     tb = block_top(nd)
     ctx.define("nd_band_top", NC, f"$A${tb}", "Band block anchor (state echo)")
+    # cross-checks on the band combo (the one legitimate computed-row INDEX):
+    # (a) live-filter year-ago N must equal the combo's full-log _calc block N
+    #     (planned rows on/after 1/1/P can never enter P-1 cohorts — D57);
+    # (b) the engine's own net path must satisfy T(m)/T(m-12) = 1 + x.
+    calc_base = (f"{L.CALC_BLOCK_FIRST}+(MATCH($B${tb},calc_key,0)-1)"
+                 f"*{L.CALC_BLOCK_STRIDE}")
+    rbb = tb + 51
+    for j in range(12):
+        r = tb + 3 + 12 + j            # year-ago cohort rows
+        formula(ws, f"AK{r}",
+                f"=IF($D${tb}=0,0,ABS($N{r}"
+                f"-INDEX('_calc'!$N:$N,{calc_base}+{15 + j})))", fmt="0.0000000000")
+        rp = tb + 3 + 24 + j           # plan cohort rows
+        formula(ws, f"AL{rp}",
+                f"=IF(OR($D${tb}=0,$F${tb}=0),0,"
+                f"ABS(INDEX('_calc'!$T:$T,{calc_base}+{27 + j})"
+                f"/INDEX('_calc'!$T:$T,{calc_base}+{15 + j})-(1+$E${tb})))",
+                fmt="0.0000000000")
+        ws[f"AK{r}"].font = font(GREY_DARK, size=8)
+        ws[f"AL{rp}"].font = font(GREY_DARK, size=8)
+    formula(ws, f"Q{rbb}", f"=MAX($AK${tb + 15}:$AK${tb + 26})", fmt="0.0000000000")
+    ctx.define("nd_YagoDiff", NC, f"$Q${rbb}",
+               "Max |live-filter year-ago index - full-log _calc index| (band combo)")
+    formula(ws, f"R{rbb}", f"=MAX($AL${tb + 27}:$AL${tb + 38})", fmt="0.0000000000")
+    ctx.define("nd_NetSelfChk", NC, f"$R${rbb}",
+               "Max |T(m)/T(m-12) - (1+x)| on the engine's own net path (band combo)")
     resid_cells = ",".join(f"$P${block_top(i) + 51}" for i in range(nd + 1))
     formula(ws, "J1", f"=MAX({resid_cells})", fmt="0.0000000000")
     ctx.define("nd_MaxResid", NC, "$J$1",
@@ -441,6 +467,9 @@ def build_net_delivery(ctx: Ctx):
     ctx.define("ndd_filed", SHEETS.NET_DELIVERY,
                f"$E${first}:$E${first + nd - 1}",
                "Per-state filed % overrides (blank = suggested)")
+    ctx.define("ndd_flags", SHEETS.NET_DELIVERY,
+               f"$N${first}:$N${first + nd - 1}",
+               "Per-state feasibility flags (empty = clean; — = not on a net selection)")
     put(ws, f"A{tot + 2}",
         "Dates and overrides align to the roster rows above (state-level filing "
         "calendar); re-check them after renaming states. The Solver answers a "

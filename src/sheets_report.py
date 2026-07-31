@@ -529,6 +529,16 @@ def build_checks(ctx: Ctx):
        '=SUMPRODUCT((rl_status="taken")*(rl_ach<>"")*(rl_ach<>1)*1)', 0, "WARN"))
     A(("Structure", "Every distinct state fits on the State Summary display", "=0",
        f"=MAX(0,lst_state_cnt-{len(ctx.cfg.states) + 3})", 0, "FAIL"))
+    # ---- appended v2.2 checks (Net Delivery, D57) ----
+    A(("Structure", "Net Delivery closed forms land on the target (max solve residual)",
+       "=0", "=nd_MaxResid", 1e-9, "FAIL"))
+    A(("Structure", "Net Delivery year-ago base = full-log engine (band combo)",
+       "=0", "=nd_YagoDiff", 1e-9, "FAIL"))
+    A(("Structure", "Engine net path satisfies T(m)/T(m-12) = 1 + x (band combo)",
+       "=0", "=nd_NetSelfChk", 1e-9, "FAIL"))
+    A(("Advisory", "Net Delivery feasibility flags in view (mod/rate bounds, thin share)",
+       "=0", '=IF(nd_BU="All",0,SUMPRODUCT((ndd_flags<>"")*(ndd_flags<>"—")*1))',
+       0, "WARN"))
 
     header_row(ws, L.CK_HDR, 1,
                ["#", "Category", "Check", "Expected", "Actual", "Tolerance", "Status",
@@ -786,6 +796,29 @@ def build_methodology(ctx: Ctx):
          "counterfactual (on-sheet notes flag this); the D-net scenario lever varies the "
          "selection itself. Attribution suspends its premium-side steps for net-mode combos.",
          ]),
+        ("6c. Net Delivery decomposition (D57)", [
+         "For a combo on a net selection, the target's month-by-month delivery on "
+         "renewals factors exactly (the indication mod cancels): delivered(m) = "
+         "[W(m)/W(m-12)] x [M(m)/M(m-12)]. The rate leg's base is the LIVE rows — "
+         "taken rows plus planned rows effective before 1/1/P (only planned rows "
+         "on/after 1/1/P are superseded; this deliberately differs from the Solver's "
+         "taken-only D13 base). One new change r at the state's chosen date D enters "
+         "each month affinely, W_new(m) = A(m) + B(m) x r, with the D31 first-in-month "
+         "day-blend at the earlier of D and the first live in-month change.",
+         "The suggested filed change solves the WRITTEN-basis average in closed form: "
+         "with mods on the already-projected path, r* = ((1+x) x SUM w - C0) / C1. The "
+         "dual solve expresses the pricing side as one number: plan-month mods are "
+         "affine in M_1 along the anchor path, so the year-end written mod M_1' that "
+         "delivers the target given r also solves in one sum. The required pricing "
+         "change by month is (1+x)/(1+rate leg) - 1 — the Net Delivery grids.",
+         "Constraints and honesty: D must lie inside the plan year (a prior-year "
+         "vehicle also changes the year-ago comparison base — enter it in the Rate "
+         "Log); the P+1 selection is out of scope (its year-ago base is itself the "
+         "asserted net path); with the mod adjustment off the target is rate-only and "
+         "pricing columns show a dash; the written-basis solve is disclosed against "
+         "the earned shape via the 'plan LR if you book this program' reconciliation "
+         "(a single filed change cannot match both averages at once).",
+         ]),
         ("7. Solver (E1)", [
          "The CY earned index is linear in a single unknown change r, so the required rate "
          "solves in closed form: E(r) = (C_pre + (1+r) C_post) / D. The base index W0 uses "
@@ -929,6 +962,8 @@ READ_ME_GUIDE = [
                   "contribution to the book, the portfolio bridge."),
     ("State Summary", "One row per state with a BU filter ('All' = EP-weighted) — the "
                       "leadership exhibit."),
+    ("Net Delivery", "For net-target combos: the month-by-month rate leg and the pricing "
+                     "change that satisfies the target, plus the suggested filing."),
     ("Bridge", "The selected combo's answer: projected LR -> CY plan LR, factor by factor."),
     ("Walkthrough", "The fully worked example — every calculation for the selected combo, "
                     "start to finish."),
