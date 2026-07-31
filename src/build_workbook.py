@@ -46,6 +46,8 @@ class SHEETS:
     CONTROL = "Control"
     INPUTS = "Inputs"
     RATE_LOG = "Rate Log"          # created by the C6 rate-log split
+    NET_DELIVERY = "Net Delivery"  # D57 net-target decomposition
+    NETCALC = "_netcalc"           # its hidden engine blocks
     RATE_ENGINE = "Rate Engine"
     MOD_ENGINE = "Mod Engine"
     BRIDGE = "Bridge"
@@ -508,12 +510,13 @@ class Ctx:
 # answers -> the selected-combo deep-dive chain -> what-ifs -> audit -> docs.
 SHEET_ORDER = [
     SHEETS.README, SHEETS.CONTROL, SHEETS.INPUTS, SHEETS.RATE_LOG,
-    SHEETS.PORTFOLIO, SHEETS.STATE_SUMMARY, SHEETS.BRIDGE, SHEETS.WALKTHROUGH,
-    SHEETS.ONE_PAGER, SHEETS.FLOW, SHEETS.SCENARIOS, SHEETS.COMPARE,
-    SHEETS.SOLVER, SHEETS.ATTRIBUTION, SHEETS.RATE_ENGINE, SHEETS.MOD_ENGINE,
-    SHEETS.CHECKS, SHEETS.METHODOLOGY, SHEETS.LISTS, SHEETS.CALC, SHEETS.ORACLE,
+    SHEETS.PORTFOLIO, SHEETS.STATE_SUMMARY, SHEETS.NET_DELIVERY, SHEETS.BRIDGE,
+    SHEETS.WALKTHROUGH, SHEETS.ONE_PAGER, SHEETS.FLOW, SHEETS.SCENARIOS,
+    SHEETS.COMPARE, SHEETS.SOLVER, SHEETS.ATTRIBUTION, SHEETS.RATE_ENGINE,
+    SHEETS.MOD_ENGINE, SHEETS.CHECKS, SHEETS.METHODOLOGY,
+    SHEETS.LISTS, SHEETS.CALC, SHEETS.NETCALC, SHEETS.ORACLE,
 ]
-HIDDEN_SHEETS = {SHEETS.LISTS, SHEETS.CALC, SHEETS.ORACLE}
+HIDDEN_SHEETS = {SHEETS.LISTS, SHEETS.CALC, SHEETS.NETCALC, SHEETS.ORACLE}
 
 
 # ---------------------------------------------------------------------------
@@ -523,7 +526,8 @@ HIDDEN_SHEETS = {SHEETS.LISTS, SHEETS.CALC, SHEETS.ORACLE}
 
 def build(cfg: Config, lob_name: str) -> Workbook:
     from . import (sheets_briefs, sheets_calc, sheets_engine, sheets_inputs,
-                   sheets_main, sheets_ratelog, sheets_report, sheets_walkthrough)
+                   sheets_main, sheets_netdelivery, sheets_ratelog, sheets_report,
+                   sheets_walkthrough)
 
     Layout.configure(cfg)
     lob = cfg.lob(lob_name)
@@ -577,6 +581,8 @@ def build(cfg: Config, lob_name: str) -> Workbook:
     sheets_calc.build_calc(ctx)
     sheets_main.build_portfolio(ctx)
     sheets_main.build_state_summary(ctx)
+    sheets_netdelivery.build_netcalc(ctx)
+    sheets_netdelivery.build_net_delivery(ctx)
     sheets_main.build_scenarios(ctx)
     sheets_main.build_solver(ctx)
     sheets_main.build_attribution(ctx)
