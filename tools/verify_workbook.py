@@ -331,11 +331,15 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
                         if x["bu"] == _bu(cfg, 2) and x["state"] == net_state), None)
         if net_row is not None and net_row.get("netp") is not None:
             ncmb = sample_to_combo(cfg, lob, net_row, rate_rows)
-            d0 = dt.date(p, 4, 1)
+            # D63: with no typed override the tab adopts the PLANNED plan-year
+            # filing (date and effective %); the suggestion is still computed
+            planned = engine.planned_change_in_plan_year(p, ncmb)
+            d0 = planned[0] if planned else dt.date(p, 4, 1)
             r_star, comp = engine.suggest_net_rate(p, ncmb, d0)
-            m1p = engine.required_m1(p, ncmb, d0, r_star)
-            months = engine.net_delivery_by_month(p, ncmb, d0, r_star)
-            prog = engine.net_program_plan_lr(p, ncmb, d0, r_star, m1p)
+            r_force = planned[1] if planned else r_star
+            m1p = engine.required_m1(p, ncmb, d0, r_force)
+            months = engine.net_delivery_by_month(p, ncmb, d0, r_force)
+            prog = engine.net_program_plan_lr(p, ncmb, d0, r_force, m1p)
             ncs = wb["_netcalc"]
             si = list(cfg.states).index(net_state)
             t = block_top(si)
@@ -343,6 +347,15 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
             check("[net delivery] suggested r* ties oracle",
                   approx(ncs[f"E{rr}"].value, r_star, 1e-9),
                   f"wb={ncs[f'E{rr}'].value} oracle={r_star}")
+            # D63: with both inputs blank the change in force is the planned
+            # plan-year filing from the rate log, at its EFFECTIVE percent
+            check("[net delivery] default change in force = the planned filing (D63)",
+                  planned is not None and approx(ncs[f"F{rr}"].value, r_force, 1e-9),
+                  f"wb={ncs[f'F{rr}'].value} oracle={r_force} planned={planned}")
+            check("[net delivery] default date = the planned filing's date (D63)",
+                  ncs[f"O{t}"].value is not None
+                  and getattr(ncs[f"O{t}"].value, "date", lambda: ncs[f"O{t}"].value)() == d0,
+                  f"wb={ncs[f'O{t}'].value} oracle={d0}")
             check("[net delivery] implied year-end mod M_1' ties oracle",
                   approx(ncs[f"H{rr}"].value, m1p, 1e-9))
             check("[net delivery] booked-program plan LR ties oracle",
@@ -915,10 +928,59 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
             def a9g5(wb):
                 nd_ws = wb["Net Delivery"]
                 check("[net delivery: All view] suggestions blank, never fabricated",
-                      nd_ws[f"F{row_si8}"].value in (None, ""))
+                      nd_ws[f"H{row_si8}"].value in (None, ""))
                 check("[net delivery: All view] Checks still ALL PASS",
                       nval(wb, "ck_overall") == "ALL CHECKS PASS")
             run("net delivery: All view", {("Net Delivery", "B5"): "All"}, a9g5)
+
+            # (vi) D63: the default filing tracks the RATE LOG. Move the
+            # showcase combo's planned plan-year row and the tab must follow;
+            # delete it and the tab must fall back to the suggestion.
+            pl_i = next((k for k, rr_ in enumerate(rate_rows)
+                         if rr_["bu"] == _bu(cfg, 2) and rr_["state"] == net_state
+                         and rr_["status"] == "planned"
+                         and rr_["eff"].year == p), None)
+            if pl_i is not None:
+                pl_xl = L.RL_FIRST + pl_i
+                d_new = dt.date(p, 8, 15)
+                moved = replace(ncmb, rate_changes=tuple(
+                    engine.RateChange(d_new, 0.07, "planned", False, 1.0)
+                    if (rc.status == "planned" and rc.effective.year == p) else rc
+                    for rc in ncmb.rate_changes))
+                m1_moved = engine.required_m1(p, moved, d_new, 0.07)
+
+                def a9g6(wb):
+                    ncs = wb["_netcalc"]
+                    check("[net delivery: moved planned row] change in force follows "
+                          "the rate log", approx(ncs[f"F{rr8}"].value, 0.07, 1e-12),
+                          f"wb={ncs[f'F{rr8}'].value}")
+                    check("[net delivery: moved planned row] M_1' ties the oracle at "
+                          "the new date", approx(ncs[f"H{rr8}"].value, m1_moved, 1e-9),
+                          f"wb={ncs[f'H{rr8}'].value} oracle={m1_moved}")
+                run("net delivery: planned filing moved",
+                    {("Rate Log", f"C{pl_xl}"): d_new,
+                     ("Rate Log", f"D{pl_xl}"): 0.07}, a9g6)
+
+                # deleting it falls back to the default date + suggestion
+                no_plan = replace(ncmb, rate_changes=tuple(
+                    rc for rc in ncmb.rate_changes
+                    if not (rc.status == "planned" and rc.effective.year == p)))
+                r_sugg, _ = engine.suggest_net_rate(p, no_plan, dt.date(p, 4, 1))
+
+                def a9g7(wb):
+                    ncs = wb["_netcalc"]
+                    check("[net delivery: no planned row] falls back to the suggestion",
+                          approx(ncs[f"F{rr8}"].value, r_sugg, 1e-9)
+                          and approx(ncs[f"E{rr8}"].value, r_sugg, 1e-9),
+                          f"wb={ncs[f'F{rr8}'].value} oracle={r_sugg}")
+                    check("[net delivery: no planned row] the tab reports 'none'",
+                          wb["Net Delivery"][f"F{row_si8}"].value == "none",
+                          repr(wb["Net Delivery"][f"F{row_si8}"].value))
+                run("net delivery: planned filing removed",
+                    {("Rate Log", f"A{pl_xl}"): None, ("Rate Log", f"B{pl_xl}"): None,
+                     ("Rate Log", f"C{pl_xl}"): None, ("Rate Log", f"D{pl_xl}"): None,
+                     ("Rate Log", f"E{pl_xl}"): None, ("Rate Log", f"F{pl_xl}"): None},
+                    a9g7)
 
     # 9h. Program Flow / dashboard written-legs exercises (D59)
     from src.sheets_programflow import (grid_starts as pf_grid_starts,

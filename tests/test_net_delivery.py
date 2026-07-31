@@ -11,6 +11,7 @@ from dataclasses import replace
 
 import pytest
 
+from src import engine
 from src.engine import (
     ComboInputs,
     ModInputs,
@@ -208,6 +209,42 @@ def test_solver_mixed_status_month_matches_brute_force(eff):
     closed = solve_rate_for_target(P, combo, target, eff).required_change
     brute = _brute_force_solver_r(combo, target, eff)
     assert closed == pytest.approx(brute, abs=1e-9)
+
+
+def test_planned_change_pickup():
+    """D63: Net Delivery's default filing — the FIRST planned row inside the
+    plan year, at its EFFECTIVE percent (filed x achievement)."""
+    assert engine.planned_change_in_plan_year(P, _combo(SHOWCASE)) == (
+        dt.date(P, 4, 1), 0.05, 0.05, 1)
+    # achievement is applied to the change in force, filed % reported separately
+    ach = [RateChange(dt.date(P, 6, 1), 0.05, "planned", False, 0.8)]
+    assert engine.planned_change_in_plan_year(P, _combo(ach)) == (
+        dt.date(P, 6, 1), pytest.approx(0.04), 0.05, 1)
+    # earliest wins, and the count reports what was NOT adopted
+    two = [RateChange(dt.date(P, 9, 1), 0.03, "planned", False),
+           RateChange(dt.date(P, 3, 1), 0.02, "planned", False)]
+    got = engine.planned_change_in_plan_year(P, _combo(two))
+    assert got[0] == dt.date(P, 3, 1) and got[3] == 2
+    # taken rows and planned rows outside the plan year are never adopted
+    assert engine.planned_change_in_plan_year(P, _combo([
+        RateChange(dt.date(P, 5, 1), 0.05, "taken", False),
+        RateChange(dt.date(P - 1, 7, 1), 0.06, "planned", False),
+        RateChange(dt.date(P + 1, 2, 1), 0.07, "planned", False)])) is None
+    assert engine.planned_change_in_plan_year(P, _combo()) is None
+
+
+def test_planned_pickup_reproduces_delivery():
+    """Adopting the planned filing is just (D, r) into the existing decomposition
+    — the delivered path must equal a brute-force injection of that same row."""
+    combo = _combo(SHOWCASE)
+    d, r, _, _ = engine.planned_change_in_plan_year(P, combo)
+    comp = net_delivery_components(P, combo, d)
+    live = _live_changes(P, combo)
+    brute = MonthlyEngine(P, combo,
+                          changes_override=live + (RateChange(d, r, "taken", False),))
+    for j in range(12):
+        assert comp.a[j] + comp.b[j] * r == pytest.approx(
+            brute.written_index(month_index(P, 1) + j), abs=1e-12)
 
 
 def test_by_month_rows_are_coherent():

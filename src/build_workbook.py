@@ -36,7 +36,7 @@ from . import engine
 from .engine import ComboInputs, ModInputs, RateChange
 from .xlstyle import quote_sheet
 
-GENERATOR_VERSION = "2.5.0"
+GENERATOR_VERSION = "2.6.0"
 
 
 class SHEETS:
@@ -294,6 +294,11 @@ def sample_rate_rows(cfg: Config, lob: LobCfg) -> list[dict]:
         rows.append(row(_bu(cfg, 2), st[8], -1, 10, 1, 0.10, "taken", "N",
                         comment="Net-selection showcase: fall filing (after the indication) "
                                 "feeds the +10% net target"))
+        # the net selection supersedes this row in the ENGINE (D39); Net
+        # Delivery adopts it as the default filing whose delivery it
+        # decomposes, so the tab demonstrates the pickup on first open (D63)
+        rows.append(row(_bu(cfg, 2), st[8], 0, 4, 1, 0.04, "planned", "N", 1.00,
+                        "Planned filing the net-delivery default picks up"))
 
     # deterministic coverage across the remaining book: most combos get a taken
     # row in P-1; roughly a quarter also carry a planned row in P.

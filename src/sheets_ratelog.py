@@ -39,7 +39,7 @@ def build_rate_log(ctx: Ctx):
 
     header_row(ws, L.RL_HDR, 1, rl_headers(), widths=[9, 8, 11, 9, 12, 12, 13, 34])
     ws.row_dimensions[L.RL_HDR].height = 30
-    header_row(ws, L.RL_HDR, 10, RL_HELPER_HEADERS + ["Plan rank", "1st taken"],
+    header_row(ws, L.RL_HDR, 10, RL_HELPER_HEADERS + ["1st planned", "1st taken"],
                widths=[14, 8, 8, 11, 12, 10, 9, 7, 11, 6, 6, 7], fill=FILL_GREY,
                fnt=font(GREY_DARK, bold=True, size=9))
     put(ws, f"J{L.RL_HDR - 1}", "engine helpers (formulas — do not edit)", fnt=F_SMALL_IT)
@@ -87,10 +87,17 @@ def build_rate_log(ctx: Ctx):
                 f'=IF($C{r}="",0,COUNTIFS(rl_key,$J{r},rl_eff,"<"&$C{r})'
                 f"+COUNTIFS($J${L.RL_FIRST}:$J{r},$J{r},$C${L.RL_FIRST}:$C{r},$C{r}))",
                 fmt=FMT_INT)
-        # NEW helper: chronological rank among the PLANNED rows of this key
+        # first PLANNED row of this key effective inside the plan year — the
+        # filing Net Delivery adopts as its default change (D63). Same
+        # discipline as the taken flag below: the window and the status in the
+        # flag are exactly the ones its consumer filters on (D58).
+        jan1, dec31 = "DATE(nr_PlanYear,1,1)", "DATE(nr_PlanYear,12,31)"
         formula(ws, f"T{r}",
-                f'=IF(OR($C{r}="",$E{r}<>"planned"),0,'
-                f'COUNTIFS($J${L.RL_FIRST}:$J{r},$J{r},$E${L.RL_FIRST}:$E{r},"planned"))',
+                f'=IF(OR($C{r}="",$E{r}<>"planned",$C{r}<{jan1},$C{r}>{dec31}),0,'
+                f'IF(AND(COUNTIFS(rl_key,$J{r},rl_status,"planned",'
+                f'rl_eff,">="&{jan1},rl_eff,"<"&$C{r})=0,'
+                f'COUNTIFS($J${L.RL_FIRST}:$J{r},$J{r},$E${L.RL_FIRST}:$E{r},"planned",'
+                f"$C${L.RL_FIRST}:$C{r},$C{r})=1),1,0))",
                 fmt=FMT_INT)
         # first change among the TAKEN rows of this key + cohort month. The
         # plain first-flag (Q) is status-blind, so a planned row earlier in
@@ -145,7 +152,8 @@ def build_rate_log(ctx: Ctx):
         "rl_first": ("Q", "Helper: 1 for the first change in its BU|State cohort month"),
         "rl_dup": ("R", "Helper: 1 when >1 change shares a BU|State cohort month"),
         "rl_seq": ("S", "Helper: chronological rank of the change within its BU|State key"),
-        "rl_prank": ("T", "Helper: chronological rank among the key's PLANNED rows"),
+        "rl_firstplanned": ("T", "Helper: 1 for the key's FIRST planned change effective "
+                                 "inside the plan year (Net Delivery's default filing, D63)"),
         "rl_firsttaken": ("U", "Helper: 1 for the first TAKEN change in its key + cohort "
                                "month (the Solver's status-aware split flag, D58)"),
     }

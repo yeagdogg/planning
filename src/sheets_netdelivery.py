@@ -135,20 +135,23 @@ def build_netcalc(ctx: Ctx):
             formula(ws, f"A{t}", "=nd_BandState")
             formula(ws, f"B{t}",
                     '=IF(OR(nd_BandBU="",nd_BandState=""),"",nd_BandBU&"|"&nd_BandState)')
-            # per-state date / filed override, looked up from the tab's rows
-            eff_f = ('=IF(OR($B{t}="",COUNTIF(ndd_states,nd_BandState)=0),nd_DefaultDate,'
+            # per-state date / filed override, looked up from the tab's rows.
+            # Blank falls back to the PLANNED plan-year filing in the rate log
+            # (W/X/Y below), and only then to the default date / suggestion (D63).
+            eff_f = ('=IF(OR($B{t}="",COUNTIF(ndd_states,nd_BandState)=0),$PD{t},'
                      'IF(INDEX(ndd_dates,MATCH(nd_BandState,ndd_states,0))="",'
-                     'nd_DefaultDate,INDEX(ndd_dates,MATCH(nd_BandState,ndd_states,0))))'
-                     ).format(t=t)
+                     '$PD{t},INDEX(ndd_dates,MATCH(nd_BandState,ndd_states,0))))'
+                     ).format(t=t, PD="X")
             ovr_f = ('=IF(OR($B{t}="",COUNTIF(ndd_states,nd_BandState)=0),"",'
-                     'IF(ISBLANK(INDEX(ndd_filed,MATCH(nd_BandState,ndd_states,0))),"",'
-                     'INDEX(ndd_filed,MATCH(nd_BandState,ndd_states,0))))').format(t=t)
+                     'IF(ISBLANK(INDEX(ndd_filed,MATCH(nd_BandState,ndd_states,0))),'
+                     '$PR{t},INDEX(ndd_filed,MATCH(nd_BandState,ndd_states,0))))'
+                     ).format(t=t, PR="Y")
         else:
             formula(ws, f"A{t}", f"=_lists!$B${3 + i}")
             formula(ws, f"B{t}", f'=IF(OR($A{t}="",nd_BU="All"),"",nd_BU&"|"&$A{t})')
             row_v = ND_FIRST + i
-            eff_f = (f'=IF({ND}!$D${row_v}="",nd_DefaultDate,{ND}!$D${row_v})')
-            ovr_f = (f'=IF(ISBLANK({ND}!$E${row_v}),"",{ND}!$E${row_v})')
+            eff_f = (f'=IF({ND}!$D${row_v}="",$X{t},{ND}!$D${row_v})')
+            ovr_f = (f'=IF(ISBLANK({ND}!$E${row_v}),$Y{t},{ND}!$E${row_v})')
         # header cells: combo resolution + guarded inputs (the _calc pattern)
         formula(ws, f"C{t}", f'=IF($B{t}="",0,IF(COUNTIF(lr_key,$B{t})=0,0,'
                              f"MATCH($B{t},lr_key,0)))", fmt=FMT_INT)
@@ -172,8 +175,8 @@ def build_netcalc(ctx: Ctx):
                 f'=IF(OR($A{t}="",COUNTIF(se_state,$A{t})=0),0,MATCH($A{t},se_state,0))',
                 fmt=FMT_INT)
         formula(ws, f"N{t}", f"=IF($M{t}=0,0,INDEX(se_sum,$M{t}))", fmt="0.00")
-        # effective-date helpers (D31 blend at the earlier of D / first live)
-        formula(ws, f"O{t}", eff_f, fmt="mm/dd/yyyy")
+        # effective-date helpers (D31 blend at the earlier of D / first live);
+        # O is written below, after the planned-filing pickup it falls back to
         formula(ws, f"P{t}", f"=IF(AND($O{t}>=DATE(nr_PlanYear,1,1),"
                              f"$O{t}<=DATE(nr_PlanYear,12,31)),1,0)", fmt=FMT_INT)
         formula(ws, f"Q{t}", f"=YEAR($O{t})*12+MONTH($O{t})-1", fmt=FMT_INT)
@@ -182,8 +185,25 @@ def build_netcalc(ctx: Ctx):
         formula(ws, f"T{t}", f"=SUMIFS(ndl_days,rl_key,$B{t},ndl_effmonth,"
                              f"DATE(YEAR($O{t}),MONTH($O{t}),1),ndl_first,1)", fmt=FMT_INT)
         formula(ws, f"U{t}", f"=IF($P{t}=1,MIN(1,MAX($S{t},$T{t})/$R{t}),1)", fmt="0.000")
+        # the PLANNED plan-year filing already in the rate log (D63): count,
+        # date, effective % (filed x achievement — what actually earns), and
+        # the filed % for display. Written BEFORE V/O consume them by address.
+        jan1, dec31 = "DATE(nr_PlanYear,1,1)", "DATE(nr_PlanYear,12,31)"
+        formula(ws, f"W{t}",
+                f'=IF($B{t}="",0,COUNTIFS(rl_key,$B{t},rl_status,"planned",'
+                f'rl_eff,">="&{jan1},rl_eff,"<="&{dec31}))', fmt=FMT_INT)
+        formula(ws, f"X{t}",
+                f"=IF($W{t}=0,nd_DefaultDate,SUMIFS(rl_eff,rl_key,$B{t},rl_firstplanned,1))",
+                fmt="mm/dd/yyyy")
+        formula(ws, f"Y{t}",
+                f'=IF($W{t}=0,"",SUMIFS(rl_reff,rl_key,$B{t},rl_firstplanned,1))',
+                fmt="0.00%")
+        formula(ws, f"Z{t}",
+                f'=IF($W{t}=0,"",SUMIFS(rl_filed,rl_key,$B{t},rl_firstplanned,1))',
+                fmt="0.00%")
+        formula(ws, f"O{t}", eff_f, fmt="mm/dd/yyyy")
         formula(ws, f"V{t}", ovr_f, fmt="0.00%")
-        for cc in "ABCDEFGHIJKLMNOPQRSTUV":
+        for cc in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
             ws[f"{cc}{t}"].font = font(GREY_DARK, size=8)
 
         anchors = write_mod_anchor_cells(
@@ -289,6 +309,7 @@ def build_netcalc(ctx: Ctx):
                 f'OR($H{rr}<0.5,$H{rr}>1.5)),"MOD-BOUND ","")'
                 f'&IF(AND(ISNUMBER($F{rr}),ABS($F{rr})>nr_SolvMaxRate),"RATE-BOUND ","")'
                 f'&IF(AND(ISNUMBER($L{rr}),$L{rr}<nr_SolvMinShare),"THIN-SHARE ","")'
+                f'&IF($W${t}>1,"MULTI-PLANNED ","")'
                 f'&IF($F${t}=0,"RATE-ONLY","")))')
         # booked-program plan LR vs the asserted net-mode plan LR
         formula(ws, f"N{rr}",
@@ -402,12 +423,14 @@ def build_net_delivery(ctx: Ctx):
     # ---- per-state summary table ----
     hdr, first = ND_HDR, ND_FIRST
     headers = ["State", "Adj plan EP (000s)", "Net target", "Eff date (enter)",
-               "Filed % (enter; blank = suggested)", "Suggested change",
+               "Filed % (enter; blank = your planned filing, else suggested)",
+               "Planned filing date (rate log)", "Planned filed %",
+               "Suggested change",
                "Change in force", "Filed equivalent", "Avg YoY rate leg",
                "Avg YoY pricing needed", "Implied yr-end mod", "vs projected M_1 (pts)",
                "Share written on/after date", "Flags"]
     header_row(ws, hdr, 1, headers,
-               widths=[7, 12, 9, 11, 13, 11, 11, 11, 11, 12, 11, 11, 12, 22])
+               widths=[7, 12, 9, 11, 13, 12, 11, 11, 11, 11, 11, 12, 11, 11, 12, 22])
     ws.row_dimensions[hdr].height = 42
     dv_date = DataValidation(
         type="date", operator="between",
@@ -441,16 +464,23 @@ def build_net_delivery(ctx: Ctx):
         input_cell(ws, f"E{r}", None, fmt="0.0%", required=False)
         dv_date.add(f"D{r}")
         dv_r.add(f"E{r}")
-        for cc, src, fmt in (("F", "E", "0.000%"), ("G", "F", "0.000%"),
-                             ("H", "G", "0.000%"), ("I", "I", PCT_S),
-                             ("J", "J", PCT_S), ("K", "H", FMT_MOD),
-                             ("M", "L", FMT_PCT), ("N", "M", None)):
+        # the planned filing picked up from the rate log (blank when none)
+        for cc, src, fmt in (("F", "X", "m/d/yy"), ("G", "Z", "+0.0%;-0.0%;0.0%")):
+            formula(ws, f"{cc}{r}",
+                    f'=IF(OR($A{r}="",nd_BU="All"),"",'
+                    f"IF('{NC}'!$D${t}=0,\"—\",IF('{NC}'!$W${t}=0,\"none\","
+                    f"'{NC}'!${src}${t})))",
+                    fmt=fmt, align=ALIGN_C, fill=band_fill, border=BORDER_THIN)
+        for cc, src, fmt in (("H", "E", "0.000%"), ("I", "F", "0.000%"),
+                             ("J", "G", "0.000%"), ("K", "I", PCT_S),
+                             ("L", "J", PCT_S), ("M", "H", FMT_MOD),
+                             ("O", "L", FMT_PCT), ("P", "M", None)):
             formula(ws, f"{cc}{r}",
                     f'=IF(OR($A{r}="",nd_BU="All"),"",'
                     f"IF('{NC}'!$D${t}=0,\"—\",'{NC}'!${src}${rr}))",
                     fmt=fmt or "General", align=ALIGN_C, fill=band_fill,
-                    border=BORDER_THIN, bold=(cc in ("F", "J")))
-        formula(ws, f"L{r}",
+                    border=BORDER_THIN, bold=(cc in ("I", "L")))
+        formula(ws, f"N{r}",
                 f'=IF(OR($A{r}="",nd_BU="All"),"",IF(\'{NC}\'!$D${t}=0,"—",'
                 f"IF(ISNUMBER('{NC}'!$H${rr}),"
                 f"('{NC}'!$H${rr}-'{NC}'!$J${t})*100,\"n/a\")))",
@@ -470,14 +500,22 @@ def build_net_delivery(ctx: Ctx):
                "Per-state rate-change dates (blank = default)")
     ctx.define("ndd_filed", SHEETS.NET_DELIVERY,
                f"$E${first}:$E${first + nd - 1}",
-               "Per-state filed % overrides (blank = suggested)")
+               "Per-state filed % overrides (blank = the planned filing, else suggested)")
     ctx.define("ndd_flags", SHEETS.NET_DELIVERY,
-               f"$N${first}:$N${first + nd - 1}",
+               f"$P${first}:$P${first + nd - 1}",
                "Per-state feasibility flags (empty = clean; — = not on a net selection)")
     put(ws, f"A{tot + 2}",
-        "Dates and overrides align to the roster rows above (state-level filing "
-        "calendar); re-check them after renaming states. The Solver answers a "
-        "different question (CY plan LR under the explicit program, D13).", fnt=F_SMALL_IT)
+        "Leave the two input columns blank to adopt the PLANNED filing already in the "
+        "rate log for the plan year (shown beside them): its date and its effective % "
+        "= filed x achievement. With no planned filing the tab falls back to the "
+        "default date and the suggested change. Type in either column to override. "
+        "A net selection supersedes planned rows in the engine (D39) — this tab is "
+        "where you put one back to ask what pricing still has to carry.", fnt=F_SMALL_IT)
+    put(ws, f"A{tot + 3}",
+        "Only the FIRST planned filing inside the plan year is adopted (the model "
+        "carries one change at one date); a state with more is flagged MULTI-PLANNED. "
+        "The Solver answers a different question (CY plan LR under the explicit "
+        "program, D13).", fnt=F_SMALL_IT)
 
     # ---- twin state x month grids ----
     g1 = tot + 4

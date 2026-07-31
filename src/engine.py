@@ -979,6 +979,26 @@ def net_delivery_components(
     )
 
 
+def planned_change_in_plan_year(
+    plan_year: int, combo: ComboInputs
+) -> tuple[dt.date, float, float, int] | None:
+    """The combo's FIRST planned filing effective inside the plan year (D63).
+
+    Returns ``(effective, effective_pct, filed_pct, count)`` — ``count`` is how
+    many planned filings the plan year holds, so a caller can flag the ones it
+    does not adopt — or None when the plan year holds no planned filing. These
+    rows are superseded by a net selection in the ENGINE (D39); Net Delivery
+    adopts this one as the default change whose delivery it decomposes.
+    """
+    lo, hi = dt.date(plan_year, 1, 1), dt.date(plan_year, 12, 31)
+    rows = [rc for rc in combo.rate_changes
+            if rc.status == STATUS_PLANNED and lo <= rc.effective <= hi]
+    if not rows:
+        return None
+    first = min(rows, key=lambda rc: rc.effective)
+    return first.effective, first.effective_pct, first.filed_pct, len(rows)
+
+
 def suggest_net_rate(
     plan_year: int, combo: ComboInputs, eff_date: dt.date
 ) -> tuple[float, NetDeliveryComponents]:

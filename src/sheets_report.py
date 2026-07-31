@@ -905,6 +905,19 @@ def build_methodology(ctx: Ctx):
          "pricing columns show a dash; the written-basis solve is disclosed against "
          "the earned shape via the 'plan LR if you book this program' reconciliation "
          "(a single filed change cannot match both averages at once).",
+         "Defaults (D63): with both input columns blank the tab adopts the PLANNED "
+         "filing already in the rate log for the plan year — its date, and its "
+         "EFFECTIVE percent (filed x achievement), which is what actually earns. A net "
+         "selection supersedes those rows in the engine (D39), so this is where one is "
+         "deliberately put back: the question becomes 'if I book the filing I am "
+         "already planning, how much does pricing still have to carry?' rather than "
+         "'what single filing would hit the target alone'. The suggested change stays "
+         "on the exhibit beside it, so the gap between intent and requirement is "
+         "visible. Only the FIRST planned filing inside the plan year is adopted (the "
+         "decomposition carries one change at one date, and compounding two filings "
+         "onto one date would misstate the D31 day-blend); a state with more is "
+         "flagged MULTI-PLANNED. With no planned filing the tab falls back to the "
+         "default date and the suggestion, exactly as before.",
          ]),
         ("6d. Program Flow (descriptive, D59)", [
          "The descriptive twin of 6c: no target and no new change — the month-by-month "
