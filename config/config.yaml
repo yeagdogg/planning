@@ -16,34 +16,34 @@
 plan_year: 2027
 
 business_units:
-  - BU-A
-  - BU-B
-  - BU-C
+  - ABD
+  - MM
+  - SBA
 
 # Rename to your actual writing states (sample list of 21; add/remove freely â€”
 # table capacities scale automatically on regeneration).
 states:
   - AZ
-  - CA
   - CO
-  - CT
+  - DE
   - FL
   - GA
+  - IA
   - IL
   - IN
-  - IA
   - KY
   - MD
   - MI
   - MN
-  - MO
+  - NM
   - NC
-  - NJ
-  - NY
   - OH
   - PA
+  - SC
   - TN
-  - TX
+  - VA
+  - WV
+  - WI
 
 # One workbook is generated per LOB; term_months is that workbook's policy
 # term (default 12; Inland Marine demonstrates the 6-month override, Â§10).
@@ -85,4 +85,4 @@ theme:
   font: Calibri
 
 # Version stamped on Read Me; bump when regenerating with structural changes.
-version: 2.4.0
+version: 2.6.0

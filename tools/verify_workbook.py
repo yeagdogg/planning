@@ -371,6 +371,26 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
                   bad_m == 0, f"{bad_m} mismatched months")
             check("[net delivery] solve residual is zero",
                   approx(ncs[f"P{rr}"].value, 0.0, 1e-9))
+            # the deep-dive band resolves the SAME combo through its own
+            # pickers, so it must reproduce that state's block cell for cell
+            # (the band had no tie until a resolver typo broke it silently)
+            tb = block_top(len(cfg.states) + 3)   # band sits after the roster spares
+            band_state = nval(wb, "nd_BandState")
+            if band_state == net_state:
+                bad_b = sum(
+                    0 if approx(ncs[f"AG{tb + 27 + j}"].value,
+                                ncs[f"AG{t + 27 + j}"].value, 1e-12)
+                    and approx(ncs[f"AH{tb + 27 + j}"].value,
+                               ncs[f"AH{t + 27 + j}"].value, 1e-12) else 1
+                    for j in range(12))
+                check("[net delivery] deep-dive band reproduces the state block",
+                      bad_b == 0 and approx(ncs[f"F{tb + 51}"].value,
+                                            ncs[f"F{rr}"].value, 1e-12),
+                      f"{bad_b} month mismatches; band r={ncs[f'F{tb + 51}'].value} "
+                      f"state r={ncs[f'F{rr}'].value}")
+                check("[net delivery] band effective date resolves inside the plan year",
+                      ncs[f"P{tb}"].value == 1,
+                      f"in-window flag={ncs[f'P{tb}'].value} date={ncs[f'O{tb}'].value}")
 
     # Program Flow (D59): dashboard written legs, the locked block, and the
     # tab's summary averages + worked-example grid rows tie program_flow_by_month

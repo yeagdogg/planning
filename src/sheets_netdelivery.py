@@ -138,14 +138,13 @@ def build_netcalc(ctx: Ctx):
             # per-state date / filed override, looked up from the tab's rows.
             # Blank falls back to the PLANNED plan-year filing in the rate log
             # (W/X/Y below), and only then to the default date / suggestion (D63).
-            eff_f = ('=IF(OR($B{t}="",COUNTIF(ndd_states,nd_BandState)=0),$PD{t},'
-                     'IF(INDEX(ndd_dates,MATCH(nd_BandState,ndd_states,0))="",'
-                     '$PD{t},INDEX(ndd_dates,MATCH(nd_BandState,ndd_states,0))))'
-                     ).format(t=t, PD="X")
-            ovr_f = ('=IF(OR($B{t}="",COUNTIF(ndd_states,nd_BandState)=0),"",'
-                     'IF(ISBLANK(INDEX(ndd_filed,MATCH(nd_BandState,ndd_states,0))),'
-                     '$PR{t},INDEX(ndd_filed,MATCH(nd_BandState,ndd_states,0))))'
-                     ).format(t=t, PR="Y")
+            nd_hit = "COUNTIF(ndd_states,nd_BandState)=0"
+            eff_f = (f'=IF(OR($B{t}="",{nd_hit}),$X{t},'
+                     f'IF(INDEX(ndd_dates,MATCH(nd_BandState,ndd_states,0))="",'
+                     f"$X{t},INDEX(ndd_dates,MATCH(nd_BandState,ndd_states,0))))")
+            ovr_f = (f'=IF(OR($B{t}="",{nd_hit}),$Y{t},'
+                     f"IF(ISBLANK(INDEX(ndd_filed,MATCH(nd_BandState,ndd_states,0))),"
+                     f"$Y{t},INDEX(ndd_filed,MATCH(nd_BandState,ndd_states,0))))")
         else:
             formula(ws, f"A{t}", f"=_lists!$B${3 + i}")
             formula(ws, f"B{t}", f'=IF(OR($A{t}="",nd_BU="All"),"",nd_BU&"|"&$A{t})')
