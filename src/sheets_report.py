@@ -528,14 +528,33 @@ def build_checks(ctx: Ctx):
        f"=MAX(0,lst_state_cnt-{len(ctx.cfg.states) + 3})", 0, "FAIL"))
 
     header_row(ws, L.CK_HDR, 1,
-               ["#", "Category", "Check", "Expected", "Actual", "Tolerance", "Status", ""],
-               widths=[5, 12, 78, 13, 13, 11, 10, 4])
+               ["#", "Category", "Check", "Expected", "Actual", "Tolerance", "Status",
+                "Fix at"],
+               widths=[5, 12, 78, 13, 13, 11, 10, 11])
+
+    def _fix_target(kind_, act_f_):
+        """Where a failing row sends the user (derived from what the check reads)."""
+        f_ = act_f_ or ""
+        if kind_ in ("ORACLE", "SOLVER", "SOLVERB") or "nr_WalkLR" in f_:
+            return "'Walkthrough'!A1", "Walkthrough"
+        if kind_ == "IDENTITY":
+            return "'Mod Engine'!A1", "Mod Engine"
+        if kind_ == "ATTR":
+            return "Attribution!A1", "Attribution"
+        if "rl_" in f_:
+            return "'Rate Log'!A1", "Rate Log"
+        if "lr_" in f_ or "se_" in f_ or "nr_Sel" in f_:
+            return "Inputs!A1", "Inputs"
+        return "'Rate Engine'!A1", "Rate Engine"
+
     fmt_num = "0.0000000000;-0.0000000000;0"
     for i, (cat, desc, exp_f, act_f, tol, kind) in enumerate(rows):
         r = L.CK_FIRST + i
         put(ws, f"A{r}", i + 1, fnt=font(GREY_DARK, size=9), align=ALIGN_C)
         put(ws, f"B{r}", cat, fnt=font(GREY_DARK, size=9))
         put(ws, f"C{r}", desc, fnt=F_LABEL)
+        tgt, tgt_lbl = _fix_target(kind, act_f)
+        jump(ws, f"H{r}", tgt, tgt_lbl, size=9)
         if kind == "IDENTITY":
             formula(ws, f"D{r}", "=me_identity", fmt=FMT_MOD, align=ALIGN_C)
             formula(ws, f"E{r}", "=nr_MEarned_P", fmt=FMT_MOD, align=ALIGN_C)
@@ -578,7 +597,8 @@ def build_checks(ctx: Ctx):
         else:
             formula(ws, f"D{r}", exp_f, fmt=fmt_num, align=ALIGN_C)
             formula(ws, f"E{r}", act_f, fmt=fmt_num, align=ALIGN_C)
-            put(ws, f"F{r}", tol, fnt=font(GREY_DARK, size=9), align=ALIGN_C)
+            put(ws, f"F{r}", tol, fnt=font(GREY_DARK, size=9), align=ALIGN_C,
+                fmt="0.#########")
             if kind == "ORACLE":
                 formula(ws, f"G{r}",
                         f'=IF(NOT(orc_fp),"N/A",IF(ABS($E{r}-$D{r})<=$F{r},"PASS","FAIL"))',
@@ -598,6 +618,31 @@ def build_checks(ctx: Ctx):
                       f'&COUNTIF({g_rng},"N/A")&" not applicable"', fmt=FMT_GEN)
     ws["E3"].font = font(GREY_DARK, size=9)
     ctx.define("ck_overall", "Checks", "$C$3", "Overall PASS/FAIL status (shown on Control)")
+
+    # category roll-up in columns I:K (append-right — no row ever inserted
+    # above an existing check, so Checks!G16 and friends stay put)
+    b_rng = f"$B${L.CK_FIRST}:$B${last}"
+    put(ws, "I3", "By category", fnt=font(NAVY, bold=True, size=10))
+    for j, cat_name in enumerate(["Structure", "Identity", "Oracle tie",
+                                  "Input sanity", "Advisory"]):
+        rr = 4 + j
+        put(ws, f"I{rr}", cat_name, fnt=font(GREY_DARK, size=9))
+        formula(ws, f"J{rr}",
+                f'=COUNTIFS({b_rng},"{cat_name}",{g_rng},"PASS")&" / "'
+                f'&COUNTIF({b_rng},"{cat_name}")&" pass"')
+        ws[f"J{rr}"].font = font(GREY_DARK, size=9)
+        formula(ws, f"K{rr}",
+                f'=IF(COUNTIFS({b_rng},"{cat_name}",{g_rng},"FAIL")>0,"FAIL",'
+                f'IF(COUNTIFS({b_rng},"{cat_name}",{g_rng},"WARN")>0,"WARN",'
+                f'IF(COUNTIFS({b_rng},"{cat_name}",{g_rng},"N/A")'
+                f'=COUNTIF({b_rng},"{cat_name}"),"N/A","OK")))', align=ALIGN_C, bold=True)
+    for value, fill, fcolor in (('"OK"', FILL_GREEN, PASS_GREEN),
+                                ('"FAIL"', FILL_RED, FAIL_RED),
+                                ('"WARN"', FILL_AMBER, "7F6000"),
+                                ('"N/A"', FILL_GREY, GREY_DARK)):
+        ws.conditional_formatting.add(
+            "K4:K8", CellIsRule(operator="equal", formula=[value], fill=fill,
+                                font=font(fcolor, bold=True)))
     for value, fill, fcolor in (('"PASS"', FILL_GREEN, PASS_GREEN),
                                 ('"FAIL"', FILL_RED, FAIL_RED),
                                 ('"WARN"', FILL_AMBER, "7F6000"),
@@ -612,11 +657,13 @@ def build_checks(ctx: Ctx):
     ws.conditional_formatting.add(
         "C3", CellIsRule(operator="notEqual", formula=['"ALL CHECKS PASS"'], fill=FILL_RED,
                          font=font(FAIL_RED, bold=True)))
-    note(ws, f"A{last + 2}",
-         "Oracle ties compare live formulas to constants computed by src/engine.py for the "
-         "seeded worked example; they report N/A - INPUTS CHANGED once you replace the sample "
-         "data (the structural and sanity checks above remain live). Regenerate the workbook "
-         "to re-bake oracle constants for new inputs.")
+    put(ws, f"A{last + 2}",
+        "Oracle ties compare live formulas to constants baked from src/engine.py for the "
+        "seeded sample; N/A after you paste real data is EXPECTED, not breakage.",
+        fnt=F_SMALL_IT)
+    put(ws, f"A{last + 3}",
+        "Structural, identity, and sanity checks stay live forever. Regenerate the "
+        "workbook to re-bake oracle constants for your own inputs.", fnt=F_SMALL_IT)
     presentation_setup(ws, gridlines_off=True, freeze=f"A{L.CK_FIRST}", tab_color=PASS_GREEN)
     print_setup(ws)
 

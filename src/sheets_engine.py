@@ -165,11 +165,14 @@ def write_cohort_block(
                     f"=MIN(1,MAX(0,({me}-$G{r}+0.5)/{t_ref}))"
                     f"-MIN(1,MAX(0,({ms}-1-$G{r}+0.5)/{t_ref}))", fmt="0.0000")
         if net is not None:
+            # blank (not zero) when the combo runs the explicit program, so the
+            # net columns stop reading as live machinery when the mode is off
             formula(ws, f"S{r}",
-                    f"=$N{r}*IF({net['modeff']},$O{r}/{net['mind']},1)", fmt=FMT_IDX)
+                    f'=IF({net["mode"]},$N{r}*IF({net["modeff"]},$O{r}/{net["mind"]},1),"")',
+                    fmt=FMT_IDX)
             formula(ws, f"T{r}",
-                    f"=IF($G{r}<nr_MStartP,$S{r},$T{r - 12}*"
-                    f"(1+IF($G{r}<nr_MStartP1,{net['x']},{net['x1']})))", fmt=FMT_IDX)
+                    f'=IF(NOT({net["mode"]}),"",IF($G{r}<nr_MStartP,$S{r},$T{r - 12}*'
+                    f"(1+IF($G{r}<nr_MStartP1,{net['x']},{net['x1']}))))", fmt=FMT_IDX)
             formula(ws, f"U{r}", f"=IF({net['mode']},$T{r},$N{r})", fmt=FMT_IDX)
     return dict(
         first=first_row, last=last,
@@ -371,8 +374,10 @@ def build_rate_engine(ctx: Ctx):
                     (L.RE_ROW_VIOL, "bound violation (Checks)"),
                     (L.RE_ROW_MODM, "Earned mod by month (M_w from Mod Engine)"),
                     (L.RE_ROW_MODNUM, "Mod numerator SUM w-e-M (quarterly price)")):
-        put(ws, f"{col(mcol0 - 1)}{rr}", lbl, fnt=font(GREY_DARK, size=9),
-            align=ALIGN_C if False else None)
+        put(ws, f"{col(mcol0 - 1)}{rr}", lbl, fnt=font(GREY_DARK, size=9))
+        # repeat the strip labels at the RIGHT edge too — a reader scrolled 36
+        # columns into the matrix should not lose track of what each row is
+        put(ws, f"{col(mcol1 + 2)}{rr}", lbl, fnt=font(GREY_DARK, size=9))
     ctx.define("re_em_row", "Rate Engine",
                f"${col(mcol0)}${L.RE_ROW_EM}:${col(mcol1)}${L.RE_ROW_EM}",
                "Monthly earned rate index E_m, Jan (P-1) .. Dec (P+1)")
@@ -402,6 +407,12 @@ def build_rate_engine(ctx: Ctx):
                     "Q": 8, "R": 8, "S": 9, "T": 9, "U": 9})
     for j in range(L.N_MONTHS):
         ws.column_dimensions[col(L.RE_MATRIX_COL + j)].width = 7.5
+    # mid-month sampling date reads as a date, not a raw serial
+    for i in range(L.N_COH):
+        ws[f"F{L.RE_COH_FIRST + i}"].number_format = "m/d/yy h:mm"
+    # index-construction detail columns are collapsible (audit on demand)
+    for cL in "IJKLM":
+        ws.column_dimensions[cL].outlineLevel = 1
     presentation_setup(ws, gridlines_off=False, zoom=85, freeze=f"I{L.RE_COH_FIRST}",
                        tab_color=STEEL)
     print_setup(ws)
@@ -423,9 +434,9 @@ def build_mod_engine(ctx: Ctx):
     jump(ws, "D3", "Control!C7", "Change BU/state selection >")
 
     # Anchor table
-    section(ws, 4, "E", "Mod path anchors (x = close-of-day serial: date + 1; see Methodology)")
-    header_row(ws, 5, 5, ["Anchor", "x (serial)", "M value", "Slope / day"],
-               widths=[26, 12, 10, 12], fill=FILL_NAVY)
+    section(ws, 4, "E", "Mod path anchors (x = close-of-day boundary: date + 1; see Methodology)")
+    header_row(ws, 5, 5, ["Anchor", "x (boundary date)", "M value", "Slope / day", "pts / month"],
+               widths=[26, 12, 10, 12, 10], fill=FILL_NAVY)
     anchor_rows = [
         ("A0: backward (as-of - 12 mo)", "=EDATE(nr_M0Asof,-12)+1",
          "=IF(N(nr_MPrior)=0,$G$7-($G$8-$G$7)/($F$8-$F$7)*($F$7-$F$6),nr_MPrior)"),
@@ -437,11 +448,14 @@ def build_mod_engine(ctx: Ctx):
     for i, (lbl, fx, fm) in enumerate(anchor_rows):
         r = 6 + i
         label(ws, f"E{r}", lbl)
-        formula(ws, f"F{r}", fx, fmt="0", border=BORDER_THIN)
+        formula(ws, f"F{r}", fx, fmt="m/d/yy", border=BORDER_THIN)
         formula(ws, f"G{r}", fm, fmt=FMT_MOD, border=BORDER_THIN)
         if i < 3:
             formula(ws, f"H{r}", f"=($G${r + 1}-$G${r})/($F${r + 1}-$F${r})", fmt="0.000000",
                     border=BORDER_THIN)
+            # the human-readable drift speed (mod points per average month)
+            formula(ws, f"I{r}", f"=$H${r}*30.4375*100", fmt="0.00", border=BORDER_THIN)
+            ws[f"I{r}"].font = font(GREY_DARK, size=9)
     note(ws, "E10", "Blank M_prior places A0 on the M_0->M_1 line (backward extrapolation of that "
                     "segment, §3.3.1). Blank M_2 = M_1 (flat beyond 12/31/P).")
     anchors = ModAnchors(
@@ -527,6 +541,33 @@ def build_mod_engine(ctx: Ctx):
         link(ws, f"H{r}", f"={re}!$R{r}", fmt="0.0000")
     ctx.define("me_mw_col", "Mod Engine", f"$E${L.ME_COH_FIRST}:$E${L.ME_COH_LAST}",
                "Written mod M_w(k) by cohort")
+    # 48-row echo is audit detail — grouped, collapsible, still calculating
+    for rr in range(L.ME_COH_FIRST, L.ME_COH_LAST + 1):
+        ws.row_dimensions[rr].outlineLevel = 1
+
+    # the path chart the tab always deserved (reads the Flow monthly table)
+    from openpyxl.chart import LineChart, Reference
+    from .sheets_report import CD0
+    flow = ctx.wb["Flow Dashboard"]
+    pathc = LineChart()
+    pathc.add_data(Reference(flow, min_col=5, min_row=CD0, max_row=CD0 + L.N_MONTHS),
+                   titles_from_data=True)
+    pathc.add_data(Reference(flow, min_col=6, min_row=CD0, max_row=CD0 + L.N_MONTHS),
+                   titles_from_data=True)
+    pathc.set_categories(Reference(flow, min_col=2, min_row=CD0 + 1,
+                                   max_row=CD0 + L.N_MONTHS))
+    for s, rgb in zip(pathc.series, (STEEL, "1F3864")):
+        s.graphicalProperties.line.solidFill = rgb
+        s.graphicalProperties.line.width = int(2.25 * 12700)
+        s.smooth = False
+    pathc.y_axis.number_format = "0.000"
+    pathc.title = "Written vs earned schedule mod path"
+    pathc.style = 2
+    pathc.height = 7.5
+    pathc.width = 13
+    pathc.x_axis.delete = False
+    pathc.y_axis.delete = False
+    ws.add_chart(pathc, "J14")
 
     set_widths(ws, {"A": 6, "B": 12, "C": 10, "D": 7, "E": 9, "F": 9, "G": 9, "H": 9,
                     "I": 3, "J": 26, "K": 10, "L": 11})

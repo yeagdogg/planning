@@ -429,6 +429,86 @@ def build_portfolio(ctx: Ctx):
          "* Weighted by plan earned premium over the rows where EP is provided; rows without "
          "EP carry zero weight. The simple average covers every populated row equally.")
 
+    # ---- ranking helpers (append-right; the col-7 header label never moves) ----
+    put(ws, f"P{L.PF_HDR}", "Rank (adverse)", fnt=font(GREY_DARK, bold=True, size=9),
+        fill=FILL_GREY)
+    put(ws, f"Q{L.PF_HDR}", "rk helper", fnt=font(GREY_DARK, size=8))
+    put(ws, f"R{L.PF_HDR}", "Contribution (pts)", fnt=font(GREY_DARK, bold=True, size=9),
+        fill=FILL_GREY)
+    for i in range(L.LR_ROWS):
+        r = L.PF_FIRST + i
+        formula(ws, f"P{r}", f'=IF($C{r}="","",RANK($H{r},$H${f0}:$H${f1}))',
+                fmt=FMT_INT, align=ALIGN_C)
+        # epsilon tiebreak so LARGE/MATCH never lands on the same row twice
+        formula(ws, f"Q{r}", f'=IF($C{r}="","",$H{r}+ROW()/1000000000)')
+        formula(ws, f"R{r}", f'=IF(OR($C{r}="",$O{r}=""),"",N($O{r})*$H{r})',
+                fmt='+0.00;-0.00;0.00', align=ALIGN_C)
+        for cL in "PQR":
+            ws[f"{cL}{r}"].font = font(GREY_DARK, size=9)
+
+    # ---- Decision Board: the three answers a review meeting opens with ----
+    section(ws, 4, "T", "Decision Board")
+    put(ws, "T5", "Top 10 adverse movers (plan vs projected)", fnt=font(NAVY, bold=True,
+                                                                        size=10))
+    header_row(ws, 6, 20, ["Combo", "Plan LR", "Chg (pts)", "Contribution (pts)"],
+               widths=[12, 10, 10, 13], fill=FILL_GREY,
+               fnt=font(GREY_DARK, bold=True, size=9))
+    for k in range(1, 11):
+        r = 6 + k
+        formula(ws, f"Y{r}",
+                f"=IF(COUNT($Q${f0}:$Q${f1})<{k},0,"
+                f"MATCH(LARGE($Q${f0}:$Q${f1},{k}),$Q${f0}:$Q${f1},0))", fmt=FMT_INT)
+        ws[f"Y{r}"].font = font(GREY_DARK, size=8)
+        formula(ws, f"T{r}", f'=IF($Y{r}=0,"",INDEX($C${f0}:$C${f1},$Y{r}))', align=ALIGN_C)
+        formula(ws, f"U{r}", f'=IF($Y{r}=0,"",INDEX($G${f0}:$G${f1},$Y{r}))',
+                fmt=FMT_PCT_Z, align=ALIGN_C)
+        formula(ws, f"V{r}", f'=IF($Y{r}=0,"",INDEX($H${f0}:$H${f1},$Y{r}))',
+                fmt='+0.00;-0.00;0.00', align=ALIGN_C)
+        formula(ws, f"W{r}", f'=IF($Y{r}=0,"",INDEX($R${f0}:$R${f1},$Y{r}))',
+                fmt='+0.00;-0.00;0.00', align=ALIGN_C, bold=True)
+    put(ws, "T18",
+        "Contribution = EP weight x change vs projected: which combos move the BOOK.",
+        fnt=F_SMALL_IT)
+
+    put(ws, "T20", "Portfolio bridge (EP-weighted)", fnt=font(NAVY, bold=True, size=10))
+    pf_bridge = [
+        ("Projected LR (current level)", '=IF(SUM(calc_ep)=0,"n/a",SUM(calc_w_lrcur)/SUM(calc_ep))',
+         FMT_PCT, False),
+        ("x  rate earn-in (avg factor)", '=IF(SUM(calc_ep)=0,"n/a",SUM(calc_w_arate)/SUM(calc_ep))',
+         FMT_IDX, False),
+        ("x  mod drift (avg factor)", '=IF(SUM(calc_ep)=0,"n/a",SUM(calc_w_amod)/SUM(calc_ep))',
+         FMT_IDX, False),
+        ("Mix / interaction (pts)",
+         f'=IF(OR(SUM(calc_ep)=0,NOT(ISNUMBER($G${wr}))),"n/a",($G${wr}-$U$21*$U$22*$U$23)*100)',
+         '+0.00;-0.00;0.00', False),
+        ("CY plan LR — exact EP-weighted total", f"=$G${wr}", FMT_PCT, True),
+    ]
+    for i, (lbl, f, fmt, bold_) in enumerate(pf_bridge):
+        r = 21 + i
+        label(ws, f"T{r}", lbl, bold=bold_)
+        formula(ws, f"U{r}", f, fmt=fmt, align=ALIGN_C, bold=bold_,
+                fill=FILL_PANEL if bold_ else None)
+    put(ws, "T27",
+        "Factor averages don't compound exactly across a mixed book — the mix line is "
+        "that honest residual.", fnt=F_SMALL_IT)
+
+    tor = BarChart()
+    tor.type = "bar"
+    tor.gapWidth = 40
+    tor.add_data(Reference(ws, min_col=23, min_row=6, max_row=16), titles_from_data=True)
+    tor.set_categories(Reference(ws, min_col=20, min_row=7, max_row=16))
+    tor.series[0].graphicalProperties.solidFill = STEEL
+    tor.legend = None
+    tor.y_axis.number_format = "0.00"
+    _style_chart(tor, "Who moves the book — EP-weighted contribution (pts)",
+                 y_title="Contribution (pts)", height=9, width=11)
+    ws.add_chart(tor, "T29")
+
+    ws.auto_filter.ref = f"A{L.PF_HDR}:O{f1}"
+    put(ws, f"B{L.PF_S_TOTAL + 4}",
+        "Filter freely; avoid SORTING this grid (rows are formulas aligned 1:1 with "
+        "tbl_LR) — the Decision Board gives the sanctioned ranked view.", fnt=F_SMALL_IT)
+
     ws.conditional_formatting.add(
         f"G{f0}:G{f1}",
         ColorScaleRule(start_type="min", start_color="D6E8D5",
