@@ -871,6 +871,231 @@ def solver_timing_table(
 
 
 # ---------------------------------------------------------------------------
+# Net delivery decomposition (DECISIONS.md D57)
+#
+# Given a net rate selection x from 1/1/P and ONE new rate change r at a
+# state-chosen effective date D inside the plan year, decompose the target's
+# month-by-month delivery on renewals:
+#
+#   delivered(m) = q(m)/q(m-12) = [W(m)/W(m-12)] x [M_w(m)/M_w(m-12)]
+#
+# The rate leg's base is the LIVE rows — taken rows plus planned rows
+# effective before 1/1/P (D39: only planned rows on/after 1/1/P are
+# superseded; this is NOT the Solver's taken-only D13 convention). The new
+# change enters affinely per month, W_new(m) = A(m) + B(m)·r, with the D31
+# first-in-month day-blend, so both the suggested filed change and the
+# required year-end mod solve in closed form.
+# ---------------------------------------------------------------------------
+
+
+def _live_changes(plan_year: int, combo: ComboInputs) -> tuple[RateChange, ...]:
+    """Rows that stay live under a net selection (taken + planned < 1/1/P)."""
+    jan1 = dt.date(plan_year, 1, 1)
+    return tuple(rc for rc in combo.rate_changes
+                 if rc.status == STATUS_TAKEN or rc.effective < jan1)
+
+
+@dataclass
+class NetDeliveryComponents:
+    plan_year: int
+    eff_date: dt.date
+    x: float                       # net selection for P
+    mod_on: bool                   # mod adjustment in force (else rate-only)
+    months: list                   # 12 absolute month indices, Jan..Dec P
+    w: list                        # written weights w(m)
+    a: list                        # W_new(m) = a(m) + b(m) * r
+    b: list
+    w12: list                      # year-ago written index W(m-12), live rows
+    mw12: list                     # year-ago written mod M_w(m-12)
+    mproj: list                    # projected written mod at m (anchor path)
+    p_blend: float                 # day-blend share in D's month (D31 rule)
+    c0: float                      # sum kappa(m) * a(m)
+    c1: float                      # sum kappa(m) * b(m)
+    sum_w: float
+    warnings: list = field(default_factory=list)
+
+
+def net_delivery_components(
+    plan_year: int, combo: ComboInputs, eff_date: dt.date
+) -> NetDeliveryComponents:
+    """Per-month affine components of delivered net under one new change at D."""
+    if combo.net_sel_p is None:
+        raise ValueError("net_delivery_components requires a net rate selection.")
+    if not dt.date(plan_year, 1, 1) <= eff_date <= dt.date(plan_year, 12, 31):
+        raise ValueError(
+            f"Effective date {eff_date} must lie inside plan year {plan_year}: a "
+            "prior-year change also enters the year-ago comparison base and the "
+            "closed form stops being exact (enter it in the rate log instead)."
+        )
+    live = _live_changes(plan_year, combo)
+    eng = MonthlyEngine(plan_year, combo, changes_override=live)
+    m_d = month_index(eff_date.year, eff_date.month)
+    mod_on = combo.mod_adjustment_enabled
+
+    months, w, a, b, w12, mw12, mproj = [], [], [], [], [], [], []
+    p_blend = 1.0
+    c0 = c1 = sum_w = 0.0
+    for j in range(12):
+        mi = month_index(plan_year, 1) + j
+        months.append(mi)
+        wm = eng.w(mi)
+        w.append(wm)
+        w12_m = eng.written_index(mi - 12)
+        w12.append(w12_m)
+        mw12_m = eng.written_mod(mi - 12)
+        mw12.append(mw12_m)
+        mproj_m = eng.written_mod(mi)
+        mproj.append(mproj_m)
+        if mi < m_d:
+            am, bm = eng.written_index(mi), 0.0
+        elif mi > m_d:
+            base = eng.written_index(mi)
+            am, bm = base, base
+        else:
+            # month of D: the blend splits at the FIRST live in-month change
+            # OR D, whichever is earlier (D31); the end-of-month leg carries r
+            som, eom, dim = mi_first(mi), mi_last(mi), mi_days(mi)
+            w_pre = eng.index_at(som - dt.timedelta(days=1))
+            w_eom = eng.index_at(eom)
+            in_month = [rc.effective for rc in live if som <= rc.effective <= eom]
+            first = min(in_month + [eff_date])
+            p_blend = ((eom - first).days + 1) / dim
+            am = (1.0 - p_blend) * w_pre + p_blend * w_eom
+            bm = p_blend * w_eom
+        a.append(am)
+        b.append(bm)
+        ratio = (mproj_m / mw12_m) if mod_on else 1.0
+        kappa = wm * ratio / w12_m
+        c0 += kappa * am
+        c1 += kappa * bm
+        sum_w += wm
+    return NetDeliveryComponents(
+        plan_year=plan_year, eff_date=eff_date, x=combo.net_sel_p, mod_on=mod_on,
+        months=months, w=w, a=a, b=b, w12=w12, mw12=mw12, mproj=mproj,
+        p_blend=p_blend, c0=c0, c1=c1, sum_w=sum_w,
+        warnings=[] if mod_on else [
+            "Mod adjustment OFF: target interpreted rate-only; the entire "
+            "delivery burden sits on the filing (D39)."],
+    )
+
+
+def suggest_net_rate(
+    plan_year: int, combo: ComboInputs, eff_date: dt.date
+) -> tuple[float, NetDeliveryComponents]:
+    """Closed-form filed change at D so the written-weighted delivered net,
+    with mods on the ALREADY-PROJECTED path, equals the target:
+
+        sum w(m)·[A(m)+B(m)·r]·mu(m)/W(m-12) = (1+x)·sum w(m)
+        =>  r* = ((1+x)·sum_w - C0) / C1
+    """
+    comp = net_delivery_components(plan_year, combo, eff_date)
+    if comp.c1 == 0.0:
+        raise ValueError(
+            "No plan-year written exposure on/after the effective date — the "
+            "filing cannot influence delivery (C1 = 0)."
+        )
+    r = ((1.0 + comp.x) * comp.sum_w - comp.c0) / comp.c1
+    return r, comp
+
+
+def required_m1(
+    plan_year: int, combo: ComboInputs, eff_date: dt.date, r: float
+) -> float:
+    """Dual closed form: the year-end written mod M_1' that delivers the
+    target given the filed change r. Plan-month mods are affine in M_1 along
+    the anchor path, M(m) = alpha(m) + beta(m)·M_1, so M_1' solves in one sum.
+    Requires the mod adjustment in force (rate-only mode has no mod ask)."""
+    comp = net_delivery_components(plan_year, combo, eff_date)
+    if not comp.mod_on:
+        raise ValueError("required_m1 is undefined when the mod adjustment is off.")
+    mods = combo.mods
+    x_asof = float(mods.m0_asof.toordinal() + 1)               # close-of-day (D2)
+    x_end = float(dt.date(plan_year, 12, 31).toordinal() + 1)
+    x_prior = float(add_months(mods.m0_asof, -12).toordinal() + 1)
+    num = (1.0 + comp.x) * comp.sum_w
+    den = 0.0
+    for j in range(12):
+        xm = mi_mid_ordinal(comp.months[j])
+        if mods.m_prior is not None and xm <= x_asof:
+            # explicit prior segment: independent of M_1
+            beta = 0.0
+            alpha = mods.m_prior + (mods.m0 - mods.m_prior) * (xm - x_prior) / (x_asof - x_prior)
+        else:
+            # on (or extrapolated from) the M_0 -> M_1 segment (§3.3.1)
+            beta = (xm - x_asof) / (x_end - x_asof)
+            alpha = mods.m0 * (1.0 - beta)
+        h = comp.w[j] * (comp.a[j] + comp.b[j] * r) / (comp.w12[j] * comp.mw12[j])
+        num -= h * alpha
+        den += h * beta
+    if den == 0.0:
+        raise ValueError("Mod path has no M_1 leverage over the plan year (den = 0).")
+    return num / den
+
+
+def net_delivery_by_month(
+    plan_year: int, combo: ComboInputs, eff_date: dt.date, r: float
+) -> list[dict]:
+    """The 12-row delivery decomposition at a given filed change r."""
+    comp = net_delivery_components(plan_year, combo, eff_date)
+    rows = []
+    for j in range(12):
+        w_new = comp.a[j] + comp.b[j] * r
+        rate_leg = w_new / comp.w12[j] - 1.0
+        price_req = (1.0 + comp.x) / (1.0 + rate_leg) - 1.0 if comp.mod_on else None
+        m_req = (comp.mw12[j] * (1.0 + comp.x) / (1.0 + rate_leg)
+                 if comp.mod_on else None)
+        ratio = (comp.mproj[j] / comp.mw12[j]) if comp.mod_on else 1.0
+        rows.append(dict(
+            mi=comp.months[j], w=comp.w[j], rate_leg=rate_leg,
+            price_leg_required=price_req, m_required=m_req, m_proj=comp.mproj[j],
+            delivered_at_proj=(1.0 + rate_leg) * ratio - 1.0,
+        ))
+    return rows
+
+
+def net_program_plan_lr(
+    plan_year: int, combo: ComboInputs, eff_date: dt.date, r: float,
+    m1_prime: float | None,
+) -> float:
+    """CY P plan LR if the concrete program is BOOKED instead of asserting the
+    net path: live history earns as modeled; plan-year cohorts carry
+    W_new(m) x M'(m)/M_ind with M' on the (M_0 -> M_1') anchor line (or the
+    rate leg alone when the mod adjustment is off). Comparable to the
+    net-mode plan LR (combined factor, A_mod = 1)."""
+    comp = net_delivery_components(plan_year, combo, eff_date)
+    live = _live_changes(plan_year, combo)
+    eng = MonthlyEngine(plan_year, combo, changes_override=live)
+    mods = combo.mods
+    x_asof = float(mods.m0_asof.toordinal() + 1)
+    x_end = float(dt.date(plan_year, 12, 31).toordinal() + 1)
+    jan_p = month_index(plan_year, 1)
+
+    def q_prog(k: int) -> float:
+        if k < jan_p:
+            return eng.combined_hist(k)
+        j = k - jan_p
+        w_new = comp.a[j] + comp.b[j] * r
+        if not comp.mod_on:
+            return w_new
+        beta = (mi_mid_ordinal(k) - x_asof) / (x_end - x_asof)
+        m_prime = mods.m0 * (1.0 - beta) + beta * float(m1_prime)
+        if mods.m_prior is not None and mi_mid_ordinal(k) <= x_asof:
+            m_prime = eng.written_mod(k)   # explicit prior segment unchanged
+        return w_new * m_prime / mods.m_ind
+
+    num = den = 0.0
+    for k in eng.cohorts:
+        wk, ekc = eng.w(k), eng.ec(k, plan_year)
+        if wk == 0.0 or ekc == 0.0:
+            continue
+        den += wk * ekc
+        num += wk * ekc * q_prog(k)
+    e_prog = num / den
+    return (lr_at_current_level(combo) * crl_indication(combo.rate_changes)
+            / e_prog * combo.a_other)
+
+
+# ---------------------------------------------------------------------------
 # Enhancement E2: plan-vs-actual attribution
 # ---------------------------------------------------------------------------
 
