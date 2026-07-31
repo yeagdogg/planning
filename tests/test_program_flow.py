@@ -15,6 +15,7 @@ from src.engine import (
     ComboInputs,
     ModInputs,
     RateChange,
+    combined_flow_by_month,
     month_index,
     program_flow_by_month,
 )
@@ -147,6 +148,82 @@ def test_seasonality_moves_only_averages():
     hand = (sum(r["w"] * (1.0 + r["rate_leg"]) for r in res_s.rows[:12])
             / sum(r["w"] for r in res_s.rows[:12]))
     assert res_s.avg_rate_ratio == pytest.approx(hand, abs=1e-15)
+
+
+CHG_A = (RateChange(dt.date(P - 1, 10, 1), 0.10, "taken", False),)
+CHG_B = (RateChange(dt.date(P - 1, 4, 1), 0.03, "taken", False),
+         RateChange(dt.date(P, 7, 1), 0.06, "planned", False))
+
+
+def test_combined_single_combo_degenerates():
+    combo = _combo(CHG_A, plan_ep=120.0)
+    single = program_flow_by_month(P, combo)
+    comb = combined_flow_by_month(P, [combo])
+    for cr, sr in zip(comb.rows, single.rows[:12]):
+        assert cr["rate_leg"] == pytest.approx(sr["rate_leg"], abs=1e-15)
+        assert cr["mod_leg"] == pytest.approx(sr["mod_leg"], abs=1e-15)
+        assert cr["delivered"] == pytest.approx(sr["delivered"], abs=1e-15)
+    assert comb.avg_delivered_ratio == pytest.approx(single.avg_delivered_ratio,
+                                                     abs=1e-15)
+
+
+def test_combined_within_state_is_ep_only():
+    """Shared seasonality (state-keyed) cancels out of the weights: the
+    EP x w combination equals the plain EP-weighted mean of the legs."""
+    season = (0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5)
+    ca = _combo(CHG_A, seasonality=season, plan_ep=100.0)
+    cb = _combo(CHG_B, seasonality=season, plan_ep=300.0)
+    comb = combined_flow_by_month(P, [ca, cb])
+    fa, fb = program_flow_by_month(P, ca), program_flow_by_month(P, cb)
+    for j in range(12):
+        hand = (100.0 * fa.rows[j]["delivered"] + 300.0 * fb.rows[j]["delivered"]) / 400.0
+        assert comb.rows[j]["delivered"] == pytest.approx(hand, abs=1e-15)
+
+
+def test_combined_mixed_modeff():
+    """Mod-off combos are excluded from the mod leg but included in delivered
+    (at their rate leg) — the honest book statistic."""
+    ca = _combo(CHG_A, plan_ep=100.0)
+    cb = _combo(CHG_B, mod_adjustment_enabled=False, plan_ep=100.0)
+    comb = combined_flow_by_month(P, [ca, cb])
+    fa, fb = program_flow_by_month(P, ca), program_flow_by_month(P, cb)
+    for j in range(12):
+        assert comb.rows[j]["mod_leg"] == pytest.approx(fa.rows[j]["mod_leg"],
+                                                        abs=1e-15)
+        hand = (fa.rows[j]["delivered"] + fb.rows[j]["rate_leg"]) / 2.0
+        assert comb.rows[j]["delivered"] == pytest.approx(hand, abs=1e-15)
+    # no mod-on combo at all -> mod leg is None
+    both_off = combined_flow_by_month(
+        P, [replace(ca, mod_adjustment_enabled=False), cb])
+    assert all(r["mod_leg"] is None for r in both_off.rows)
+    assert both_off.avg_mod_ratio is None
+
+
+def test_combined_zero_ep_excluded():
+    ca = _combo(CHG_A, plan_ep=100.0)
+    ghost = _combo(CHG_B, plan_ep=0.0)
+    ghost2 = _combo(CHG_B)                      # plan_ep None
+    comb = combined_flow_by_month(P, [ca, ghost, ghost2])
+    solo = combined_flow_by_month(P, [ca])
+    assert comb.rows == solo.rows
+    with pytest.raises(ValueError):
+        combined_flow_by_month(P, [ghost, ghost2])
+
+
+def test_combined_mix_effect_delivered_is_exact():
+    """Under mix, EP-weighted rate x EP-weighted mod need not equal the
+    EP-weighted delivered — delivered is the exact statistic (D60)."""
+    mods_hot = ModInputs(m_ind=0.85, m0=0.80, m0_asof=dt.date(P - 1, 9, 30), m1=0.95)
+    ca = _combo(CHG_A, mods=mods_hot, plan_ep=100.0)
+    cb = _combo(CHG_B, plan_ep=900.0)
+    comb = combined_flow_by_month(P, [ca, cb])
+    gaps = [abs((1 + r["rate_leg"]) * (1 + r["mod_leg"]) - (1 + r["delivered"]))
+            for r in comb.rows]
+    assert max(gaps) > 1e-6                     # the mix effect is real...
+    fa, fb = program_flow_by_month(P, ca), program_flow_by_month(P, cb)
+    for j in range(12):                          # ...and delivered stays exact
+        hand = (100.0 * fa.rows[j]["delivered"] + 900.0 * fb.rows[j]["delivered"]) / 1000.0
+        assert comb.rows[j]["delivered"] == pytest.approx(hand, abs=1e-15)
 
 
 def test_algebra_identities_rich_combo():

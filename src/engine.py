@@ -1173,6 +1173,72 @@ def program_flow_by_month(plan_year: int, combo: ComboInputs) -> ProgramFlowResu
     )
 
 
+@dataclass
+class CombinedFlowResult:
+    plan_year: int
+    rows: list                      # 12 dicts, Jan..Dec P (plan-year view only)
+    avg_rate_ratio: float           # EP-weighted mean of per-combo average ratios
+    avg_mod_ratio: float | None     # EP x modeff weighted; None if no mod-on combo
+    avg_delivered_ratio: float
+
+
+def combined_flow_by_month(
+    plan_year: int, combos: Sequence[ComboInputs]
+) -> CombinedFlowResult:
+    """EP-weighted combination of per-combo program flow (D60).
+
+    Monthly weights are EP x w(m) (``ComboInputs.plan_ep`` x the combo's
+    seasonality weight); within a state the w's are shared (state-keyed
+    seasonality) so the combination reduces to pure EP weighting there. The
+    mod leg additionally weights by the mod-adjustment flag (None when no
+    combo in view carries it); the delivered leg always includes every combo
+    (mod-off combos deliver their rate leg — the honest book statistic).
+    Because these are weighted MEANS, rate x mod need not equal delivered
+    exactly under mix — delivered is the exact statistic. Combos with zero
+    or missing EP carry no weight.
+    """
+    flows = [(c.plan_ep or 0.0, program_flow_by_month(plan_year, c)) for c in combos]
+    if not any(ep > 0.0 for ep, _ in flows):
+        raise ValueError("combined_flow_by_month needs at least one combo with EP.")
+    rows = []
+    for j in range(12):
+        nr = nm = nd_ = dw = dm = 0.0
+        mi = month_index(plan_year, 1) + j
+        for ep, pf in flows:
+            if ep <= 0.0:
+                continue
+            prow = pf.rows[j]
+            epw = ep * prow["w"]
+            dw += epw
+            nr += epw * prow["rate_leg"]
+            nd_ += epw * prow["delivered"]
+            if pf.mod_on:
+                dm += epw
+                nm += epw * prow["mod_leg"]
+        rows.append(dict(
+            mi=mi,
+            rate_leg=nr / dw,
+            mod_leg=(nm / dm) if dm > 0.0 else None,
+            delivered=nd_ / dw,
+        ))
+    ar = am = ad = de = dme = 0.0
+    for ep, pf in flows:
+        if ep <= 0.0:
+            continue
+        de += ep
+        ar += ep * pf.avg_rate_ratio
+        ad += ep * pf.avg_delivered_ratio
+        if pf.mod_on:
+            dme += ep
+            am += ep * pf.avg_mod_ratio
+    return CombinedFlowResult(
+        plan_year=plan_year, rows=rows,
+        avg_rate_ratio=ar / de,
+        avg_mod_ratio=(am / dme) if dme > 0.0 else None,
+        avg_delivered_ratio=ad / de,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Enhancement E2: plan-vs-actual attribution
 # ---------------------------------------------------------------------------
