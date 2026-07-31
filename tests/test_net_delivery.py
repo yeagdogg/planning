@@ -247,6 +247,22 @@ def test_planned_pickup_reproduces_delivery():
             brute.written_index(month_index(P, 1) + j), abs=1e-12)
 
 
+def test_program_basis_plan_lr():
+    """D65: the explicit rate x mod counterfactual. Identical to the headline
+    when no net selection is in force; different, and net-independent, when
+    one is."""
+    plain = _combo(SHOWCASE, net=None)
+    lp, lp1 = engine.program_basis_plan_lr(P, plain)
+    base = run_bridge(P, plain, "monthly")
+    assert lp == pytest.approx(base.cy_lr_p, abs=1e-12)
+    assert lp1 == pytest.approx(base.cy_lr_p1, abs=1e-12)
+    # asserting a target changes the headline but never the program basis
+    for x in (0.05, 0.10, 0.25):
+        netc = _combo(SHOWCASE, net=x)
+        assert engine.program_basis_plan_lr(P, netc) == (lp, lp1)
+        assert run_bridge(P, netc, "monthly").cy_lr_p != pytest.approx(lp, abs=1e-6)
+
+
 def test_by_month_rows_are_coherent():
     combo = _combo(SHOWCASE)
     r, comp = suggest_net_rate(P, combo, dt.date(P, 4, 1))

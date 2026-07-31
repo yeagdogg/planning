@@ -483,6 +483,47 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
     check("[program flow] published avg-ratio echoes tie the block results",
           bad_a == 0, f"{bad_a} mismatched combos")
 
+    # program-basis plan LR (D65): the explicit rate x mod counterfactual
+    from src.sheets_calc import PROG_LR
+    bad = bad_id = 0
+    for i, rowdef in enumerate(lr_rows):
+        cmb3 = sample_to_combo(cfg, lob, rowdef, rate_rows)
+        lp, lp1 = engine.program_basis_plan_lr(p, cmb3)
+        rr3 = L.CALC_RES_FIRST + i
+        if not (approx(cs[f"{xcol(PROG_LR['cylr'])}{rr3}"].value, lp, 1e-9)
+                and approx(cs[f"{xcol(PROG_LR['cylr1'])}{rr3}"].value, lp1, 1e-9)):
+            bad += 1
+        # the invariant: with no net selection there is only ONE path
+        if not cmb3.net_mode:
+            om3 = engine.run_bridge(p, cmb3, "monthly")
+            if not (approx(lp, om3.cy_lr_p, 1e-12)
+                    and approx(cs[f"{xcol(PROG_LR['ident'])}{rr3}"].value, 0.0, 1e-12)):
+                bad_id += 1
+    check("[program basis] plan LR ties the explicit-path oracle (all combos, both years)",
+          bad == 0, f"{bad} mismatched combos")
+    check("[program basis] identical to the headline on every non-net combo",
+          bad_id == 0, f"{bad_id} mismatches")
+    # the surfaces that display it
+    net_combo = next((x for x in lr_rows if x.get("netp") is not None), None)
+    if net_combo is not None:
+        ni = lr_rows.index(net_combo)
+        ncmb3 = sample_to_combo(cfg, lob, net_combo, rate_rows)
+        lp, _ = engine.program_basis_plan_lr(p, ncmb3)
+        gap = (lp - engine.run_bridge(p, ncmb3, "monthly").cy_lr_p) * 100.0
+        check("[program basis] Portfolio row shows the combo's program LR and gap",
+              approx(wb["Portfolio"][f"P{L.PF_FIRST + ni}"].value, lp, 1e-9)
+              and approx(wb["Portfolio"][f"Q{L.PF_FIRST + ni}"].value, gap, 1e-9),
+              f"wb={wb['Portfolio'][f'P{L.PF_FIRST + ni}'].value} oracle={lp}")
+        # State Summary 'All' view: EP-weighted across the state's BUs
+        sr = 8 + list(_states(cfg)).index(net_combo["state"])
+        rows_s = [(x["ep"], sample_to_combo(cfg, lob, x, rate_rows))
+                  for x in lr_rows if x["state"] == net_combo["state"]]
+        exp_prog = (sum(ep * engine.program_basis_plan_lr(p, c)[0] for ep, c in rows_s)
+                    / sum(ep for ep, _ in rows_s))
+        check("[program basis] State Summary shows the EP-weighted program LR",
+              approx(ss[f"AH{sr}"].value, exp_prog, 1e-9),
+              f"wb={ss[f'AH{sr}'].value} oracle={exp_prog}")
+
     # live dimension lists (D42): _lists uniques match the seeded roster
     ls = wb["_lists"]
     got_bus = [ls[f"A{3 + i}"].value for i in range(len(cfg.business_units))]
@@ -1001,6 +1042,34 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
                      ("Rate Log", f"C{pl_xl}"): None, ("Rate Log", f"D{pl_xl}"): None,
                      ("Rate Log", f"E{pl_xl}"): None, ("Rate Log", f"F{pl_xl}"): None},
                     a9g7)
+
+    # 9i. program-basis plan LR (D65): switch the worked example ONTO a net
+    # selection and the gap must open exactly as the oracle says
+    we_net65 = replace(base_combo, net_sel_p=0.08)
+    lp65, _ = engine.program_basis_plan_lr(p, we_net65)
+    gap65 = (lp65 - engine.run_bridge(p, we_net65, "monthly").cy_lr_p) * 100.0
+
+    def a9i(wb):
+        from src.sheets_calc import PROG_LR
+        from src.xlstyle import col as xcol2
+        cs_ = wb["_calc"]
+        rr_ = L.CALC_RES_FIRST + lr_rows.index(we)
+        got_lr = cs_[f"{xcol2(PROG_LR['cylr'])}{rr_}"].value
+        got_gap = cs_[f"{xcol2(PROG_LR['gap'])}{rr_}"].value
+        check("[program basis] gap opens when a net selection is switched on",
+              approx(got_lr, lp65, 1e-9) and approx(got_gap, gap65, 1e-9),
+              f"wb lr={got_lr} gap={got_gap} oracle lr={lp65} gap={gap65}")
+        brg = wb["Bridge"]
+        note = next((brg[f"B{r_}"].value for r_ in range(1, 120)
+                     if isinstance(brg[f"B{r_}"].value, str)
+                     and "booked the logged program" in brg[f"B{r_}"].value), None)
+        check("[program basis] Bridge surfaces the counterfactual under net mode",
+              note is not None, "counterfactual sentence absent")
+        check("[program basis] switching a combo to net keeps every check passing",
+              nval(wb, "ck_overall") == "ALL CHECKS PASS",
+              str(nval(wb, "ck_overall")))
+    run("program basis: worked example switched to net",
+        {("Inputs", f"Q{we_row_xl}"): 0.08}, a9i)
 
     # 9h. Program Flow / dashboard written-legs exercises (D59)
     from src.sheets_programflow import (grid_starts as pf_grid_starts,

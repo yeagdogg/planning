@@ -51,6 +51,18 @@ FLOW_PUB = dict(
 # so no published column moves.
 W_AOTHER_COL = 92   # CN
 
+# Program-basis plan LR (D65): the explicit rate x mod counterfactual to a net
+# selection, published so every exhibit reads it for one formula. Appended
+# after CN so no earlier column moves.
+PROG_LR = dict(
+    cylr=93,      # CO  CY P plan LR on the explicit paths
+    cylr1=94,     # CP  CY P+1
+    w_cylr=95,    # CQ  x EP (aggregation)
+    w_cylr1=96,   # CR  x EP
+    ident=97,     # CS  |program - asserted| on NON-net rows; 0 on net rows
+    gap=98,       # CT  signed program - asserted in points (0 when non-net)
+)
+
 
 def _grey(ws, addr):
     ws[addr].font = font(GREY_DARK, size=9)
@@ -120,6 +132,13 @@ def build_calc(ctx: Ctx):
             f_grey(ws, f"{cL}{rr}",
                    f"=SUMPRODUCT({blk['w']},{ec},{blk['Mw']})/SUMPRODUCT({blk['w']},{ec})",
                    FMT_MOD)
+        # earned rate index on the EXPLICIT written path (col N) rather than the
+        # in-force path (col U): identical off net mode, the counterfactual on
+        # it — the basis for the program-basis plan LR (D65)
+        for cL, ec in (("K", blk["ec_p"]), ("L", blk["ec_p1"])):
+            f_grey(ws, f"{cL}{rr}",
+                   f"=SUMPRODUCT({blk['w']},{ec},{blk['W']})/SUMPRODUCT({blk['w']},{ec})",
+                   FMT_IDX)
         # program-flow ratio averages (D59): w-weighted means of the monthly
         # YoY RATIOS over Jan..Dec P (vs year-ago) — NOT the E_CY aggregate-
         # ratio convention. Read by the Program Flow summary via stride-INDEX.
@@ -211,6 +230,22 @@ def build_calc(ctx: Ctx):
         f_grey(ws, f"{col(FLOW_PUB['gap'])}{r}",
                f"=IF($AK{r}=1,ABS(${col(FLOW_PUB['avg_del'])}{r}-1-$AL{r}),0)", FMT_IDX)
         f_grey(ws, f"{col(W_AOTHER_COL)}{r}", f"=$R{r}*$V{r}", FMT_IDX)
+        # program-basis plan LR (D65): LR_current x (CRL / E_CY on the explicit
+        # path) x the UNFORCED mod drift x A_other. Net mode forces A_mod to 1
+        # and earns the asserted path, so these differ only where a net
+        # selection is in force — pinned by the identity column below.
+        amod_p = f"IF($O${t}=1,$F${t}/$G{r},1)"
+        amod_p1 = f"IF($O${t}=1,$F${t}/$H{r},1)"
+        cy, cy1 = col(PROG_LR["cylr"]), col(PROG_LR["cylr1"])
+        f_grey(ws, f"{cy}{r}", f"=$M{r}*($C{r}/$K${rr})*{amod_p}*$R{r}", "0.0%")
+        f_grey(ws, f"{cy1}{r}",
+               f"=$M{r}*(1+$S{r})*($C{r}/$L${rr})*{amod_p1}*$R{r}", "0.0%")
+        f_grey(ws, f"{col(PROG_LR['w_cylr'])}{r}", f"=${cy}{r}*$V{r}", FMT_IDX)
+        f_grey(ws, f"{col(PROG_LR['w_cylr1'])}{r}", f"=${cy1}{r}*$V{r}", FMT_IDX)
+        f_grey(ws, f"{col(PROG_LR['ident'])}{r}",
+               f"=IF($AK{r}=1,0,ABS(${cy}{r}-$N{r})+ABS(${cy1}{r}-$O{r}))", FMT_IDX)
+        f_grey(ws, f"{col(PROG_LR['gap'])}{r}",
+               f"=IF($AK{r}=0,0,(${cy}{r}-$N{r})*100)", "+0.00;-0.00;0.00")
     res_names = {
         "calc_key": ("A", "Combo keys, aligned 1:1 with tbl_LR rows"),
         "calc_term": ("B", "Policy term by combo"),
@@ -242,6 +277,19 @@ def build_calc(ctx: Ctx):
         "calc_netmode": ("AK", "1 when the combo carries a net rate selection (D39)"),
         "calc_netx": ("AL", "Net selection x(P) by combo (0 when off)"),
     }
+    for nm, key, desc in (
+            ("calc_cylr_prog", "cylr",
+             "CY P plan LR on the EXPLICIT rate x mod paths (D65)"),
+            ("calc_cylr1_prog", "cylr1", "CY P+1 plan LR on the explicit paths"),
+            ("calc_w_cylr_prog", "w_cylr", "Program-basis CY P plan LR x EP"),
+            ("calc_w_cylr1_prog", "w_cylr1", "Program-basis CY P+1 plan LR x EP"),
+            ("calc_progident", "ident",
+             "Non-net rows: |program basis - headline| for both years; 0 on net rows"),
+            ("calc_proggap", "gap",
+             "Net rows: program basis minus the asserted plan LR, in points")):
+        ctx.define(nm, "_calc",
+                   f"${col(PROG_LR[key])}${L.CALC_RES_FIRST}:"
+                   f"${col(PROG_LR[key])}${L.CALC_RES_LAST}", desc)
     ctx.define("calc_w_aother", "_calc",
                f"${col(W_AOTHER_COL)}${L.CALC_RES_FIRST}:"
                f"${col(W_AOTHER_COL)}${L.CALC_RES_LAST}",

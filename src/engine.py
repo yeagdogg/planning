@@ -1193,6 +1193,20 @@ def program_flow_by_month(plan_year: int, combo: ComboInputs) -> ProgramFlowResu
     )
 
 
+def program_basis_plan_lr(plan_year: int, combo: ComboInputs) -> tuple[float, float]:
+    """CY P and P+1 plan LR from the EXPLICIT rate and mod paths (D65).
+
+    The counterfactual to a net rate selection: what the logged program —
+    every rate row as written, plus the projected mod path — delivers, versus
+    the asserted combined target. Identical to the headline plan LR for
+    combos that carry no net selection (there is only one path), which is the
+    invariant the workbook checks on every non-net row.
+    """
+    explicit = replace(combo, net_sel_p=None, net_sel_p1=None)
+    res = run_bridge(plan_year, explicit, "monthly")
+    return res.cy_lr_p, res.cy_lr_p1
+
+
 @dataclass
 class CombinedFlowResult:
     plan_year: int

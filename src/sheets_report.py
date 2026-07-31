@@ -607,6 +607,13 @@ def build_checks(ctx: Ctx):
     A(("Structure", "State Summary plan LR = the row's own factor product "
        "(projected LR x rate earn-in x mod drift x other adj)", "=0",
        "=SUM(ss_mathchk)", 1e-9, "FAIL"))
+    # ---- appended v2.7 checks (program-basis plan LR, D65) ----
+    A(("Structure", "Program-basis plan LR equals the headline on every combo with NO "
+       "net selection (one path, both years)", "=0", "=SUM(calc_progident)", 1e-9,
+       "FAIL"))
+    A(("Advisory", "Net combo(s) whose logged program lands 1pt+ from the asserted plan "
+       "LR (see Net Delivery / Program Flow)", "=0",
+       '=SUMPRODUCT((ABS(calc_proggap)>1)*1)', 0, "WARN"))
 
     header_row(ws, L.CK_HDR, 1,
                ["#", "Category", "Check", "Expected", "Actual", "Tolerance", "Status",
@@ -945,6 +952,19 @@ def build_methodology(ctx: Ctx):
          "statistic — the same honesty as the Portfolio bridge's mix line). The "
          "delta-vs-assertion column stays per-BU, and a view-independent Checks "
          "advisory watches every net combo's program-vs-assertion gap book-wide.",
+         "6e. Program basis vs the assertion at the plan-LR level (D65). A net "
+         "selection replaces the premium side with one asserted combined factor "
+         "(A_mod = 1); the same combo also has an EXPLICIT valuation — its logged "
+         "rate program earning in, times its projected mod path — and the workbook "
+         "now publishes both. 'Plan LR - program basis' is LR_current x (CRL / E_CY "
+         "on the written path) x mod drift x A_other; the gap against the headline "
+         "is what booking the program instead of asserting the target would cost or "
+         "save. It appears on State Summary (per state, EP-weighted), Portfolio (per "
+         "combo), Program Flow (the plan-LR twin of its monthly leg gap), the "
+         "Control KPI band (book-wide), and as a sentence on the Bridge. Combos with "
+         "no net selection have only one path, so the two valuations are identical "
+         "by construction — a Checks row asserts exactly that on every non-net row, "
+         "which is what keeps the feature honest.",
          ]),
         ("7. Solver (E1)", [
          "The CY earned index is linear in a single unknown change r, so the required rate "

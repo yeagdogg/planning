@@ -449,6 +449,13 @@ def build_control(ctx: Ctx):
         ('="Written mod: current / projected"', None, FMT_GEN,
          "current written mod  /  projected at plan-year end"),
         ('="Checks status"', "=ck_overall", FMT_GEN, "see the Checks sheet"),
+        # D65: book-level assertion vs logged program — "—" when nothing in the
+        # book carries a net selection, so it never invents a comparison
+        ('="Book: program vs asserted"',
+         '=IF(OR(SUMPRODUCT(calc_netmode)=0,SUM(calc_ep)=0),"—",'
+         "(SUM(calc_w_cylr_prog)-SUM(calc_w_cylr))/SUM(calc_ep)*100)",
+         '+0.00" pts";-0.00" pts";0.00" pts"',
+         "plan LR if you book the logged program instead of the net target"),
     ]
     for i, (lbl_f, val_f, fmt, sub) in enumerate(cards):
         c1 = 2 + i * 2  # B, D, F, H, J, L

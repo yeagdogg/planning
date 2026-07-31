@@ -97,8 +97,9 @@ def build_program_flow(ctx: Ctx):
     # ---- per-state summary table ----
     hdr, first = PF_SUM_HDR, PF_SUM_FIRST
     headers = ["State", "Adj plan EP (000s)", "Net target", "Avg YoY rate leg",
-               "Avg YoY mod leg", "Avg YoY delivered net", "Δ vs net assertion"]
-    header_row(ws, hdr, 1, headers, widths=[7, 12, 10, 12, 12, 13, 12])
+               "Avg YoY mod leg", "Avg YoY delivered net", "Δ vs net assertion",
+               "Plan LR gap: program vs asserted (pts)"]
+    header_row(ws, hdr, 1, headers, widths=[7, 12, 10, 12, 12, 13, 12, 14])
     ws.row_dimensions[hdr].height = 42
     for h, cL in (("key", "O"), ("blk row", "P"), ("|gap|", "Q")):
         put(ws, f"{cL}{hdr}", h, fnt=font(GREY_DARK, size=8), align=ALIGN_C)
@@ -145,6 +146,18 @@ def build_program_flow(ctx: Ctx):
         one_g = sg + (f"IF(INDEX('_calc'!$L:$L,$P{r}),"
                       f"INDEX('_calc'!$J:$J,$P{r}+51)-1-INDEX('_calc'!$M:$M,$P{r}),"
                       f"\"—\"))")
+        # D65: the same disagreement one level up — plan LR, not the legs
+        # the All branch averages over the state's NET combos; the single-BU
+        # branch must gate on THAT combo's own net flag, not the state's
+        nm_st = f"SUMIFS(calc_netmode,calc_state,$A{r})"
+        one_h = (f'IF($P{r}=0,"—",IF(INDEX(calc_netmode,MATCH($O{r},calc_key,0))=0,"—",'
+                 f"INDEX(calc_proggap,MATCH($O{r},calc_key,0))))")
+        all_h = (f'IF({nm_st}=0,"—",'
+                 f"SUMPRODUCT((calc_state=$A{r})*calc_netmode*calc_proggap)/{nm_st})")
+        formula(ws, f"H{r}",
+                f'=IF($A{r}="","",IF(pf_BU="All",{all_h},{one_h}))',
+                fmt='+0.00;-0.00;0.00', align=ALIGN_C, fill=band_fill,
+                border=BORDER_THIN)
         for cc, allf, onef, b in (("C", all_c, one_c, False),
                                   ("D", _all_avg("avg_rate"), one_d, False),
                                   ("E", all_e, one_e, False),
