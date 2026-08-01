@@ -36,7 +36,7 @@ from . import engine
 from .engine import ComboInputs, ModInputs, RateChange
 from .xlstyle import quote_sheet
 
-GENERATOR_VERSION = "3.0.0"
+GENERATOR_VERSION = "3.1.0"
 
 
 class SHEETS:

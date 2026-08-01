@@ -4,7 +4,9 @@ Sections, top to bottom:
   1. Results table (rows CALC_RES_FIRST..CALC_RES_LAST) — one row per tbl_LR
      row, read by Portfolio / State Summary / Program Flow. Columns A..AL are
      the D38 annual projection; AM.. are the D60 published program-flow
-     columns (monthly legs + EP x weight products; see FLOW_PUB).
+     columns (monthly legs + EP x weight products; see FLOW_PUB); CU..DH the
+     book's rate-change history (BOOK_PUB); DI.. the D68 prior-year legs
+     (PRIOR_PUB).
   2. Combo engine blocks (one per tbl_LR row), stride 54 rows.
   3. Scenario-transformed rate logs (4 x 9 columns) + 4 scenario blocks
      for the SELECTED combo.
@@ -73,6 +75,27 @@ BOOK_PUB = dict(
     slot=101,     # CW..DH  4 slots x 3 columns, chronological
 )
 BOOK_SLOTS = 4
+
+# D68: the PRIOR year — the same three monthly legs plus their average, over
+# Jan..Dec P-1 (the year currently flowing, whose year-ago base is P-2). The
+# cohort blocks already span Jan P-2..Dec P+1, so this publishes rows that
+# were always computed and never read. Appended after the book block so no
+# published column moves and tools/harvest.py keeps every index it maps.
+#
+# The epw family is deliberately NOT duplicated: the seasonality weight is
+# 12*INDEX(se_block,srow,MONTH(m))/ssum — a function of calendar MONTH alone —
+# so w(Jan P-1) = w(Jan P) and the published plan-year weights aggregate the
+# prior year correctly. Pinned by tests/test_program_flow.py
+# (test_prior_weights_equal_plan_year_weights_by_calendar_month) and by the
+# phase-C All-view tie, which would fail if the reuse were ever wrong.
+PRIOR_PUB = dict(
+    rate=113,       # DI..DT  YoY written rate leg, Jan..Dec P-1
+    mod=125,        # DU..EF  YoY written mod leg (raw path, ungated)
+    delivered=137,  # EG..ER  YoY delivered net leg
+    avg_rate=149,   # ES      prior-year avg rate RATIO (block results echo)
+    avg_mod=150,    # ET      prior-year avg mod RATIO
+    avg_del=151,    # EU      prior-year avg delivered RATIO
+)
 
 
 def _grey(ws, addr):
@@ -161,6 +184,18 @@ def build_calc(ctx: Ctx):
         f_grey(ws, f"J{rr}",
                f"=IF($O${t}=1,SUMPRODUCT({wr},{np_}/{ny}*{op}/{oy})/SUM({wr}),$H{rr})",
                FMT_IDX)
+        # D68: the same three averages one year back (Jan..Dec P-1 over its own
+        # P-2 base) — the year currently flowing, shown beside the plan year.
+        # M/N/O mirror H/I/J exactly; the results row sits outside every cohort
+        # range so reusing those letters cannot collide with the block columns.
+        wrp = f"$H${t + 15}:$H${t + 26}"
+        npp, nyp = f"$N${t + 15}:$N${t + 26}", f"$N${t + 3}:$N${t + 14}"
+        opp, oyp = f"$O${t + 15}:$O${t + 26}", f"$O${t + 3}:$O${t + 14}"
+        f_grey(ws, f"M{rr}", f"=SUMPRODUCT({wrp},{npp}/{nyp})/SUM({wrp})", FMT_IDX)
+        f_grey(ws, f"N{rr}", f"=SUMPRODUCT({wrp},{opp}/{oyp})/SUM({wrp})", FMT_IDX)
+        f_grey(ws, f"O{rr}",
+               f"=IF($O${t}=1,SUMPRODUCT({wrp},{npp}/{nyp}*{opp}/{oyp})/SUM({wrp}),"
+               f"$M{rr})", FMT_IDX)
 
     # ------------------------------------------------------------------
     # 1. Results table rows 4..21 (linked by Portfolio via calc_* names)
@@ -234,6 +269,20 @@ def build_calc(ctx: Ctx):
             f_grey(ws, f"{col(FLOW_PUB['mod'] + j)}{r}",
                    f"=$O${num}/$O${den}-1", FMT_IDX)
             f_grey(ws, f"{col(FLOW_PUB['epw'] + j)}{r}", f"=$V{r}*$H${num}", FMT_IDX)
+        # D68 published prior-year columns (see PRIOR_PUB above): identical
+        # formulas one year back — Jan..Dec P-1 over its own P-2 base. No epw
+        # twin; the plan-year weights above serve both years.
+        for j in range(12):
+            num, den = t + 15 + j, t + 3 + j
+            f_grey(ws, f"{col(PRIOR_PUB['delivered'] + j)}{r}",
+                   f"=$N${num}/$N${den}*IF($O${t}=1,$O${num}/$O${den},1)-1", FMT_IDX)
+            f_grey(ws, f"{col(PRIOR_PUB['rate'] + j)}{r}",
+                   f"=$N${num}/$N${den}-1", FMT_IDX)
+            f_grey(ws, f"{col(PRIOR_PUB['mod'] + j)}{r}",
+                   f"=$O${num}/$O${den}-1", FMT_IDX)
+        f_grey(ws, f"{col(PRIOR_PUB['avg_rate'])}{r}", f"=$M${t + 51}", FMT_IDX)
+        f_grey(ws, f"{col(PRIOR_PUB['avg_mod'])}{r}", f"=$N${t + 51}", FMT_IDX)
+        f_grey(ws, f"{col(PRIOR_PUB['avg_del'])}{r}", f"=$O${t + 51}", FMT_IDX)
         f_grey(ws, f"{col(FLOW_PUB['modeff'])}{r}", f"=$O${t}", FMT_INT)
         f_grey(ws, f"{col(FLOW_PUB['avg_rate'])}{r}", f"=$H${t + 51}", FMT_IDX)
         f_grey(ws, f"{col(FLOW_PUB['avg_mod'])}{r}", f"=$I${t + 51}", FMT_IDX)

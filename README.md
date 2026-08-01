@@ -53,7 +53,7 @@ src/sheets_calc.py         hidden _calc engine blocks (portfolio/scenario/attrib
 src/sheets_main.py         Bridge, Portfolio (+ Decision Board), State Summary, Scenarios,
                            Solver, Attribution builders
 src/sheets_netdelivery.py  Net Delivery tab + hidden _netcalc blocks (D57)
-src/sheets_programflow.py  Program Flow tab: state x month delivered-flow grids (D59)
+src/sheets_programflow.py  Program Flow tab: state x month delivered-flow grids (D59/D68)
 src/sheets_book.py         the BOOK: combined roll-up across every LOB (D66)
 src/sheets_walkthrough.py  Walkthrough: the fully worked example, live for the selection
 src/sheets_briefs.py       One-Pager (print-ready brief) and Compare builders
@@ -119,12 +119,29 @@ convention to 1e-9, and 63.36% at 4 decimals on annual-term books); **every BU×
 tied to a per-combo oracle run (9 metrics each); solver round-trip (+5.0% at 4/1); chart axes
 intact after the Excel resave; scenario, attribution, seasonality, basis, mod-toggle,
 degenerate-input, and plan-year-change exercises each tied to fresh oracle runs. At last run:
-Property **208 checks / 0 failed** (full), the other five LOB files 65 (or 63 for the
+Property **222 checks / 0 failed** (full), the other five LOB files 65 (or 63 for the
 6-month-term Inland Marine) / 0 failed each (phases A–C), the combined book **43 / 0**
-(`tools/verify_book.py`), pytest 136/136. The business
+(`tools/verify_book.py`), pytest 144/144. The business
 units and states in `config/config.yaml` are addressed positionally, so renaming them to
 your own book keeps every seeded example working (a repeated BU or state is rejected at
 load time).
+
+## Two years on the flow tabs
+
+Program Flow and Net Delivery show **the year now flowing beside the plan year** — steel
+band on the left (Jan P−1 … Dec P−1, measured against P−2), navy on the right (Jan P …
+Dec P). Reading across the seam is the point: a filing shows up in the left band while it
+is still earning through, and in the right band only for the months before its anniversary,
+so the two blocks together say how much of today's momentum survives into the plan.
+
+On Program Flow the prior-year columns are an **outline group** — the `[−]` button above
+column N collapses the whole left band, summary columns included, leaving exactly the
+plan-year-only tab. Net Delivery has no group (its summary keeps input columns under those
+letters) and carries the prior year on the rate leg only: there is no target in P−1, so a
+required pricing walk is undefined there and that block is deliberately empty.
+
+Nothing new is modelled — the cohort blocks always spanned Jan P−2 … Dec P+1, so this is
+data that was computed and never shown.
 
 ## The combined book
 

@@ -371,6 +371,41 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
                   bad_m == 0, f"{bad_m} mismatched months")
             check("[net delivery] solve residual is zero",
                   approx(ncs[f"P{rr}"].value, 0.0, 1e-9))
+            # D68: the prior-year rate leg is pure program flow — the tab's new
+            # change is date-validated into the plan year, so it can never
+            # reach a P-1 month. This is the tie that would catch a wrong
+            # cohort offset (the band that broke silently in D64).
+            npf = engine.program_flow_by_month(p, ncmb)
+            bad_y = sum(0 if approx(ncs[f"AG{t + 15 + j}"].value,
+                                    npf.prior_rows[j]["rate_leg"], 1e-9) else 1
+                        for j in range(12))
+            check("[net delivery] D68 prior-year rate leg ties the program-flow oracle",
+                  bad_y == 0, f"{bad_y} mismatched months")
+            from src.sheets_netdelivery import (ND_FLAG_COL as NDFC, ND_HDR as NDH,
+                                                ND_PRIOR_COL as NDYC)
+            nd_ws = wb[SHEETS.NET_DELIVERY]
+            nd_nd = len(cfg.states) + 3
+            # rate grid: section row g1, header g1+2, first data row g1+3;
+            # pricing grid follows at g2 = g1 + 3 + nd + 3
+            nd_g1 = next(rw[0].row for rw in
+                         nd_ws.iter_rows(min_row=1, max_row=nd_ws.max_row, max_col=1)
+                         if isinstance(rw[0].value, str)
+                         and rw[0].value.startswith("How the target is delivered"))
+            nd_g2 = nd_g1 + 3 + nd_nd + 3
+            bad_y = sum(0 if approx(nd_ws.cell(row=nd_g1 + 3 + si,
+                                               column=NDYC + j).value,
+                                    npf.prior_rows[j]["rate_leg"], 1e-9) else 1
+                        for j in range(12))
+            check("[net delivery] D68 the TAB's prior-year band ties the oracle",
+                  bad_y == 0, f"{bad_y} mismatched months")
+            empty = all(nd_ws.cell(row=nd_g2 + 3 + si, column=NDYC + j).value
+                        in (None, "") for j in range(12))
+            check("[net delivery] D68 the pricing grid has no prior-year block "
+                  "(no target in P-1, so nothing to solve)", empty,
+                  "prior-year pricing cells must stay empty")
+            check("[net delivery] D68 flags column sits right of both year bands",
+                  nd_ws.cell(row=NDH, column=NDFC).value == "Flags",
+                  repr(nd_ws.cell(row=NDH, column=NDFC).value))
             # the deep-dive band resolves the SAME combo through its own
             # pickers, so it must reproduce that state's block cell for cell
             # (the band had no tie until a resolver typo broke it silently)
@@ -394,7 +429,8 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
 
     # Program Flow (D59): dashboard written legs, the locked block, and the
     # tab's summary averages + worked-example grid rows tie program_flow_by_month
-    from src.sheets_programflow import PF_SUM_FIRST, grid_starts
+    from src.sheets_programflow import (PF_PLAN_COL, PF_PRIOR_COL, PF_SUM_FIRST,
+                                        grid_starts)
     pfr = engine.program_flow_by_month(p, combo)
     fd = wb["Flow Dashboard"]
     bad = 0
@@ -428,38 +464,74 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
     check("[program flow] locked block ties the taken-only engine (48 cohorts)",
           bad == 0, f"{bad} mismatched cohorts")
     pfs = wb[SHEETS.PROGRAM_FLOW]
-    bad = 0
+    # summary metrics live in two column bands (D68): the prior year at
+    # PF_PRIOR_COL (rate/mod/delivered) and the plan year at PF_PLAN_COL
+    # (EP, net target, rate, mod, delivered, delta, gap)
+    SUM_P = {k: PF_PLAN_COL + o for k, o in
+             (("ep", 0), ("net", 1), ("rate", 2), ("mod", 3), ("del", 4),
+              ("dlt", 5), ("gap", 6))}
+    SUM_Y = {k: PF_PRIOR_COL + o for k, o in (("rate", 0), ("mod", 1), ("del", 2))}
+    bad = bad_y = 0
     for i, stname in enumerate(_states(cfg)):
         rowdef = next(x for x in lr_rows if x["bu"] == _bu(cfg, 0) and x["state"] == stname)
         cpf = engine.program_flow_by_month(p, sample_to_combo(cfg, lob, rowdef, rate_rows))
         r = PF_SUM_FIRST + i
-        ok = (approx(pfs[f"D{r}"].value, cpf.avg_rate_ratio - 1.0, 1e-9)
-              and approx(pfs[f"F{r}"].value, cpf.avg_delivered_ratio - 1.0, 1e-9))
-        ok = ok and (pfs[f"E{r}"].value == "—" if cpf.avg_mod_ratio is None
-                     else approx(pfs[f"E{r}"].value, cpf.avg_mod_ratio - 1.0, 1e-9))
-        if not ok:
+
+        def _cell(cmap, key, row_=r):
+            return pfs.cell(row=row_, column=cmap[key]).value
+
+        def _ok(cmap, key, ratio, row_=r):
+            v = _cell(cmap, key, row_)
+            return (v == "—") if ratio is None else approx(v, ratio - 1.0, 1e-9)
+
+        if not (_ok(SUM_P, "rate", cpf.avg_rate_ratio)
+                and _ok(SUM_P, "del", cpf.avg_delivered_ratio)
+                and _ok(SUM_P, "mod", cpf.avg_mod_ratio)):
             bad += 1
+        if not (_ok(SUM_Y, "rate", cpf.avg_rate_ratio_prior)
+                and _ok(SUM_Y, "del", cpf.avg_delivered_ratio_prior)
+                and _ok(SUM_Y, "mod", cpf.avg_mod_ratio_prior)):
+            bad_y += 1
     check("[program flow] summary averages tie oracle for every live state",
           bad == 0, f"{bad} mismatched states")
+    check("[program flow] D68 prior-year summary averages tie oracle for every state",
+          bad_y == 0, f"{bad_y} mismatched states")
     g1, g2, g3 = grid_starts(cfg)
-    bad = 0
+    bad = bad_y = 0
     for j in range(12):
-        prow = pfr.rows[j]
-        ok = (approx(pfs.cell(row=g1 + 3, column=2 + j).value, prow["rate_leg"], 1e-9)
-              and approx(pfs.cell(row=g3 + 3, column=2 + j).value,
-                         prow["delivered"], 1e-9))
-        ml = prow["mod_leg"]
-        v2 = pfs.cell(row=g2 + 3, column=2 + j).value
-        ok = ok and (v2 == "—" if ml is None else approx(v2, ml, 1e-9))
-        if not ok:
-            bad += 1
+        for c0, rows_, tally in ((PF_PLAN_COL, pfr.rows, "p"),
+                                 (PF_PRIOR_COL, pfr.prior_rows, "y")):
+            prow = rows_[j]
+            ok = (approx(pfs.cell(row=g1 + 3, column=c0 + j).value,
+                         prow["rate_leg"], 1e-9)
+                  and approx(pfs.cell(row=g3 + 3, column=c0 + j).value,
+                             prow["delivered"], 1e-9))
+            ml = prow["mod_leg"]
+            v2 = pfs.cell(row=g2 + 3, column=c0 + j).value
+            ok = ok and (v2 == "—" if ml is None else approx(v2, ml, 1e-9))
+            if not ok:
+                if tally == "p":
+                    bad += 1
+                else:
+                    bad_y += 1
     check("[program flow] worked-example grid rows tie oracle (3 grids x 12 months)",
           bad == 0, f"{bad} mismatched months")
+    check("[program flow] D68 prior-year grid rows tie oracle (3 grids x 12 months)",
+          bad_y == 0, f"{bad_y} mismatched months")
+    # the two bands must not be the same numbers: P-1 is measured against P-2,
+    # so a real program moves between them (a copy-paste of the plan-year
+    # offsets would silently produce identical blocks)
+    same = sum(1 for j in range(12)
+               if approx(pfs.cell(row=g3 + 3, column=PF_PRIOR_COL + j).value,
+                         pfs.cell(row=g3 + 3, column=PF_PLAN_COL + j).value, 1e-12))
+    check("[program flow] the two year bands are genuinely different series",
+          same < 12, f"{same}/12 months identical — prior band may be reading plan rows")
 
     # published flow columns (D60): the flat projection ties per-combo oracle
-    from src.sheets_calc import FLOW_PUB
+    from src.sheets_calc import FLOW_PUB, PRIOR_PUB
     from src.xlstyle import col as xcol
     bad = bad_w = bad_a = 0
+    bad_y = bad_ya = bad_epw = 0
     for i, rowdef in enumerate(lr_rows):
         cmb2 = sample_to_combo(cfg, lob, rowdef, rate_rows)
         cpf = engine.program_flow_by_month(p, cmb2)
@@ -473,15 +545,42 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
             wv = cs[f"{xcol(FLOW_PUB['epw'] + j)}{rr2}"].value
             if wv is None or epw_o == 0 or not approx(wv / epw_o, 1.0, 1e-9):
                 bad_w += 1
+            # D68: the prior-year legs, and the assumption that lets ONE epw
+            # family serve both years — w is a function of calendar month, so
+            # w(m in P-1) must equal the published w(m in P)
+            pr = cpf.prior_rows[j]
+            for key, val in (("delivered", pr["delivered"]), ("rate", pr["rate_leg"]),
+                             ("mod", pr["mod_leg"])):
+                if val is None:
+                    continue
+                if not approx(cs[f"{xcol(PRIOR_PUB[key] + j)}{rr2}"].value, val, 1e-9):
+                    bad_y += 1
+            epw_y = rowdef["ep"] * eng2.w(engine.month_index(p - 1, 1) + j)
+            if wv is None or epw_y == 0 or not approx(wv / epw_y, 1.0, 1e-12):
+                bad_epw += 1
         if not approx(cs[f"{xcol(FLOW_PUB['avg_del'])}{rr2}"].value,
                       cpf.avg_delivered_ratio, 1e-9):
             bad_a += 1
+        for key, val in (("avg_rate", cpf.avg_rate_ratio_prior),
+                         ("avg_mod", cpf.avg_mod_ratio_prior),
+                         ("avg_del", cpf.avg_delivered_ratio_prior)):
+            if val is None:
+                continue
+            if not approx(cs[f"{xcol(PRIOR_PUB[key])}{rr2}"].value, val, 1e-9):
+                bad_ya += 1
     check("[program flow] published delivered legs tie oracle (all combos x 12)",
           bad == 0, f"{bad} mismatched cells")
     check("[program flow] published EP x w products tie oracle", bad_w == 0,
           f"{bad_w} mismatched cells")
     check("[program flow] published avg-ratio echoes tie the block results",
           bad_a == 0, f"{bad_a} mismatched combos")
+    check("[program flow] D68 published prior-year legs tie oracle "
+          "(all combos x 12 x 3)", bad_y == 0, f"{bad_y} mismatched cells")
+    check("[program flow] D68 published prior-year avg echoes tie the block results",
+          bad_ya == 0, f"{bad_ya} mismatched combos")
+    check("[program flow] D68 the single epw family weights BOTH years "
+          "(seasonality is a function of calendar month)", bad_epw == 0,
+          f"{bad_epw} months where w(P-1) != published w(P)")
 
     # program-basis plan LR (D65): the explicit rate x mod counterfactual
     from src.sheets_calc import PROG_LR
@@ -1072,7 +1171,9 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
         {("Inputs", f"Q{we_row_xl}"): 0.08}, a9i)
 
     # 9h. Program Flow / dashboard written-legs exercises (D59)
-    from src.sheets_programflow import (grid_starts as pf_grid_starts,
+    from src.sheets_programflow import (PF_PLAN_COL as PFPC, PF_PRIOR_COL as PFYC,
+                                        PF_SUM_FIRST,
+                                        grid_starts as pf_grid_starts,
                                         n_disp as pf_n_disp)
     pf_g1, pf_g2, pf_g3 = pf_grid_starts(cfg)
     pf_nd = pf_n_disp(cfg)
@@ -1099,11 +1200,17 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
         check("[program flow: appended planned row] dashboard M/O/P tie fresh oracle",
               bad == 0, f"{bad} mismatched months")
         pfs = wb[SHEETS.PROGRAM_FLOW]
-        bad = sum(0 if approx(pfs.cell(row=pf_g1 + 3, column=2 + j).value,
+        bad = sum(0 if approx(pfs.cell(row=pf_g1 + 3, column=PFPC + j).value,
                               pf_add.rows[j]["rate_leg"], 1e-9) else 1
                   for j in range(12))
         check("[program flow: appended planned row] grid A row ties fresh oracle",
               bad == 0, f"{bad} mismatched months")
+        # D68: a change dated INSIDE the plan year cannot move the prior year
+        bad = sum(0 if approx(pfs.cell(row=pf_g1 + 3, column=PFYC + j).value,
+                              pf_add.prior_rows[j]["rate_leg"], 1e-9) else 1
+                  for j in range(12))
+        check("[program flow: appended planned row] prior-year band is unmoved "
+              "by a plan-year filing", bad == 0, f"{bad} mismatched months")
     run("program flow: appended planned row", muts_add, a9h1)
 
     # (ii) master mod OFF: mod legs dash, delivered collapses to the rate leg
@@ -1118,8 +1225,10 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
                   for j, pr in enumerate(pf_off.rows))
         check("[program flow: mod master OFF] delivered = rate-only, ties oracle",
               bad == 0, f"{bad} mismatched months")
-        check("[program flow: mod master OFF] grid B dashes",
-              wb[SHEETS.PROGRAM_FLOW].cell(row=pf_g2 + 3, column=2).value == "—")
+        pfs_ = wb[SHEETS.PROGRAM_FLOW]
+        check("[program flow: mod master OFF] grid B dashes in BOTH year bands",
+              pfs_.cell(row=pf_g2 + 3, column=PFPC).value == "—"
+              and pfs_.cell(row=pf_g2 + 3, column=PFYC).value == "—")
     run("program flow: mod master OFF", {("Control", "C13"): "OFF"}, a9h2)
 
     # (iii) mixed-status cohort month on the LOCKED block: a planned row
@@ -1159,31 +1268,54 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
 
     def a9h4(wb):
         pfs = wb[SHEETS.PROGRAM_FLOW]
-        ok = (approx(pfs["D9"].value, comb0.avg_rate_ratio - 1.0, 1e-9)
-              and approx(pfs["F9"].value, comb0.avg_delivered_ratio - 1.0, 1e-9)
-              and (pfs["E9"].value == "—" if comb0.avg_mod_ratio is None
-                   else approx(pfs["E9"].value, comb0.avg_mod_ratio - 1.0, 1e-9)))
+        r9 = PF_SUM_FIRST
+
+        def _c(cidx):
+            return pfs.cell(row=r9, column=cidx).value
+
+        ok = (approx(_c(PFPC + 2), comb0.avg_rate_ratio - 1.0, 1e-9)
+              and approx(_c(PFPC + 4), comb0.avg_delivered_ratio - 1.0, 1e-9)
+              and (_c(PFPC + 3) == "—" if comb0.avg_mod_ratio is None
+                   else approx(_c(PFPC + 3), comb0.avg_mod_ratio - 1.0, 1e-9)))
         check("[program flow: All view] summary averages tie the EP-weighted oracle",
-              ok, str([pfs[f'{c}9'].value for c in 'DEF']))
+              ok, str([_c(PFPC + k) for k in (2, 3, 4)]))
+        check("[program flow: All view] D68 prior-year summary delivered ties the "
+              "EP-weighted oracle",
+              approx(_c(PFYC + 2), comb0.avg_delivered_ratio_prior - 1.0, 1e-9),
+              f"wb={_c(PFYC + 2)} oracle={comb0.avg_delivered_ratio_prior - 1.0}")
         check("[program flow: All view] delta column stays per-BU (dash)",
-              pfs["G9"].value == "—", repr(pfs["G9"].value))
-        bad = 0
+              _c(PFPC + 5) == "—", repr(_c(PFPC + 5)))
+        bad = bad_y = 0
         for si_, comb_ in ((0, comb0), (6, comb6)):
             for g0, key_ in ((pf_g1, "rate_leg"), (pf_g2, "mod_leg"),
                              (pf_g3, "delivered")):
-                for j in range(12):
-                    wv = pfs.cell(row=g0 + 3 + si_, column=2 + j).value
-                    ov = comb_.rows[j][key_]
-                    ok_ = (wv == "—") if ov is None else approx(wv, ov, 1e-9)
-                    if not ok_:
-                        bad += 1
+                for c0, rows_ in ((PFPC, comb_.rows), (PFYC, comb_.prior_rows)):
+                    for j in range(12):
+                        wv = pfs.cell(row=g0 + 3 + si_, column=c0 + j).value
+                        ov = rows_[j][key_]
+                        ok_ = (wv == "—") if ov is None else approx(wv, ov, 1e-9)
+                        if not ok_:
+                            if c0 == PFPC:
+                                bad += 1
+                            else:
+                                bad_y += 1
         check("[program flow: All view] grids tie the combined oracle "
               "(2 states x 3 grids x 12 months)", bad == 0, f"{bad} mismatches")
-        bad = sum(0 if approx(pfs.cell(row=pf_g3 + 3 + pf_nd, column=2 + j).value,
-                              book.rows[j]["delivered"], 1e-9) else 1
-                  for j in range(12))
+        check("[program flow: All view] D68 prior-year grids tie the combined oracle "
+              "(2 states x 3 grids x 12 months)", bad_y == 0, f"{bad_y} mismatches")
+        bad = bad_y = 0
+        for c0, rows_ in ((PFPC, book.rows), (PFYC, book.prior_rows)):
+            for j in range(12):
+                wv = pfs.cell(row=pf_g3 + 3 + pf_nd, column=c0 + j).value
+                if not approx(wv, rows_[j]["delivered"], 1e-9):
+                    if c0 == PFPC:
+                        bad += 1
+                    else:
+                        bad_y += 1
         check("[program flow: All view] IN VIEW delivered row = the whole book "
               "(cross-state EP x w weights)", bad == 0, f"{bad} mismatches")
+        check("[program flow: All view] D68 IN VIEW prior-year row = the whole book",
+              bad_y == 0, f"{bad_y} mismatches")
         check("[program flow: All view] Checks still ALL PASS",
               nval(wb, "ck_overall") == "ALL CHECKS PASS")
     run("program flow: All view", {("Program Flow", "B5"): "All"}, a9h4)
@@ -1208,7 +1340,8 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
                 check("[program flow: net combo] dashboard delta-vs-assertion ties "
                       "oracle (x for P, x1 for P+1)", bad == 0,
                       f"{bad} mismatched months")
-                gv = wb[SHEETS.PROGRAM_FLOW][f"G{pf_first5 + si5}"].value
+                gv = wb[SHEETS.PROGRAM_FLOW].cell(row=pf_first5 + si5,
+                                                  column=PFPC + 5).value
                 ov = pf_net.avg_delivered_ratio - 1.0 - x5
                 check("[program flow: net combo] summary delta ties oracle",
                       approx(gv, ov, 1e-9), f"wb={gv} oracle={ov}")

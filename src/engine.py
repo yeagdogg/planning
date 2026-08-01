@@ -1142,31 +1142,22 @@ class ProgramFlowResult:
     avg_rate_ratio: float           # sum w(m)*W(m)/W(m-12) / sum w(m), Jan..Dec P
     avg_mod_ratio: float | None     # same with M_w; None when mod adjustment off
     avg_delivered_ratio: float      # rate ratio x mod ratio (rate-only when off)
+    prior_rows: list                # 12 dicts, Jan P-1 .. Dec P-1 (D68)
+    avg_rate_ratio_prior: float     # the same three averages over Jan..Dec P-1
+    avg_mod_ratio_prior: float | None
+    avg_delivered_ratio_prior: float
 
 
-def program_flow_by_month(plan_year: int, combo: ComboInputs) -> ProgramFlowResult:
-    """Monthly written-basis YoY decomposition of the program as logged.
+def _flow_rows(eng, eng_tk, mod_on, first_mi: int, n: int) -> tuple[list, tuple]:
+    """``n`` months of YoY legs from ``first_mi``, plus their w-weighted means.
 
-    Rows cover the 24 months Jan P .. Dec P+1 (each has a modeled year-ago
-    base). Per row: ``rate_leg`` = W(m)/W(m-12)-1, ``mod_leg`` =
-    M_w(m)/M_w(m-12)-1 (None when the mod adjustment is off), ``delivered`` =
-    the product-1, ``locked_leg`` = the rate leg on taken rows only, and
-    ``planned_residual`` = (1+rate_leg)/(1+locked_leg)-1.
-
-    The averages are w-weighted means of the monthly RATIOS over Jan..Dec P
-    (the Net Delivery delivered-average convention, mirrored by the workbook's
-    per-block SUMPRODUCT results cells) — NOT the E_CY aggregate-ratio
-    convention used for calendar-year earnings.
+    Factored out so the prior year (D68) is computed by the same code as the
+    plan year — the two views must not be able to drift apart.
     """
-    eng = MonthlyEngine(plan_year, combo)
-    taken = tuple(rc for rc in combo.rate_changes if rc.status == STATUS_TAKEN)
-    eng_tk = MonthlyEngine(plan_year, combo, changes_override=taken)
-    mod_on = combo.mod_adjustment_enabled
-
     rows = []
     num_r = num_m = num_d = den = 0.0
-    for j in range(24):
-        mi = month_index(plan_year, 1) + j
+    for j in range(n):
+        mi = first_mi + j
         wm = eng.w(mi)
         rate_ratio = eng.written_index(mi) / eng.written_index(mi - 12)
         mod_ratio = eng.written_mod(mi) / eng.written_mod(mi - 12)
@@ -1180,16 +1171,50 @@ def program_flow_by_month(plan_year: int, combo: ComboInputs) -> ProgramFlowResu
             locked_leg=locked_ratio - 1.0,
             planned_residual=rate_ratio / locked_ratio - 1.0,
         ))
-        if j < 12:  # plan-year averages only
+        if j < 12:  # averages cover the first 12 months only
             num_r += wm * rate_ratio
             num_m += wm * mod_ratio
             num_d += wm * delivered_ratio
             den += wm
+    return rows, (num_r / den, (num_m / den) if mod_on else None, num_d / den)
+
+
+def program_flow_by_month(plan_year: int, combo: ComboInputs) -> ProgramFlowResult:
+    """Monthly written-basis YoY decomposition of the program as logged.
+
+    Rows cover the 24 months Jan P .. Dec P+1 (each has a modeled year-ago
+    base). Per row: ``rate_leg`` = W(m)/W(m-12)-1, ``mod_leg`` =
+    M_w(m)/M_w(m-12)-1 (None when the mod adjustment is off), ``delivered`` =
+    the product-1, ``locked_leg`` = the rate leg on taken rows only, and
+    ``planned_residual`` = (1+rate_leg)/(1+locked_leg)-1.
+
+    ``prior_rows`` (D68) carries the same 12 legs for Jan..Dec P-1 — the year
+    CURRENTLY flowing, whose year-ago base is P-2. It is a separate field
+    rather than a longer ``rows`` so no existing index ever moves.
+
+    The averages are w-weighted means of the monthly RATIOS over Jan..Dec P
+    (the Net Delivery delivered-average convention, mirrored by the workbook's
+    per-block SUMPRODUCT results cells) — NOT the E_CY aggregate-ratio
+    convention used for calendar-year earnings. The ``_prior`` averages are
+    the same statistic over Jan..Dec P-1.
+    """
+    eng = MonthlyEngine(plan_year, combo)
+    taken = tuple(rc for rc in combo.rate_changes if rc.status == STATUS_TAKEN)
+    eng_tk = MonthlyEngine(plan_year, combo, changes_override=taken)
+    mod_on = combo.mod_adjustment_enabled
+
+    jan_p = month_index(plan_year, 1)
+    rows, (avg_r, avg_m, avg_d) = _flow_rows(eng, eng_tk, mod_on, jan_p, 24)
+    prior, (pr_r, pr_m, pr_d) = _flow_rows(eng, eng_tk, mod_on, jan_p - 12, 12)
     return ProgramFlowResult(
         plan_year=plan_year, mod_on=mod_on, rows=rows,
-        avg_rate_ratio=num_r / den,
-        avg_mod_ratio=(num_m / den) if mod_on else None,
-        avg_delivered_ratio=num_d / den,
+        avg_rate_ratio=avg_r,
+        avg_mod_ratio=avg_m,
+        avg_delivered_ratio=avg_d,
+        prior_rows=prior,
+        avg_rate_ratio_prior=pr_r,
+        avg_mod_ratio_prior=pr_m,
+        avg_delivered_ratio_prior=pr_d,
     )
 
 
@@ -1210,10 +1235,12 @@ def program_basis_plan_lr(plan_year: int, combo: ComboInputs) -> tuple[float, fl
 @dataclass
 class CombinedFlowResult:
     plan_year: int
-    rows: list                      # 12 dicts, Jan..Dec P (plan-year view only)
+    rows: list                      # 12 dicts, Jan..Dec P
     avg_rate_ratio: float           # EP-weighted mean of per-combo average ratios
     avg_mod_ratio: float | None     # EP x modeff weighted; None if no mod-on combo
     avg_delivered_ratio: float
+    prior_rows: list                # 12 dicts, Jan..Dec P-1 (D68)
+    avg_delivered_ratio_prior: float
 
 
 def combined_flow_by_month(
@@ -1230,38 +1257,52 @@ def combined_flow_by_month(
     Because these are weighted MEANS, rate x mod need not equal delivered
     exactly under mix — delivered is the exact statistic. Combos with zero
     or missing EP carry no weight.
+
+    ``prior_rows`` (D68) is the identical combination over Jan..Dec P-1. The
+    weights there use w(m) for P-1's own months, which equals the plan year's
+    w for the same calendar month — seasonality is a function of MONTH, which
+    is what lets the workbook publish one epw family and read it for both
+    years.
     """
     flows = [(c.plan_ep or 0.0, program_flow_by_month(plan_year, c)) for c in combos]
     if not any(ep > 0.0 for ep, _ in flows):
         raise ValueError("combined_flow_by_month needs at least one combo with EP.")
-    rows = []
-    for j in range(12):
-        nr = nm = nd_ = dw = dm = 0.0
-        mi = month_index(plan_year, 1) + j
-        for ep, pf in flows:
-            if ep <= 0.0:
-                continue
-            prow = pf.rows[j]
-            epw = ep * prow["w"]
-            dw += epw
-            nr += epw * prow["rate_leg"]
-            nd_ += epw * prow["delivered"]
-            if pf.mod_on:
-                dm += epw
-                nm += epw * prow["mod_leg"]
-        rows.append(dict(
-            mi=mi,
-            rate_leg=nr / dw,
-            mod_leg=(nm / dm) if dm > 0.0 else None,
-            delivered=nd_ / dw,
-        ))
-    ar = am = ad = de = dme = 0.0
+
+    def _combine(attr: str, first_mi: int) -> list:
+        """EP x w(m) weighted legs for 12 months off one per-combo row family."""
+        out = []
+        for j in range(12):
+            nr = nm = nd_ = dw = dm = 0.0
+            for ep, pf in flows:
+                if ep <= 0.0:
+                    continue
+                prow = getattr(pf, attr)[j]
+                epw = ep * prow["w"]
+                dw += epw
+                nr += epw * prow["rate_leg"]
+                nd_ += epw * prow["delivered"]
+                if pf.mod_on:
+                    dm += epw
+                    nm += epw * prow["mod_leg"]
+            out.append(dict(
+                mi=first_mi + j,
+                rate_leg=nr / dw,
+                mod_leg=(nm / dm) if dm > 0.0 else None,
+                delivered=nd_ / dw,
+            ))
+        return out
+
+    jan_p = month_index(plan_year, 1)
+    rows = _combine("rows", jan_p)
+    prior_rows = _combine("prior_rows", jan_p - 12)
+    ar = am = ad = de = dme = adp = 0.0
     for ep, pf in flows:
         if ep <= 0.0:
             continue
         de += ep
         ar += ep * pf.avg_rate_ratio
         ad += ep * pf.avg_delivered_ratio
+        adp += ep * pf.avg_delivered_ratio_prior
         if pf.mod_on:
             dme += ep
             am += ep * pf.avg_mod_ratio
@@ -1270,6 +1311,8 @@ def combined_flow_by_month(
         avg_rate_ratio=ar / de,
         avg_mod_ratio=(am / dme) if dme > 0.0 else None,
         avg_delivered_ratio=ad / de,
+        prior_rows=prior_rows,
+        avg_delivered_ratio_prior=adp / de,
     )
 
 

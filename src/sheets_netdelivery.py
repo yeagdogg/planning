@@ -30,8 +30,9 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from .build_workbook import Ctx, Layout as L, SHEETS
 from .sheets_engine import LogRefs, write_cohort_block, write_mod_anchor_cells
 from .xlstyle import (
-    ALIGN_C, BORDER_THIN, F_LABEL, F_SMALL_IT, FAIL_RED, FILL_GREY, FILL_NAVY,
-    FILL_PANEL, FMT_DATE, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT, GREY_DARK, NAVY,
+    ALIGN_C, ALIGN_L, BORDER_THIN, F_LABEL, F_SMALL_IT, FAIL_RED, FILL_GREY,
+    FILL_NAVY, FILL_PANEL, FILL_STEEL, FMT_DATE, FMT_IDX, FMT_INT, FMT_MOD,
+    FMT_PCT, GREY_DARK, NAVY,
     STEEL, WARN_AMBER, col, font, formula, header_row, input_cell, jump, label,
     link, nav_bar, presentation_setup, print_setup, prose, put, quote_sheet,
     section, set_widths, title,
@@ -50,6 +51,11 @@ NC_STRIDE = 56
 ND_HDR = 8                              # summary table header row
 ND_FIRST = 9
 GRID_GAP = 4                            # rows between table/grids sections
+ND_PRIOR_COL = 2                        # B  — Jan P-1 on the rate-leg grid (D68)
+ND_PLAN_COL = 14                        # N  — Jan P on both grids
+ND_FLAG_COL = 26                        # Z  — flags, parked right of both bands so
+                                        #      the wide text is never clipped by a
+                                        #      month column
 
 
 def ndl_last():
@@ -262,6 +268,14 @@ def build_netcalc(ctx: Ctx):
                     f"($W{r}+$X{r}*IF(ISNUMBER($F${rr}),$F${rr},0))"
                     f"*IF($F${t}=1,($AC{r}+$AB{r}*IF(ISNUMBER($H${rr}),$H${rr},"
                     f"$J${t}))/$G${t},1))", fmt=FMT_IDX)
+        # D68: the rate leg one year back — the year now flowing. The tab's new
+        # change is always dated INSIDE the plan year (the input carries a
+        # date validation to it), so it can never touch a P-1 month: the prior
+        # year is the live log measured against its own P-2 base, with no
+        # affine term and nothing to solve.
+        for j in range(12):
+            r = t + 15 + j
+            formula(ws, f"AG{r}", f'=IF($D${t}=0,"",$N{r}/$N{r - 12}-1)', fmt=PCT_S)
         for cc in ("W", "X", "Y", "AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI"):
             for k in range(48):
                 c = ws[f"{cc}{t + 3 + k}"]
@@ -427,9 +441,9 @@ def build_net_delivery(ctx: Ctx):
                "Suggested change",
                "Change in force", "Filed equivalent", "Avg YoY rate leg",
                "Avg YoY pricing needed", "Implied yr-end mod", "vs projected M_1 (pts)",
-               "Share written on/after date", "Flags"]
-    header_row(ws, hdr, 1, headers,
-               widths=[7, 12, 9, 11, 13, 12, 11, 11, 11, 11, 11, 12, 11, 11, 12, 22])
+               "Share written on/after date"]
+    header_row(ws, hdr, 1, headers)
+    header_row(ws, hdr, ND_FLAG_COL, ["Flags"])
     ws.row_dimensions[hdr].height = 42
     dv_date = DataValidation(
         type="date", operator="between",
@@ -473,7 +487,7 @@ def build_net_delivery(ctx: Ctx):
         for cc, src, fmt in (("H", "E", "0.000%"), ("I", "F", "0.000%"),
                              ("J", "G", "0.000%"), ("K", "I", PCT_S),
                              ("L", "J", PCT_S), ("M", "H", FMT_MOD),
-                             ("O", "L", FMT_PCT), ("P", "M", None)):
+                             ("O", "L", FMT_PCT), (col(ND_FLAG_COL), "M", None)):
             formula(ws, f"{cc}{r}",
                     f'=IF(OR($A{r}="",nd_BU="All"),"",'
                     f"IF('{NC}'!$D${t}=0,\"—\",'{NC}'!${src}${rr}))",
@@ -501,7 +515,7 @@ def build_net_delivery(ctx: Ctx):
                f"$E${first}:$E${first + nd - 1}",
                "Per-state filed % overrides (blank = the planned filing, else suggested)")
     ctx.define("ndd_flags", SHEETS.NET_DELIVERY,
-               f"$P${first}:$P${first + nd - 1}",
+               f"${col(ND_FLAG_COL)}${first}:${col(ND_FLAG_COL)}${first + nd - 1}",
                "Per-state feasibility flags (empty = clean; — = not on a net selection)")
     put(ws, f"A{tot + 2}",
         "Leave the two input columns blank to adopt the PLANNED filing already in the "
@@ -516,38 +530,59 @@ def build_net_delivery(ctx: Ctx):
         "The Solver answers a different question (CY plan LR under the explicit "
         "program, D13).", fnt=F_SMALL_IT)
 
-    # ---- twin state x month grids ----
+    # ---- twin state x month grids, the rate leg two years wide (D68) ----
+    # Same seam and the same colours as Program Flow — steel for the year now
+    # flowing at B..M, navy for the plan year at N..Y — so the two tabs read
+    # identically. Unlike Program Flow the prior block carries no outline
+    # group: this tab's summary keeps its INPUT columns (D, E) under B..M, and
+    # collapsing would hide them.
     g1 = tot + 4
     section(ws, g1, "A", "How the target is delivered, month by month — the rate leg")
     put(ws, f"A{g1 + 1}",
         "YoY change on renewals from the rate side: history plus the change in force at "
-        "each state's date. Steps mark anniversaries of past changes and the new filing.",
-        fnt=F_SMALL_IT)
+        "each state's date. Steps mark anniversaries of past changes and the new filing. "
+        "The steel block is the year now flowing — what the book is already delivering "
+        "before this filing lands.", fnt=F_SMALL_IT)
     g2 = g1 + 3 + nd + 3
     section(ws, g2, "A", "…and the pricing change that satisfies the target")
     put(ws, f"A{g2 + 1}",
         "Required YoY pricing (schedule-mod) change on renewals so that rate x pricing "
-        "averages the target. Red = the months where the burden bites.", fnt=F_SMALL_IT)
-    for g0, colL in ((g1 + 2, "AG"), (g2 + 2, "AH")):
+        "averages the target. Red = the months where the burden bites. Plan year only: "
+        "there is no target in a prior year, so a required walk is undefined there — the "
+        "steel block is deliberately empty.", fnt=F_SMALL_IT)
+    years = ((ND_PRIOR_COL, 15, FILL_STEEL, "nr_PlanYear-1"),
+             (ND_PLAN_COL, 27, FILL_NAVY, "nr_PlanYear"))
+    for g0, colL, two_year in ((g1 + 2, "AG", True), (g2 + 2, "AH", False)):
         put(ws, f"A{g0}", "State", fnt=font("FFFFFF", bold=True), fill=FILL_NAVY,
             align=ALIGN_C)
-        for j in range(12):
-            cell = ws.cell(row=g0, column=2 + j)
-            cell.value = f'=TEXT(DATE(nr_PlanYear,{j + 1},1),"mmm")&" "&nr_PlanYear'
-            cell.font = font("FFFFFF", bold=True, size=9)
-            cell.fill = FILL_NAVY
-            cell.alignment = ALIGN_C
+        for c0, off, fill_, yexpr in years:
+            for j in range(12):
+                cell = ws.cell(row=g0, column=c0 + j)
+                cell.font = font("FFFFFF", bold=True, size=9)
+                cell.fill = fill_
+                cell.alignment = ALIGN_C
+                if two_year or c0 == ND_PLAN_COL:
+                    cell.value = (f'=TEXT(DATE({yexpr},{j + 1},1),"mmm")'
+                                  f'&" "&({yexpr})')
+            if not two_year and c0 == ND_PRIOR_COL:
+                c = ws.cell(row=g0, column=c0)
+                c.value = '="  no target in "&(nr_PlanYear-1)&" — nothing to solve"'
+                c.alignment = ALIGN_L
         for i in range(nd):
             r = g0 + 1 + i
             t = block_top(i)
             link(ws, f"A{r}", f"=_lists!$B${3 + i}", align=ALIGN_C, bold=True)
-            for j in range(12):
-                formula(ws, ws.cell(row=r, column=2 + j).coordinate,
-                        f"=IF(nd_BU=\"All\",\"\",'{NC}'!${colL}${t + 27 + j})",
-                        fmt=PCT_S, align=ALIGN_C)
-                ws.cell(row=r, column=2 + j).font = font(GREY_DARK, size=9)
+            for c0, off, _f, _y in years:
+                if not two_year and c0 == ND_PRIOR_COL:
+                    continue
+                for j in range(12):
+                    cc = ws.cell(row=r, column=c0 + j)
+                    formula(ws, cc.coordinate,
+                            f"=IF(nd_BU=\"All\",\"\",'{NC}'!${colL}${t + off + j})",
+                            fmt=PCT_S, align=ALIGN_C)
+                    cc.font = font(GREY_DARK, size=9)
     ws.conditional_formatting.add(
-        f"B{g2 + 3}:M{g2 + 2 + nd}",
+        f"{col(ND_PLAN_COL)}{g2 + 3}:{col(ND_PLAN_COL + 11)}{g2 + 2 + nd}",
         ColorScaleRule(start_type="min", start_color="D6E8D5",
                        mid_type="percentile", mid_value=50, mid_color="FFF2CC",
                        end_type="max", end_color="F4B8B8"))
@@ -583,11 +618,13 @@ def build_net_delivery(ctx: Ctx):
     ws.add_data_validation(dvs)
     dvs.add(f"D{b0 + 1}")
 
+    # the microscope band stays plan-year, and sits under the PLAN-year columns
+    # so its months line up with the grid block above them (D68)
     bh = b0 + 3
     put(ws, f"A{bh}", "", fill=FILL_GREY)
     for j in range(12):
-        cell = ws.cell(row=bh, column=2 + j)
-        cell.value = f'=TEXT(DATE(nr_PlanYear,{j + 1},1),"mmm")'
+        cell = ws.cell(row=bh, column=ND_PLAN_COL + j)
+        cell.value = f'=TEXT(DATE(nr_PlanYear,{j + 1},1),"mmm")&" "&nr_PlanYear'
         cell.font = font(GREY_DARK, bold=True, size=9)
         cell.fill = FILL_GREY
         cell.alignment = ALIGN_C
@@ -603,17 +640,17 @@ def build_net_delivery(ctx: Ctx):
         label(ws, f"A{r}", lbl)
         for j in range(12):
             src = tb + 27 + j if kind == "plan" else tb + 27 + j
-            formula(ws, ws.cell(row=r, column=2 + j).coordinate,
+            formula(ws, ws.cell(row=r, column=ND_PLAN_COL + j).coordinate,
                     f"='{NC}'!${colL}${src}", fmt=fmt, align=ALIGN_C)
-            ws.cell(row=r, column=2 + j).font = font(GREY_DARK, size=9)
+            ws.cell(row=r, column=ND_PLAN_COL + j).font = font(GREY_DARK, size=9)
         r += 1
     label(ws, f"A{r}", "Gap: required minus projected mod (pts)")
     for j in range(12):
-        formula(ws, ws.cell(row=r, column=2 + j).coordinate,
+        formula(ws, ws.cell(row=r, column=ND_PLAN_COL + j).coordinate,
                 f"=IF('{NC}'!$AI${tb + 27 + j}=\"\",\"\","
                 f"('{NC}'!$AI${tb + 27 + j}-'{NC}'!$O${tb + 27 + j})*100)",
                 fmt="+0.0;-0.0;0.0", align=ALIGN_C)
-        ws.cell(row=r, column=2 + j).font = font(FAIL_RED, size=9)
+        ws.cell(row=r, column=ND_PLAN_COL + j).font = font(FAIL_RED, size=9)
     r += 2
     recon = [
         ("Implied year-end written mod (type into tbl_LR to make it concrete)",
@@ -693,7 +730,11 @@ def build_net_delivery(ctx: Ctx):
     stack.y_axis.number_format = "0.0%"
     ws.add_chart(stack, f"F{r + 1}")
 
-    set_widths(ws, {"A": 26, "B": 12, "C": 10, "D": 10, "E": 12, "F": 11, "G": 11,
-                    "H": 11, "I": 11, "J": 12, "K": 11, "L": 11, "M": 12, "N": 22})
+    # one uniform width across both year bands: the summary's columns and the
+    # month columns share them, and 10 fits every value on this tab
+    set_widths(ws, {"A": 26})
+    for j in range(24):
+        ws.column_dimensions[col(ND_PRIOR_COL + j)].width = 10
+    set_widths(ws, {col(ND_FLAG_COL): 24})
     presentation_setup(ws, gridlines_off=True, freeze=f"B{ND_FIRST}", tab_color=NAVY)
     print_setup(ws)

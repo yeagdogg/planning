@@ -952,6 +952,20 @@ def build_methodology(ctx: Ctx):
          "statistic — the same honesty as the Portfolio bridge's mix line). The "
          "delta-vs-assertion column stays per-BU, and a view-independent Checks "
          "advisory watches every net combo's program-vs-assertion gap book-wide.",
+         "Two years (D68). The grids show the year NOW FLOWING beside the plan "
+         "year — steel band Jan P-1..Dec P-1 measured against P-2, navy band Jan "
+         "P..Dec P measured against P-1. Nothing new is modelled: the cohort "
+         "blocks always spanned Jan P-2..Dec P+1, so these are rows that were "
+         "computed and never displayed. Read across the seam — a filing appears "
+         "in the left band while it is still earning through and in the right "
+         "band only until its anniversary, so the pair says how much of today's "
+         "momentum survives into the plan. The prior-year columns are an outline "
+         "group: the minus button above the plan-year January collapses the "
+         "whole left band, summary columns included. One epw family weights both "
+         "years because the seasonality weight is a function of calendar month, "
+         "so w(Jan P-1) = w(Jan P) — pinned in pytest and by an oracle tie. Net "
+         "Delivery carries the prior year on the RATE leg only: there is no "
+         "target in P-1, so a required pricing walk is undefined there.",
          "6e. Program basis vs the assertion at the plan-LR level (D65). A net "
          "selection replaces the premium side with one asserted combined factor "
          "(A_mod = 1); the same combo also has an EXPLICIT valuation — its logged "
@@ -1114,7 +1128,8 @@ READ_ME_GUIDE = [
                       "plan LR is the visible product of the four factors beside it."),
     ("Program Flow", "What the program AS LOGGED is delivering — state x month YoY grids "
                      "for the written rate, mod, and net legs (the descriptive twin of "
-                     "Net Delivery). 'All' = the EP-weighted book view."),
+                     "Net Delivery), the year now flowing beside the plan year. 'All' = "
+                     "the EP-weighted book view."),
     ("Net Delivery", "For net-target combos: the month-by-month rate leg and the pricing "
                      "change that satisfies the target, plus the suggested filing."),
     ("Bridge", "The selected combo's answer: projected LR -> CY plan LR, factor by factor."),

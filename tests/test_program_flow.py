@@ -38,6 +38,11 @@ def _row(res, year, month):
     return next(r for r in res.rows if r["mi"] == mi)
 
 
+def _prior(res, month):
+    mi = month_index(P - 1, month)
+    return next(r for r in res.prior_rows if r["mi"] == mi)
+
+
 def test_anniversary_collapse_hand_constants():
     """Single taken +8% @ 7/1/(P-1), flat mods: the YoY rate leg is +8% until
     the filing's anniversary and exactly 0 after it (a 7/1 change day-blends
@@ -245,3 +250,96 @@ def test_algebra_identities_rich_combo():
         assert (1.0 + row["locked_leg"]) * (1.0 + row["planned_residual"]) == \
             pytest.approx(1.0 + row["rate_leg"], abs=1e-12)
     assert len(res.rows) == 24
+
+
+# ---------------------------------------------------------------------------
+# D68: the prior year — what is CURRENTLY flowing, alongside the plan year
+# ---------------------------------------------------------------------------
+
+
+def test_prior_rows_are_the_twelve_months_before_the_plan_year():
+    res = program_flow_by_month(P, _combo(CHG_B))
+    assert len(res.prior_rows) == 12
+    assert [r["mi"] for r in res.prior_rows] == [
+        month_index(P - 1, m) for m in range(1, 13)]
+    # additive: the existing family must not have moved by a single index
+    assert len(res.rows) == 24 and res.rows[0]["mi"] == month_index(P, 1)
+
+
+def test_prior_year_hand_constants():
+    """One taken +8% at 7/1/(P-2), flat mods. The year now flowing (P-1) sees
+    +8% through June — its year-ago base is pre-change — then 0 once the base
+    months are themselves post-change. The plan year sees nothing at all."""
+    res = program_flow_by_month(
+        P, _combo([RateChange(dt.date(P - 2, 7, 1), 0.08, "taken", True)],
+                  mods=FLAT_MODS))
+    for m in range(1, 7):
+        assert _prior(res, m)["rate_leg"] == pytest.approx(0.08, abs=1e-12)
+        assert _prior(res, m)["delivered"] == pytest.approx(0.08, abs=1e-12)
+    for m in range(7, 13):
+        assert _prior(res, m)["rate_leg"] == pytest.approx(0.0, abs=1e-12)
+    for m in range(1, 13):
+        assert _row(res, P, m)["rate_leg"] == pytest.approx(0.0, abs=1e-12)
+    assert res.avg_delivered_ratio_prior == pytest.approx(1.04, abs=1e-12)
+    assert res.avg_delivered_ratio == pytest.approx(1.0, abs=1e-12)
+
+
+def test_prior_weights_equal_plan_year_weights_by_calendar_month():
+    """Seasonality is a function of MONTH, so w repeats year over year.
+
+    The workbook leans on exactly this: it publishes ONE epw family and reads
+    it for both years' All-view aggregation (D68). If this ever stopped
+    holding, that reuse would silently mis-weight the prior year."""
+    season = (0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.4, 1.2, 1.0, 0.8, 0.6)
+    res = program_flow_by_month(P, _combo(CHG_B, seasonality=season))
+    for j in range(12):
+        assert res.prior_rows[j]["w"] == pytest.approx(res.rows[j]["w"], abs=1e-15)
+
+
+def test_prior_averages_are_w_weighted_means_of_prior_ratios():
+    season = (0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5)
+    res = program_flow_by_month(P, _combo(CHG_B, seasonality=season))
+    for attr, fld in (("avg_rate_ratio_prior", "rate_leg"),
+                      ("avg_mod_ratio_prior", "mod_leg"),
+                      ("avg_delivered_ratio_prior", "delivered")):
+        hand = (sum(r["w"] * (1.0 + r[fld]) for r in res.prior_rows)
+                / sum(r["w"] for r in res.prior_rows))
+        assert getattr(res, attr) == pytest.approx(hand, abs=1e-15)
+
+
+def test_prior_year_is_term_independent_too():
+    res6 = program_flow_by_month(P, _combo(CHG_B, term_months=6))
+    res12 = program_flow_by_month(P, _combo(CHG_B, term_months=12))
+    assert res6.prior_rows == res12.prior_rows
+
+
+def test_prior_mod_off_rate_only():
+    res = program_flow_by_month(P, _combo(CHG_A, mod_adjustment_enabled=False))
+    assert res.avg_mod_ratio_prior is None
+    for row in res.prior_rows:
+        assert row["mod_leg"] is None
+        assert row["delivered"] == pytest.approx(row["rate_leg"], abs=1e-15)
+
+
+def test_combined_prior_ties_the_ep_weighted_per_combo_prior():
+    ca = _combo(CHG_A, plan_ep=100.0)
+    cb = _combo(CHG_B, plan_ep=300.0)
+    comb = combined_flow_by_month(P, [ca, cb])
+    fa, fb = program_flow_by_month(P, ca), program_flow_by_month(P, cb)
+    assert len(comb.prior_rows) == 12
+    assert comb.prior_rows[0]["mi"] == month_index(P - 1, 1)
+    for j in range(12):
+        wa, wb = 100.0 * fa.prior_rows[j]["w"], 300.0 * fb.prior_rows[j]["w"]
+        hand = (wa * fa.prior_rows[j]["delivered"]
+                + wb * fb.prior_rows[j]["delivered"]) / (wa + wb)
+        assert comb.prior_rows[j]["delivered"] == pytest.approx(hand, abs=1e-15)
+    hand_avg = (100.0 * fa.avg_delivered_ratio_prior
+                + 300.0 * fb.avg_delivered_ratio_prior) / 400.0
+    assert comb.avg_delivered_ratio_prior == pytest.approx(hand_avg, abs=1e-15)
+
+
+def test_combined_prior_excludes_zero_ep():
+    ca = _combo(CHG_A, plan_ep=100.0)
+    comb = combined_flow_by_month(P, [ca, _combo(CHG_B, plan_ep=0.0)])
+    solo = combined_flow_by_month(P, [ca])
+    assert comb.prior_rows == solo.prior_rows
