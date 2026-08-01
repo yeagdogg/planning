@@ -54,8 +54,14 @@ NC_MOD_BASE_COL = 40                    # AN — M_endPrior, what they compound 
 NC_MOD_COL = 41                         # AO..AS — the five step-index helpers
 
 # ---- Net Delivery sheet geometry ----
-ND_HDR = 8                              # summary table header row
-ND_FIRST = 9
+# The deep-dive band leads the tab (D74): its chart is the one exhibit that
+# makes the whole decomposition legible at a glance, so it opens the sheet
+# instead of closing it. The band is FIXED height — it does not grow with the
+# state roster — so the summary below it still starts at a constant row and
+# the harness can keep importing ND_FIRST as a plain number.
+ND_BAND_TOP = 8                         # "One combo under the microscope"
+ND_HDR = 26                             # summary table header row
+ND_FIRST = 27
 GRID_GAP = 5                            # rows from the IN VIEW row to the first grid
                                         # section (the notes under the table live here)
 ND_PRIOR_COL = 2                        # B  — Jan P-1 on the rate-leg grid (D68)
@@ -625,8 +631,10 @@ def build_net_delivery(ctx: Ctx):
                        mid_type="percentile", mid_value=50, mid_color="FFF2CC",
                        end_type="max", end_color="F4B8B8"))
 
-    # ---- monthly deep-dive band (own pickers) ----
-    b0 = g2 + 3 + nd + 3
+    # ---- monthly deep-dive band (own pickers) — leads the tab (D74) ----
+    # Written here, after the grids, but placed ABOVE them: nothing about a
+    # cell's position depends on the order the builder emits it in.
+    b0 = ND_BAND_TOP
     tb = block_top(nd)
     rb = tb + 51
     section(ws, b0, "A", "One combo under the microscope")
@@ -713,7 +721,10 @@ def build_net_delivery(ctx: Ctx):
     r += 2
 
     # ---- chart: log-share stacked delivery + delivered line ----
-    cs = r + 14
+    # Staging rows go to the BOTTOM of the sheet — where the band used to sit —
+    # while the chart itself is anchored beside the band at the top. A chart
+    # does not care where its source cells live (D74).
+    cs = g2 + 3 + nd + 4
     put(ws, f"A{cs - 1}", "Chart data (formulas — do not edit)", fnt=F_SMALL_IT)
     for j, h in enumerate(["Month", "Rate share", "Pricing share", "Delivered @ proj mods",
                            "Target"]):
@@ -768,7 +779,9 @@ def build_net_delivery(ctx: Ctx):
     stack.y_axis.number_format = "0.0%"
     # after the += merge, so it lands on the COMBINED chart legend (D69)
     chart_legend(stack)
-    ws.add_chart(stack, f"F{r + 1}")
+    # right of the band's month columns (N..Y), level with its pickers, so the
+    # tab opens on the picture and the numbers that produced it side by side
+    ws.add_chart(stack, f"{col(ND_FLAG_COL + 2)}{ND_BAND_TOP + 1}")
 
     # one uniform width across both year bands: the summary's columns and the
     # month columns share them, and 10 fits every value on this tab
@@ -776,5 +789,8 @@ def build_net_delivery(ctx: Ctx):
     for j in range(24):
         ws.column_dimensions[col(ND_PRIOR_COL + j)].width = 10
     set_widths(ws, {col(ND_FLAG_COL): 24})
-    presentation_setup(ws, gridlines_off=True, freeze=f"B{ND_FIRST}", tab_color=NAVY)
+    # column A only: the tab now has three stacked sections with different
+    # headers, and pinning one section's header while you read another is worse
+    # than pinning none — but the row labels are wanted throughout (D74)
+    presentation_setup(ws, gridlines_off=True, freeze="B1", tab_color=NAVY)
     print_setup(ws)
