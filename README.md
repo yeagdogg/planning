@@ -52,7 +52,8 @@ src/sheets_engine.py       Rate Engine, Mod Engine + the shared cohort-block wri
 src/sheets_calc.py         hidden _calc engine blocks (portfolio/scenario/attribution/solver)
 src/sheets_main.py         Bridge, Portfolio (+ Decision Board), State Summary, Scenarios,
                            Solver, Attribution builders
-src/sheets_netdelivery.py  Net Delivery tab + hidden _netcalc blocks (D57)
+src/sheets_modlog.py       Mod Log sheet: dated schedule-mod actions (D70)
+src/sheets_netdelivery.py  Net Delivery tab + hidden _netcalc blocks (D57/D75)
 src/sheets_programflow.py  Program Flow tab: state x month delivered-flow grids (D59/D68)
 src/sheets_book.py         the BOOK: combined roll-up across every LOB (D66)
 src/sheets_walkthrough.py  Walkthrough: the fully worked example, live for the selection
@@ -60,7 +61,10 @@ src/sheets_briefs.py       One-Pager (print-ready brief) and Compare builders
 src/sheets_report.py       Flow Dashboard, _oracle, Checks, Methodology, Read Me builders
 tests/test_engine.py       pytest suite: worked example, property tests, identities
 tests/test_net_delivery.py net delivery closed forms vs brute force (D57/D58)
-tests/test_program_flow.py program-flow legs, locked leg, ratio averages (D59)
+tests/test_program_flow.py program-flow legs, locked/planned split both legs (D59/D77)
+tests/test_mod_steps.py    stepped mod path, the endpoint-average identity (D70/D76)
+tests/test_mod_solve.py    inverting the mod step for a target plan LR (D73)
+tests/test_harvest.py      harvester refusals and provenance parsing (D66)
 tests/test_layout.py       Layout geometry (incl. the D56 dual-module guard)
 tests/test_style.py        prose row-height calibration (nothing may clip)
 tools/recalc.py            headless recalculation (Excel COM, LibreOffice fallback)
@@ -119,10 +123,10 @@ convention to 1e-9, and 63.36% at 4 decimals on annual-term books); **every BU×
 tied to a per-combo oracle run (9 metrics each); solver round-trip (+5.0% at 4/1); chart axes
 intact and no legend overlapping its plot after the Excel resave; scenario, attribution,
 seasonality, basis, mod-toggle,
-degenerate-input, and plan-year-change exercises each tied to fresh oracle runs. At last run:
-Property **223 checks / 0 failed** (full), the other five LOB files 76 (or 74 for the
+degenerate-input, stepped-mod, and plan-year-change exercises each tied to fresh oracle runs. At last run:
+Property **275 checks / 0 failed** (full), the other five LOB files 92 (or 90 for the
 6-month-term Inland Marine) / 0 failed each (phases A–C), the combined book **43 / 0**
-(`tools/verify_book.py`), pytest 144/144. The business
+(`tools/verify_book.py`), pytest 256/256. The business
 units and states in `config/config.yaml` are addressed positionally, so renaming them to
 your own book keeps every seeded example working (a repeated BU or state is rejected at
 load time).
@@ -143,6 +147,41 @@ required pricing walk is undefined there and that block is deliberately empty.
 
 Nothing new is modelled — the cohort blocks always spanned Jan P−2 … Dec P+1, so this is
 data that was computed and never shown.
+
+## Schedule mods you can act on
+
+The mod path used to be a drift line between two planner-supplied anchors: the
+current average written mod, and a projected mod at 12/31 of the plan year.
+That is how a mod is **forecast**, not how it is **executed**. A schedule-mod
+change is a dated percent that stays in force until superseded — the same
+mechanic as a rate filing — so it has its own log (D70).
+
+Drift owns history through 12/31 of the current year; the **Mod Log** owns the
+plan year onward; the two meet at `M_endPrior`, so the path is continuous and
+no action is counted twice. The day-blend that splits a mid-month filing is
+the *same function* for both legs, deliberately: two copies would drift apart.
+**Leave the sheet empty and nothing changes** — with no actions the engine is
+bit-identical to the previous release.
+
+What that unlocks:
+
+- **Solver Mode C** answers the plan-LR question on the pricing lever: the mod
+  step required by effective month, what to direct at your achievement
+  assumption, the share of the year still reachable, and where the feasibility
+  cliff falls. On the sample book, hitting 64.0% costs **+2.02% in March and
+  +3.16% in May**, and is infeasible from October (D73).
+- **Net Delivery** publishes its pricing ask twice: as a year-end mod *level*,
+  and — once the log pins the path, where a level can no longer answer — as a
+  dated **action** at the filing's own date, grossed up by achievement (D75).
+- **Mod Engine** reconciles the shop's current process to the model. Averaging
+  the two year-end mods is *exact* for one action on 1/1, a twelve-month term,
+  and a flat prior year, so every departure is attributable: term, timing, and
+  history, tied to the gap at 1e-9. On the sample book the current process
+  reads about a **point lower** than the plan year earns — it credits more mod
+  relief than arrives (D76).
+- **Flow Dashboard** splits the pricing leg into locked and planned, the way
+  the rate leg always was — how much of each month's delivery is already done,
+  and how much still rides on actions not yet taken (D77).
 
 ## The combined book
 
