@@ -11,6 +11,7 @@ from dataclasses import replace
 
 import pytest
 
+from src import engine
 from src.engine import (
     ComboInputs,
     ModInputs,
@@ -343,3 +344,98 @@ def test_combined_prior_excludes_zero_ep():
     comb = combined_flow_by_month(P, [ca, _combo(CHG_B, plan_ep=0.0)])
     solo = combined_flow_by_month(P, [ca])
     assert comb.prior_rows == solo.prior_rows
+
+
+# ---------------------------------------------------------------------------
+# The pricing leg gets the same locked / planned split as the rate leg (D77)
+# ---------------------------------------------------------------------------
+
+
+PROGRAM = [
+    RateChange(dt.date(P - 1, 7, 1), 0.06, "taken", False),
+    RateChange(dt.date(P, 4, 1), 0.05, "planned", False, 1.0),
+]
+
+
+def _mods_for_steps(**kw):
+    base = dict(m_ind=0.850, m0=0.850, m0_asof=dt.date(P - 1, 9, 30), m1=0.850,
+                m_end_prior=0.850)
+    base.update(kw)
+    return ModInputs(**base)
+
+
+def _mstep(month, day, chg, status="taken", ach=None):
+    return RateChange(dt.date(P, month, day), chg, status, False,
+                      *( (ach,) if ach is not None else () ))
+
+
+def test_no_mod_rows_leaves_both_mod_legs_identical():
+    """The zero-rows identity. With an empty Mod Log the locked mod leg IS the
+    program mod leg — D70 changes nothing, so the split must report nothing."""
+    res = engine.program_flow_by_month(P, _combo(PROGRAM))
+    for row in res.rows:
+        assert row["locked_mod_leg"] == pytest.approx(row["mod_leg"], abs=1e-15)
+        assert row["planned_mod_residual"] == pytest.approx(0.0, abs=1e-15)
+
+
+def test_a_taken_mod_action_is_locked_not_planned():
+    res = engine.program_flow_by_month(P, _combo(
+        PROGRAM, mods=_mods_for_steps(), mod_changes=(_mstep(3, 1, 0.02),)))
+    jun = next(r for r in res.rows if r["mi"] == month_index(P, 6))
+    assert jun["mod_leg"] == pytest.approx(0.02, abs=1e-12)
+    assert jun["locked_mod_leg"] == pytest.approx(0.02, abs=1e-12)
+    assert jun["planned_mod_residual"] == pytest.approx(0.0, abs=1e-12)
+
+
+def test_a_planned_mod_action_shows_up_entirely_in_the_residual():
+    res = engine.program_flow_by_month(P, _combo(
+        PROGRAM, mods=_mods_for_steps(),
+        mod_changes=(_mstep(3, 1, 0.02, "planned", 1.0),)))
+    jun = next(r for r in res.rows if r["mi"] == month_index(P, 6))
+    assert jun["mod_leg"] == pytest.approx(0.02, abs=1e-12)
+    assert jun["locked_mod_leg"] == pytest.approx(0.0, abs=1e-12)
+    assert jun["planned_mod_residual"] == pytest.approx(0.02, abs=1e-12)
+
+
+def test_planned_only_log_does_not_leak_the_reanchor_into_the_residual():
+    """The trap this split was built around. A log with no TAKEN rows still
+    puts the combo in the stepped regime, so the locked engine has to stay
+    there too — otherwise the residual reports the D70 re-anchor as though
+    the planned action had caused it."""
+    mods = _mods_for_steps(m0=0.870, m_end_prior=0.840)   # history genuinely drifts
+    res = engine.program_flow_by_month(P, _combo(
+        PROGRAM, mods=mods, mod_changes=(_mstep(9, 1, 0.03, "planned", 1.0),)))
+    for row in res.rows:
+        if row["mi"] < month_index(P, 9):
+            # nothing planned has landed yet, so nothing is outstanding
+            assert row["planned_mod_residual"] == pytest.approx(0.0, abs=1e-12)
+    dec = next(r for r in res.rows if r["mi"] == month_index(P, 12))
+    assert dec["planned_mod_residual"] == pytest.approx(0.03, abs=1e-12)
+
+
+def test_achievement_scales_what_the_residual_reports():
+    res = engine.program_flow_by_month(P, _combo(
+        PROGRAM, mods=_mods_for_steps(),
+        mod_changes=(_mstep(3, 1, 0.02, "planned", 0.5),)))
+    jun = next(r for r in res.rows if r["mi"] == month_index(P, 6))
+    assert jun["planned_mod_residual"] == pytest.approx(0.01, abs=1e-12)
+
+
+def test_delivered_splits_the_same_way_as_its_two_legs():
+    combo = _combo(PROGRAM, mods=_mods_for_steps(),
+                   mod_changes=(_mstep(3, 1, 0.02, "planned", 1.0),))
+    for row in engine.program_flow_by_month(P, combo).rows:
+        assert (1 + row["locked_delivered"]) == pytest.approx(
+            (1 + row["locked_leg"]) * (1 + row["locked_mod_leg"]), abs=1e-12)
+        assert (1 + row["delivered"]) == pytest.approx(
+            (1 + row["locked_delivered"])
+            * (1 + row["planned_delivered_residual"]), abs=1e-12)
+
+
+def test_mod_off_leaves_the_pricing_split_undefined():
+    res = engine.program_flow_by_month(P, _combo(
+        PROGRAM, mods=_mods_for_steps(), mod_adjustment_enabled=False,
+        mod_changes=(_mstep(3, 1, 0.02),)))
+    for row in res.rows:
+        assert row["locked_mod_leg"] is None and row["planned_mod_residual"] is None
+        assert row["locked_delivered"] == pytest.approx(row["locked_leg"], abs=1e-15)

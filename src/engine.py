@@ -1859,7 +1859,9 @@ def _flow_rows(eng, eng_tk, mod_on, first_mi: int, n: int) -> tuple[list, tuple]
         rate_ratio = eng.written_index(mi) / eng.written_index(mi - 12)
         mod_ratio = eng.written_mod(mi) / eng.written_mod(mi - 12)
         locked_ratio = eng_tk.written_index(mi) / eng_tk.written_index(mi - 12)
+        locked_mod_ratio = eng_tk.written_mod(mi) / eng_tk.written_mod(mi - 12)
         delivered_ratio = rate_ratio * (mod_ratio if mod_on else 1.0)
+        locked_delivered = locked_ratio * (locked_mod_ratio if mod_on else 1.0)
         rows.append(dict(
             mi=mi, w=wm,
             rate_leg=rate_ratio - 1.0,
@@ -1867,6 +1869,15 @@ def _flow_rows(eng, eng_tk, mod_on, first_mi: int, n: int) -> tuple[list, tuple]
             delivered=delivered_ratio - 1.0,
             locked_leg=locked_ratio - 1.0,
             planned_residual=rate_ratio / locked_ratio - 1.0,
+            # D77: the same split on the pricing leg. A mod action is a dated
+            # percent like a filing, so "how much of this month's delivery is
+            # already done" has to answer for both legs or it answers for
+            # neither.
+            locked_mod_leg=(locked_mod_ratio - 1.0) if mod_on else None,
+            planned_mod_residual=((mod_ratio / locked_mod_ratio - 1.0)
+                                  if mod_on else None),
+            locked_delivered=locked_delivered - 1.0,
+            planned_delivered_residual=delivered_ratio / locked_delivered - 1.0,
         ))
         if j < 12:  # averages cover the first 12 months only
             num_r += wm * rate_ratio
@@ -1897,7 +1908,17 @@ def program_flow_by_month(plan_year: int, combo: ComboInputs) -> ProgramFlowResu
     """
     eng = MonthlyEngine(plan_year, combo)
     taken = tuple(rc for rc in combo.rate_changes if rc.status == STATUS_TAKEN)
-    eng_tk = MonthlyEngine(plan_year, combo, changes_override=taken)
+    taken_mods = _taken_mod_changes(combo)
+    if combo.mod_changes and not taken_mods:
+        # D77: the locked engine must sit in the SAME regime as the program
+        # engine. The D70 re-anchor follows the PRESENCE of a mod log, not the
+        # taken subset — drop it here and the two legs measure against
+        # different year-ago bases, so the residual would quietly report the
+        # re-anchor as if planned actions had caused it. A zero step keeps the
+        # regime and moves nothing.
+        taken_mods = (RateChange(dt.date(plan_year, 1, 1), 0.0, STATUS_TAKEN, False),)
+    eng_tk = MonthlyEngine(plan_year, combo, changes_override=taken,
+                           mod_changes_override=taken_mods)
     mod_on = combo.mod_adjustment_enabled
 
     jan_p = month_index(plan_year, 1)

@@ -80,7 +80,12 @@ def build_flow_dashboard(ctx: Ctx):
              "Price idx (written)", "Price idx (earned)", "Plan year",
              "YoY earned rate", "YoY earned price", "Unearned runway",
              "YoY written rate leg", "YoY written mod leg", "YoY delivered net (program)",
-             "Locked leg (taken only)", "Planned / residual leg", "Δ vs net assertion"]
+             # D77: each leg keeps its own locked / planned pair, so "how much
+             # of this is already done" answers for pricing as well as rate
+             "Locked rate (taken only)", "Planned / residual rate",
+             "Locked pricing (taken only)", "Planned / residual pricing",
+             "Locked delivered", "Planned / residual delivered",
+             "Δ vs net assertion"]
     for j, h in enumerate(heads):
         put(ws, f"{col(2 + j)}{CD0}", h, fnt=font(GREY_DARK, size=9))
     tkf = ctx.lay_dyn["progflow_tk"]["first"]   # locked (taken-only) block, D59
@@ -117,11 +122,22 @@ def build_flow_dashboard(ctx: Ctx):
             formula(ws, f"P{r}", f"='_calc'!$N${tkf + 12 + j}/'_calc'!$N${tkf + j}-1",
                     fmt=pct_m)
             formula(ws, f"Q{r}", f"=(1+$M{r})/(1+$P{r})-1", fmt=pct_m)
-            formula(ws, f"R{r}",
+            # D77: the pricing leg's own split, off the locked block's mod
+            # column. Its step index filters to TAKEN mod rows while the D70
+            # regime switch follows the log's presence, so an all-planned log
+            # reads a flat locked path rather than a different year-ago base.
+            lkm = f"'_calc'!$O${tkf + 12 + j}/'_calc'!$O${tkf + j}"
+            formula(ws, f"R{r}", f'=IF(nr_ModAdjEff="ON",{lkm}-1,"—")', fmt=pct_m)
+            formula(ws, f"S{r}",
+                    f'=IF(nr_ModAdjEff="ON",(1+$N{r})/(1+$R{r})-1,"—")', fmt=pct_m)
+            formula(ws, f"T{r}",
+                    f'=(1+$P{r})*IF(nr_ModAdjEff="ON",{lkm},1)-1', fmt=pct_m)
+            formula(ws, f"U{r}", f"=(1+$O{r})/(1+$T{r})-1", fmt=pct_m)
+            formula(ws, f"V{r}",
                     f'=IF(NOT(nr_NetMode),"",$O{r}-IF($I{r}=1,nr_NetSelP,nr_NetSelP1))',
                     fmt=pct_m)
         formula(ws, f"L{r}", f'=IF(OR($C{r}="",$D{r}=""),"",$C{r}/$D{r}-1)', fmt=pct_m)
-        for cL in ("BCDEFGHIJKLMNOPQR" if j >= 12 else "BCDEFGHIJKL"):
+        for cL in ("BCDEFGHIJKLMNOPQRSTUV" if j >= 12 else "BCDEFGHIJKL"):
             ws[f"{cL}{r}"].font = font(GREY_DARK, size=8)
 
     cats = Reference(ws, min_col=2, min_row=CD0 + 1, max_row=CD0 + L.N_MONTHS)
@@ -256,9 +272,13 @@ def build_flow_dashboard(ctx: Ctx):
 
     # ---- program delivery lines (D59): what the logged program delivers ----
     prog = LineChart()
+    # the locked series is locked DELIVERED, not locked rate (D77): the caption
+    # promises "what survives if no planned action lands", and a rate-only line
+    # compared against a rate x mod line does not say that — it drops the whole
+    # pricing leg and reads as though the mod path were already certain
     for c, lbl, rgb, dashed in ((15, "YoY delivered net (program)", NAVY, False),
                                 (13, "Written rate leg", STEEL, False),
-                                (16, "Locked (taken-only) leg", GREY_DARK, True)):
+                                (20, "Locked delivered (taken only)", GREY_DARK, True)):
         prog.add_data(Reference(ws, min_col=c, min_row=m0, max_row=m1),
                       titles_from_data=False)
         s = prog.series[-1]
@@ -298,6 +318,28 @@ def build_flow_dashboard(ctx: Ctx):
     ctx.define("fd_avgdel", "Flow Dashboard", f"$U${CD0 - 1}",
                "Plan-year w-weighted avg YoY delivered net from the visible engine path "
                "(ties the _calc block results, D59)")
+
+    # D77 identities over the 24 YoY months. The first is structural — the two
+    # halves of a split must multiply back to the whole. The second is the
+    # zero-rows guarantee: with nothing PLANNED in the Mod Log there is no
+    # outstanding pricing action, so the locked pricing leg has to BE the
+    # program pricing leg. Both would catch a locked block wired to the wrong
+    # regime, which is the failure this split is most exposed to.
+    yy0, yy1 = CD0 + 13, CD0 + 36
+    formula(ws, f"V{CD0 - 1}",
+            f"=SUMPRODUCT(ABS((1+$O${yy0}:$O${yy1})-(1+$T${yy0}:$T${yy1})"
+            f"*(1+$U${yy0}:$U${yy1})))", fmt="0.0000000000")
+    ws[f"V{CD0 - 1}"].font = font(GREY_DARK, size=8)
+    ctx.define("fd_splitchk", "Flow Dashboard", f"$V${CD0 - 1}",
+               "Sum |delivered - locked x planned residual| over the 24 YoY months (D77)")
+    formula(ws, f"W{CD0 - 1}",
+            f'=IF(OR(nr_ModAdjEff<>"ON",COUNTIFS(ml_key,nr_SelKey,ml_status,"planned")>0),'
+            f"0,SUMPRODUCT(ABS($R${yy0}:$R${yy1}-$N${yy0}:$N${yy1})))",
+            fmt="0.0000000000")
+    ws[f"W{CD0 - 1}"].font = font(GREY_DARK, size=8)
+    ctx.define("fd_lockedmodchk", "Flow Dashboard", f"$W${CD0 - 1}",
+               "With no PLANNED mod actions the locked pricing leg must equal the "
+               "program pricing leg — summed difference, 0 when it does (D77)")
 
     # ---- carryover ledger: why CY P+1 starts above CY P, action by action ----
     cl = qt + 12
@@ -592,6 +634,23 @@ def build_checks(ctx: Ctx):
        "=0", "=nd_MaxStepDiff", 1e-9, "FAIL"))
     A(("Structure", "Current-process waterfall closes the gap exactly (term+timing+history)",
        "=0", "=me_ProcWaterfall", 1e-9, "FAIL"))
+    # ---- appended v3.2 checks (locked/planned on the pricing leg, D77) ----
+    A(("Structure", "Delivered = locked x planned residual on every YoY month",
+       "=0", "=fd_splitchk", 1e-9, "FAIL"))
+    A(("Structure", "No planned mod actions => locked pricing leg IS the program leg",
+       "=0", "=fd_lockedmodchk", 1e-9, "FAIL"))
+    A(("Advisory", "Mod actions that would put a year-end mod outside the filed range "
+       "[0.50, 1.50]", "=0",
+       '=SUMPRODUCT((ml_endplan>0)*((ml_endplan<0.5)+(ml_endplan>1.5)))', 0, "WARN"))
+    # tested on the LN column, not on m_eff: m_eff is "" on blank rows and
+    # ABS("") is #VALUE! inside SUMPRODUCT, which evaluates every element.
+    # ln(1+m) is 0 there, and is monotonic in m, so the bound maps exactly.
+    A(("Advisory", "Single mod actions beyond the reasonability bound (Solver max mod)",
+       "=0", "=SUMPRODUCT((ml_ln1p>LN(1+nr_SolvMaxMod))*1)"
+             "+SUMPRODUCT((ml_ln1p<LN(MAX(0.01,1-nr_SolvMaxMod)))*1)", 0, "WARN"))
+    A(("Advisory", "Taken MOD rows still carrying an achievement % (it is ignored — "
+       "restate the directed change as achieved)", "=0",
+       '=SUMPRODUCT((ml_status="taken")*(ml_ach<>"")*(ml_ach<>1)*1)', 0, "WARN"))
     A(("Advisory", "Net Delivery feasibility flags in view (mod/rate bounds, thin share)",
        "=0", '=IF(nd_BU="All",0,SUMPRODUCT((ndd_flags<>"")*(ndd_flags<>"—")*1))',
        0, "WARN"))
@@ -991,10 +1050,26 @@ def build_methodology(ctx: Ctx):
          "The Flow Dashboard's monthly detail carries the same legs for the selected "
          "combo plus a LOCKED leg — the rate leg recomputed on taken rows only (the "
          "Solver's D13 filter with the status-aware first-change flag, D58) — and the "
-         "planned residual, (1 + rate leg)/(1 + locked) - 1: how much of each month's "
+         "planned residual, (1 + rate leg)/(1 + locked rate) - 1: how much of each month's "
          "YoY still rides on planned actions. Per-state plan-year averages are "
          "written-weighted means of the monthly RATIOS (the Net Delivery delivered-"
          "average convention, not the calendar-year aggregate-ratio convention).",
+         "The PRICING leg carries the same pair (D77), because a mod action is a dated "
+         "percent exactly like a filing: 'how much of this is already done' has to "
+         "answer for both legs or it answers for neither. The locked pricing leg filters "
+         "the step index to TAKEN mod rows — but the D70 regime switch, and the level "
+         "the steps compound on, follow the PRESENCE of a Mod Log rather than the taken "
+         "subset. A combo whose log is all-planned therefore shows a flat locked path on "
+         "the level the year actually starts from, which is the honest reading: nothing "
+         "done yet. Filtering the switch as well would put the two legs on different "
+         "year-ago bases, and the residual would quietly report the re-anchor as though "
+         "a planned action had caused it. Delivered splits the same way, and two Checks "
+         "rows hold it: delivered = locked x planned residual on every month, and with "
+         "no planned mod actions at all the locked pricing leg IS the program pricing "
+         "leg — the zero-rows guarantee, stated where it can be tested. The delivery "
+         "chart's dashed line is locked DELIVERED for the same reason: comparing a "
+         "rate-only line against a rate x mod line does not show what survives if no "
+         "planned action lands, it just drops the pricing leg.",
          "The 'All' view (D60) combines business units on adjusted-EP weights: each "
          "combo's monthly legs are published as flat columns on the hidden results "
          "table, so every combined figure is a single EP x weight SUMPRODUCT. Within a "

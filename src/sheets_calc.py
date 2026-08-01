@@ -713,12 +713,33 @@ def build_calc(ctx: Ctx):
                      "nr_SelKey (the Solver base cannot be reused: slv_key can detach "
                      "from Control via the override); status-aware first flag per D58",
         fnt=font(GREY_DARK, bold=True, size=9))
+    # D77: the mod leg gets the same treatment. The step-index columns filter
+    # to TAKEN mod rows, but the regime switch and the level they compound on
+    # follow the log's PRESENCE — 'Mod Engine'!$C$11 counts every row. A combo
+    # whose log is all-planned therefore stays re-anchored (D70) with a step
+    # index of 1.000, which is the honest locked path: nothing done yet, on
+    # the level the year actually starts from. Filtering the switch too would
+    # put the two legs on different year-ago bases and the planned residual
+    # would silently report the re-anchor.
+    anchors_tk = write_mod_anchor_cells(
+        ws, ctx, t + 1, 1, mind_ref="nr_MInd", m0_ref="nr_M0", asof_ref="nr_M0Asof",
+        m1_ref="nr_M1", mprior_ref="nr_MPrior", m2_ref="nr_M2",
+        steps_cond="'Mod Engine'!$C$11>0", mend_ref="'Mod Engine'!$C$12")
     blk = write_cohort_block(
         ws, ctx, t + 3, LogRefs(key_cond="nr_SelKey", taken_only=True,
                                 first="rl_firsttaken"),
         t_ref="nr_TermMonths", srow_ref="re_srow", ssum_ref="re_ssum",
-        anchors=None, include_mod=False, header=True, header_row_at=t + 2)
+        anchors=anchors_tk, header=True, header_row_at=t + 2,
+        mod_refs=LogRefs(key_cond="nr_SelKey", eff="ml_eff", ln="ml_ln1p",
+                         effmonth="ml_effmonth", first="ml_firsttaken",
+                         daysafter="ml_daysafter", taken_only=True,
+                         status="ml_status"),
+        mod_col=22, mod_base_ref="'Mod Engine'!$C$12",
+        mod_count_ref="'Mod Engine'!$C$11")
     ctx.define("fd_tkw", "_calc", f"$N${blk['first']}:$N${blk['last']}",
                "Taken-only written index for the Control selection (Flow Dashboard "
                "locked leg, D59)")
+    ctx.define("fd_tkm", "_calc", f"$O${blk['first']}:$O${blk['last']}",
+               "Taken-only written MOD for the Control selection (Flow Dashboard "
+               "locked pricing leg, D77)")
     ctx.lay_dyn["progflow_tk"] = dict(top=t, first=blk["first"], last=blk["last"])

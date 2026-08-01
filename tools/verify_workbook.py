@@ -511,12 +511,24 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
         ml = prow["mod_leg"]
         ok = ok and (fd[f"N{r}"].value == "—" if ml is None
                      else approx(fd[f"N{r}"].value, ml, 1e-9))
+        # D77: the pricing and delivered legs carry the same locked/planned pair
+        for cl, key in (("R", "locked_mod_leg"), ("S", "planned_mod_residual"),
+                        ("T", "locked_delivered"), ("U", "planned_delivered_residual")):
+            want = prow[key]
+            ok = ok and (fd[f"{cl}{r}"].value == "—" if want is None
+                         else approx(fd[f"{cl}{r}"].value, want, 1e-9))
         if not ok:
             bad += 1
-    check("[program flow] dashboard cols M..Q tie oracle for all 24 YoY months",
+    check("[program flow] dashboard cols M..U tie oracle for all 24 YoY months",
           bad == 0, f"{bad} mismatched months")
     check("[program flow] delta-vs-net column blank for the non-net WE combo",
-          fd["R93"].value in (None, ""), f"R93={fd['R93'].value!r}")
+          fd["V93"].value in (None, ""), f"V93={fd['V93'].value!r}")
+    check("[program flow] D77 delivered = locked x planned residual",
+          approx(nval(wb, "fd_splitchk"), 0.0, 1e-9),
+          f"fd_splitchk={nval(wb, 'fd_splitchk')}")
+    check("[program flow] D77 no planned mod actions => locked pricing IS program",
+          approx(nval(wb, "fd_lockedmodchk"), 0.0, 1e-9),
+          f"fd_lockedmodchk={nval(wb, 'fd_lockedmodchk')}")
     check("[program flow] fd_avgdel ties the oracle plan-year average",
           approx(nval(wb, "fd_avgdel"), pfr.avg_delivered_ratio - 1.0, 1e-9),
           f"wb={nval(wb, 'fd_avgdel')} oracle={pfr.avg_delivered_ratio - 1.0}")
@@ -1330,6 +1342,29 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
                 check("[reconciliation: stepped combo] model leg IS the plan LR",
                       approx(me[f"L{me_top + 7}"].value, nval(wb, "nr_CYLR_P"), 1e-9),
                       f"wb={me[f'L{me_top + 7}'].value} bridge={nval(wb, 'nr_CYLR_P')}")
+                # D77: the same selection is the only one whose Mod Log has
+                # PLANNED actions, so it is where the pricing split has
+                # anything to report — a locked leg that merely echoed the
+                # program leg would pass every other exercise in this file
+                pfr_s = engine.program_flow_by_month(
+                    p, sample_to_combo(cfg, lob, ms_lr, rate_rows, mod_rows))
+                fd_s = wb["Flow Dashboard"]
+                bad_s = sum(
+                    0 if all(approx(fd_s[f"{cl}{93 + j}"].value, prow[k], 1e-9)
+                             for cl, k in (("R", "locked_mod_leg"),
+                                           ("S", "planned_mod_residual"),
+                                           ("T", "locked_delivered"),
+                                           ("U", "planned_delivered_residual")))
+                    else 1 for j, prow in enumerate(pfr_s.rows))
+                check("[reconciliation: stepped combo] D77 pricing split ties oracle "
+                      "on all 24 YoY months", bad_s == 0, f"{bad_s} mismatched months")
+                outstanding = max(abs(r_["planned_mod_residual"]) for r_ in pfr_s.rows)
+                check("[reconciliation: stepped combo] the planned pricing residual is "
+                      "actually non-zero (the split has something to say)",
+                      outstanding > 1e-6, f"max |planned mod residual| = {outstanding}")
+                for nm in ("fd_splitchk", "fd_lockedmodchk"):
+                    check(f"[reconciliation: stepped combo] {nm} holds",
+                          approx(nval(wb, nm), 0.0, 1e-9), f"{nm}={nval(wb, nm)}")
             run("reconciliation: stepped combo selected",
                 {("Control", "C7"): ms_bu, ("Control", "C8"): ms_st}, a9j)
 
@@ -1525,7 +1560,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
 
             def a9h5(wb):
                 fd = wb["Flow Dashboard"]
-                bad = sum(0 if approx(fd[f"R{93 + j}"].value,
+                bad = sum(0 if approx(fd[f"V{93 + j}"].value,
                                       pr["delivered"] - (x5 if j < 12 else x15), 1e-9)
                           else 1 for j, pr in enumerate(pf_net.rows))
                 check("[program flow: net combo] dashboard delta-vs-assertion ties "

@@ -30,7 +30,8 @@ from .build_workbook import Ctx, Layout as L, SHEETS
 from .sheets_inputs import TABLE_STYLE, _dv
 from .xlstyle import (
     ALIGN_C, ALIGN_L, BORDER_THIN, F_SMALL_IT, FAIL_RED, FILL_GREY, FMT_DATE,
-    FMT_IDX, FMT_INT, FMT_PCT, GREY_DARK, STEEL, font, formula, header_row,
+    FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT, GREY_DARK, STEEL, font, formula,
+    header_row,
     input_cell, nav_bar, presentation_setup, print_setup, put, quote_sheet,
     set_widths, title,
 )
@@ -134,7 +135,17 @@ def build_mod_log(ctx: Ctx):
                 f"COUNTIFS($I${fr}:$I{r},$I{r},$L${fr}:$L{r},$L{r},"
                 f'$C${fr}:$C{r},$C{r},$E${fr}:$E{r},"taken")=1),1,0))',
                 fmt=FMT_INT)
-        for cL in "IJKLMNOPQRV":
+        # D77: where this combo's year-end written mod lands if every action
+        # in its key holds. Reads the engine's own M_endPrior cell rather than
+        # re-deriving the blank-input fallback, so a feasibility warning can
+        # never disagree with the path it is warning about.
+        mend = (f"INDEX('_calc'!$Q$1:$Q${L.CALC_BLOCK_FIRST + L.LR_ROWS * L.CALC_BLOCK_STRIDE},"
+                f"{L.CALC_BLOCK_FIRST}+(MATCH($I{r},lr_key,0)-1)*{L.CALC_BLOCK_STRIDE})")
+        formula(ws, f"W{r}",
+                f'=IF(OR($C{r}="",COUNTIF(lr_key,$I{r})=0),0,{mend}'
+                f'*EXP(SUMIFS(ml_ln1p,ml_key,$I{r},ml_eff,"<="&DATE(nr_PlanYear,12,31))))',
+                fmt=FMT_MOD)
+        for cL in "IJKLMNOPQRVW":
             ws[f"{cL}{r}"].font = font(GREY_DARK, size=9)
         # live feedback: what share of the plan year this action actually earns
         formula(ws, f"T{r}",
@@ -207,7 +218,13 @@ def build_mod_log(ctx: Ctx):
         "obvious.", fnt=F_SMALL_IT)
     put(ws, f"V{L.ML_HDR}", "First taken?", fnt=font(GREY_DARK, bold=True, size=9),
         fill=FILL_GREY)
-    set_widths(ws, {"T": 16, "U": 30, "V": 11})
-    ws.column_dimensions["V"].outlineLevel = 1
+    put(ws, f"W{L.ML_HDR}", "Yr-end mod if all hold",
+        fnt=font(GREY_DARK, bold=True, size=9), fill=FILL_GREY)
+    ctx.define("ml_endplan", SHEETS.MOD_LOG, f"$W${fr}:$W${lr_}",
+               "Helper: the combo's written mod at 12/31/P with every logged action in "
+               "force (0 on blank rows) — the feasibility check's subject (D77)")
+    set_widths(ws, {"T": 16, "U": 30, "V": 11, "W": 12})
+    for cL in ("V", "W"):
+        ws.column_dimensions[cL].outlineLevel = 1
     presentation_setup(ws, gridlines_off=False, freeze=f"C{L.ML_FIRST}", tab_color=STEEL)
     print_setup(ws)
