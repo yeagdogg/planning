@@ -1239,6 +1239,18 @@ def build_solver(ctx: Ctx):
     ctx.define("nr_SolvMaxMod", "Solver", "$G$47",
                "Mode C reasonability bound on a single mod step (mods are levels in "
                "[0.5, 1.5], so this is much tighter than the rate bound)")
+    # D79: the chart times a FIXED action rather than plotting the solved one.
+    # Mode A solves the rate size and Mode B times a fixed rate; this is the
+    # same pair on the pricing lever. Plotting the SOLVED step's consequence
+    # would draw a flat line on the target by construction.
+    put(ws, "F49", "Mod action to time (directed)", fnt=font(GREY_DARK, size=9))
+    input_cell(ws, "G49", 0.05, fmt=FMT_PCT)
+    ctx.define("slv_modtime", "Solver", "$G$49",
+               "Mode C: the DIRECTED mod action whose timing the chart traces (D79)")
+    put(ws, "F50",
+        "Directed, so the achievement applies: the chart traces what this one action does "
+        "to the FULL-YEAR plan LR as its date slips. Where it crosses the target is the "
+        "last month it still works.", fnt=F_SMALL_IT)
     lc_ = [
         ("Mod adjustment in force for this combo?",
          '=IF(COUNTIF(lr_key,slv_key)=0,0,IF(AND(nr_ModAdjMaster="ON",'
@@ -1268,8 +1280,9 @@ def build_solver(ctx: Ctx):
     header_row(ws, 52, 2,
                ["Effective month", "Effective", "K_pre", "K_post",
                 "Required mod step", "Directed (step / achievement)",
-                "Share left to earn", "Feasible?"],
-               widths=[13, 11, 10, 10, 14, 16, 13, 11])
+                "Share left to earn", "Feasible?",
+                "Earned mod at the timed action", "Full-yr plan LR"],
+               widths=[13, 11, 10, 10, 14, 16, 13, 11, 13, 12])
     for m in range(1, 13):
         r = 52 + m
         row_m = bf + 24 + (m - 1)          # cohort row of month m of P
@@ -1292,32 +1305,60 @@ def build_solver(ctx: Ctx):
                 f'=IF(NOT(ISNUMBER($F{r})),"no",'
                 f'IF(AND(ABS($F{r})<=nr_SolvMaxMod,$H{r}>=nr_SolvMinShare,'
                 f'slv_modon=1),"YES","no"))', align=ALIGN_C)
-        formula(ws, f"J{r}", f'=IF($I{r}="YES",{m},0)', fmt=FMT_INT)
-        ws[f"J{r}"].font = font(GREY_DARK, size=8)
-    put(ws, "J52", "helper", fnt=font(GREY_DARK, size=8))
-    label(ws, "B66", "Latest month a mod action still carries the target", bold=True)
+        # D79: the SAME action, timed. Earned mod if a directed step of
+        # slv_modtime (achieved at C47) lands in this month, and the full-year
+        # plan LR it produces — the Mode B statistic, on the pricing lever.
+        formula(ws, f"J{r}",
+                f"=($D{r}+(1+slv_modtime*$C$47)*$E{r})/slv_den", fmt=FMT_MOD,
+                align=ALIGN_C)
+        formula(ws, f"K{r}",
+                f'=IF(OR(slv_lrcur=0,$J{r}=0,slv_modon=0),"n/a",'
+                f"slv_lrcur*slv_arate*(slv_mind/$J{r})*slv_aother)",
+                fmt=FMT_PCT, align=ALIGN_C, bold=True)
+        formula(ws, f"L{r}", f'=IF($I{r}="YES",{m},0)', fmt=FMT_INT)
+        formula(ws, f"M{r}", f'=IF(ISNUMBER($K{r}),IF($K{r}<=$C$7,{m},0),0)', fmt=FMT_INT)
+        formula(ws, f"N{r}", '=IF($C$7="","",$C$7)', fmt=FMT_PCT)
+        for cL in "LMN":
+            ws[f"{cL}{r}"].font = font(GREY_DARK, size=8)
+    put(ws, "L52", "helper", fnt=font(GREY_DARK, size=8))
+    put(ws, "M52", "helper", fnt=font(GREY_DARK, size=8))
+    put(ws, "N52", "target", fnt=font(GREY_DARK, size=8))
+    label(ws, "B66", "Latest month the REQUIRED step is still inside the bound", bold=True)
     formula(ws, "E66",
-            '=IF(MAX($J$53:$J$64)=0,"No month works on the mod lever alone",'
-            'TEXT(DATE(nr_PlanYear,MAX($J$53:$J$64),1),"mmm yyyy"))', bold=True,
+            '=IF(MAX($L$53:$L$64)=0,"No month works on the mod lever alone",'
+            'TEXT(DATE(nr_PlanYear,MAX($L$53:$L$64),1),"mmm yyyy"))', bold=True,
             fill=FILL_PANEL)
-    put(ws, "B67",
-        "Read the two rows you care about side by side: acting early costs a smaller "
-        "step because more of the plan year is still there to earn it. Past the last "
-        "feasible month the arithmetic still returns a number, but it is one nobody "
-        "could file.", fnt=F_SMALL_IT)
+    label(ws, "B67", "Latest month the TIMED action above still meets the target",
+          bold=True)
+    formula(ws, "E67",
+            '=IF(MAX($M$53:$M$64)=0,"This action never reaches the target — direct more",'
+            'TEXT(DATE(nr_PlanYear,MAX($M$53:$M$64),1),"mmm yyyy"))', bold=True,
+            fill=FILL_PANEL)
+    put(ws, "B68",
+        "Two different reads. The table SOLVES the step month by month — acting early "
+        "costs less because more of the year is still there to earn it, and past the last "
+        "feasible month the arithmetic still returns a number nobody could file. The "
+        "chart TIMES one action you have chosen, in loss-ratio points, the way Mode B "
+        "does for a filing.", fnt=F_SMALL_IT)
 
+    # The required step is unbounded by construction — K_post goes to zero as
+    # the year runs out, so a December solve reads +493% and the axis it forces
+    # squashes every month anyone would act in onto the zero line. Charting the
+    # LR CONSEQUENCE of a fixed action instead is bounded, monotonic, and reads
+    # against the target exactly as Mode B does (D79).
     mc_ = LineChart()
-    mc_.add_data(Reference(ws, min_col=6, min_row=52, max_row=64), titles_from_data=True)
-    mc_.add_data(Reference(ws, min_col=7, min_row=52, max_row=64), titles_from_data=True)
+    mc_.add_data(Reference(ws, min_col=11, min_row=52, max_row=64), titles_from_data=True)
+    mc_.add_data(Reference(ws, min_col=14, min_row=52, max_row=64), titles_from_data=True)
     mc_.set_categories(Reference(ws, min_col=2, min_row=53, max_row=64))
     _line_color(mc_.series[0], NAVY)
-    _line_color(mc_.series[1], STEEL, dashed=True)
+    _line_color(mc_.series[1], FAIL_RED, width_pt=1.25, dashed=True)
+    mc_.legend = None
     mc_.y_axis.number_format = "0.0%"
     _style_chart(mc_,
-                 "The cost of waiting: mod step required by effective month "
-                 "(dashed = what you must direct at the assumed achievement)",
-                 y_title="Required mod step", height=8, width=14)
-    ws.add_chart(mc_, "K52")
+                 "Timing sensitivity on the PRICING lever: full-year plan LR if the "
+                 "chosen mod action lands in each month (dashed = target)",
+                 y_title="Full-year plan LR", height=8, width=14)
+    ws.add_chart(mc_, "P52")
 
     set_widths(ws, {"A": 2, "B": 38, "C": 12, "D": 30, "E": 3, "F": 30, "G": 11})
     presentation_setup(ws, gridlines_off=True, tab_color=STEEL)

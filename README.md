@@ -124,7 +124,7 @@ tied to a per-combo oracle run (9 metrics each); solver round-trip (+5.0% at 4/1
 intact and no legend overlapping its plot after the Excel resave; scenario, attribution,
 seasonality, basis, mod-toggle,
 degenerate-input, stepped-mod, and plan-year-change exercises each tied to fresh oracle runs. At last run:
-Property **275 checks / 0 failed** (full), the other five LOB files 92 (or 90 for the
+Property **277 checks / 0 failed** (full), the other five LOB files 94 (or 92 for the
 6-month-term Inland Marine) / 0 failed each (phases A–C), the combined book **43 / 0**
 (`tools/verify_book.py`), pytest 256/256. The business
 units and states in `config/config.yaml` are addressed positionally, so renaming them to

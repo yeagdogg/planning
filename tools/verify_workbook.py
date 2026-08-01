@@ -305,6 +305,24 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
     if lob.term_months == 12:
         check("Solver Mode B latest qualifying month is April",
               sv["D42"].value == f"Apr {p}", str(sv["D42"].value))
+    # D79: Mode C's chart times a FIXED action in loss-ratio points, the Mode B
+    # statistic on the pricing lever. Each month must equal a full oracle run
+    # with that step logged on the taken-only base (D13) — not a re-derivation
+    # of the same closed form, or the tie would only prove the algebra matches
+    # itself.
+    c_ach = sv["G49"].value * sv["C47"].value
+    bad_c = 0
+    for mm in range(1, 13):
+        cm = replace(combo, mod_changes=engine.base_plus(
+            engine._taken_mod_changes(combo), dt.date(p, mm, 1), c_ach))
+        if not approx(sv[f"K{52 + mm}"].value,
+                      engine.run_bridge(p, cm).cy_lr_p, 1e-9):
+            bad_c += 1
+    check("Solver Mode C timing chart ties a full oracle run in all 12 months",
+          bad_c == 0, f"{bad_c} mismatched months")
+    check("Solver Mode C reports the last month the timed action meets the target",
+          isinstance(sv["E67"].value, str) and sv["E67"].value != "",
+          repr(sv["E67"].value))
 
     # S1 ships seeded (+2 pts on planned rows) as a self-teaching demo; the
     # remaining blank-lever scenarios must reproduce Base exactly

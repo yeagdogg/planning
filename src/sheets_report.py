@@ -1117,6 +1117,25 @@ def build_methodology(ctx: Ctx):
          "TAKEN change: planned rows never enter the base, so an earlier planned row in the "
          "same month cannot steal the split (D58). Guard rails warn on thin post-effective "
          "exposure and on rates beyond the configured reasonability bound.",
+         "Mode C (D73) inverts the same target on the PRICING lever, because the earned mod "
+         "is linear in a dated mod step exactly as the earned index is linear in a filed "
+         "change. Mods live in [0.5, 1.5], so a 15% step already moves 0.85 to 0.98 — the "
+         "reasonability bound is its own input rather than the rate one.",
+         "Mode C's chart plots the LOSS RATIO, not the required step (D79). The required "
+         "step is unbounded by construction: it is (Mbar x D - K_pre)/K_post - 1, and "
+         "K_post goes to zero as the year runs out, so a December solve reads several "
+         "hundred percent and the axis it forces squashes every month anyone would act in "
+         "onto the zero line. The chart therefore does what Mode B does for a filing — it "
+         "TIMES one action you have chosen and traces the full-year plan LR as its date "
+         "slips, against the flat target. Bounded, monotonic, and the crossing is the "
+         "answer. Charting the SOLVED step's consequence instead would draw a flat line on "
+         "the target by construction, since the solved step lands on it every month.",
+         "So the two reads differ deliberately, and both are reported. The table SOLVES the "
+         "step month by month and flags the last month the answer is still inside the "
+         "bound; the chart TIMES a fixed directed action and reports the last month it "
+         "still reaches the target. A step can be perfectly fileable and still too small, "
+         "or large enough and no longer fileable — those are different failures and they "
+         "deserve different lines.",
          ]),
         ("8. Attribution (E2)", [
          "Sequential multiplicative decomposition of (actual - plan) CY LR, in the stated "
