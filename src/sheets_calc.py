@@ -143,16 +143,27 @@ def build_calc(ctx: Ctx):
                f"=IF(ISBLANK(INDEX(lr_netp1,{n})),$M${t},N(INDEX(lr_netp1,{n})))", "0.0%")
         f_grey(ws, f"O{t}",
                f'=IF(AND(nr_ModAdjMaster="ON",INDEX(lr_modadj,{n})="ON"),1,0)', FMT_INT)
+        # D70 stepped-mod cells: how many actions this combo has logged, and
+        # the level they compound on (blank M_endPrior falls back to M_0)
+        f_grey(ws, f"P{t}", f"=COUNTIF(ml_key,$A${t})", FMT_INT)
+        f_grey(ws, f"Q{t}",
+               f"=IF(N(INDEX(lr_mendprior,{n}))=0,$G${t},INDEX(lr_mendprior,{n}))",
+               FMT_MOD)
         anchors = write_mod_anchor_cells(
             ws, ctx, t + 1, 1,
             mind_ref=f"$F${t}", m0_ref=f"$G${t}", asof_ref=f"$H${t}",
-            m1_ref=f"$I${t}", mprior_ref=f"$J${t}", m2_ref=f"$K${t}")
+            m1_ref=f"$I${t}", mprior_ref=f"$J${t}", m2_ref=f"$K${t}",
+            steps_cond=f"$P${t}>0", mend_ref=f"$Q${t}")
         blk = write_cohort_block(
             ws, ctx, t + 3, LogRefs(key_cond=f"$A${t}"), t_ref=f"$C${t}",
             srow_ref=f"$D${t}", ssum_ref=f"$E${t}", anchors=anchors,
             header=True, header_row_at=t + 2,
             net=dict(mode=f"$L${t}", x=f"$M${t}", x1=f"$N${t}",
-                     modeff=f"$O${t}=1", mind=f"$F${t}"))
+                     modeff=f"$O${t}=1", mind=f"$F${t}"),
+            mod_refs=LogRefs(key_cond=f"$A${t}", eff="ml_eff", ln="ml_ln1p",
+                             effmonth="ml_effmonth", first="ml_first",
+                             daysafter="ml_daysafter"),
+            mod_col=22, mod_base_ref=f"$Q${t}", mod_count_ref=f"$P${t}")
         # block results row
         rr = t + 51
         label(ws, f"A{rr}", "block results:")

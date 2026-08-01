@@ -62,7 +62,8 @@ class ModAnchors:
 
 def write_mod_anchor_cells(ws, ctx: Ctx, row: int, first_col: int,
                            mind_ref, m0_ref, asof_ref, m1_ref, mprior_ref, m2_ref,
-                           dm1_expr: str = "") -> ModAnchors:
+                           dm1_expr: str = "", steps_cond: str = "",
+                           mend_ref: str = "") -> ModAnchors:
     """Write the 4 anchors (x, M) + 3 slopes into one row of cells.
 
     Anchor x-coordinates are close-of-day serials: date + 1 (DECISIONS.md D2).
@@ -77,10 +78,12 @@ def write_mod_anchor_cells(ws, ctx: Ctx, row: int, first_col: int,
     fmls = {
         x0: f"=EDATE({asof_ref},-12)+1",
         x1: f"={asof_ref}+1",
-        x2: "=DATE(nr_PlanYear,12,31)+1",
+        x2: ("=DATE(nr_PlanYear,12,31)+1" if not steps_cond else
+             f"=IF({steps_cond},DATE(nr_PlanYear-1,12,31)+1,DATE(nr_PlanYear,12,31)+1)"),
         x3: "=DATE(nr_PlanYear+1,12,31)+1",
         m1: f"={m0_ref}",
-        m2: f"={m1_ref}{dm1_expr}",
+        m2: (f"={m1_ref}{dm1_expr}" if not steps_cond else
+             f"=IF({steps_cond},{mend_ref},{m1_ref}{dm1_expr})"),
         m3: f"=IF(N({m2_ref})=0,{m1_ref},{m2_ref}){dm1_expr}",
         m0: f"=IF(N({mprior_ref})=0,{m1}-({m2}-{m1})/({x2}-{x1})*({x1}-{x0}),{mprior_ref})",
         s0: f"=({m1}-{m0})/({x1}-{x0})",
@@ -107,6 +110,8 @@ def write_cohort_block(
     srow_ref: str | None, ssum_ref: str | None,
     anchors: ModAnchors | None, include_rate=True, include_mod=True,
     header=True, header_row_at: int | None = None, net: dict | None = None,
+    mod_refs: LogRefs | None = None, mod_col: int | None = None,
+    mod_base_ref: str = "", mod_count_ref: str = "",
 ):
     """Emit the 48-row cohort block starting at ``first_row``, columns A..R.
 
@@ -157,7 +162,36 @@ def write_cohort_block(
             formula(ws, f"M{r}", f"=IF($K{r}=0,0,MIN(1,$L{r}/$D{r}))", fmt="0.000")
             formula(ws, f"N{r}", f"=IF($K{r}=0,$J{r},(1-$M{r})*$I{r}+$M{r}*$J{r})", fmt=FMT_IDX)
         if include_mod and anchors is not None:
-            formula(ws, f"O{r}", mod_value_formula(f"$F{r}", anchors), fmt=FMT_MOD)
+            drift = mod_value_formula(f"$F{r}", anchors)[1:]
+            if mod_refs is None or mod_col is None:
+                formula(ws, f"O{r}", f"={drift}", fmt=FMT_MOD)
+            else:
+                # D70: five columns mirroring the rate leg's I..M, then the
+                # same blend. Drift owns cohorts before 1/1/P; the step log
+                # owns the rest, compounding on the current-year-end mod.
+                mk = mod_refs.key_cond
+                c = [col(mod_col + i) for i in range(5)]
+                formula(ws, f"{c[0]}{r}",
+                        f"=EXP(SUMPRODUCT(({mod_refs.eff}<$B{r})*(ml_key={mk})"
+                        f"*{mod_refs.ln}))", fmt=FMT_IDX)
+                formula(ws, f"{c[1]}{r}",
+                        f"=EXP(SUMPRODUCT(({mod_refs.eff}<=$C{r})*(ml_key={mk})"
+                        f"*{mod_refs.ln}))", fmt=FMT_IDX)
+                formula(ws, f"{c[2]}{r}",
+                        f"=COUNTIFS(ml_key,{mk},{mod_refs.eff},\">=\"&$B{r},"
+                        f"{mod_refs.eff},\"<=\"&$C{r})", fmt=FMT_INT)
+                formula(ws, f"{c[3]}{r}",
+                        f"=SUMIFS({mod_refs.daysafter},ml_key,{mk},"
+                        f"{mod_refs.effmonth},$B{r},{mod_refs.first},1)", fmt=FMT_INT)
+                formula(ws, f"{c[4]}{r}",
+                        f"=IF(${c[2]}{r}=0,${c[1]}{r},"
+                        f"(1-MIN(1,${c[3]}{r}/$D{r}))*${c[0]}{r}"
+                        f"+MIN(1,${c[3]}{r}/$D{r})*${c[1]}{r})", fmt=FMT_IDX)
+                for i in range(5):
+                    ws[f"{c[i]}{r}"].font = font(GREY_DARK, size=9)
+                formula(ws, f"O{r}",
+                        f"=IF(AND({mod_count_ref}>0,$G{r}>=nr_MStartP),"
+                        f"{mod_base_ref}*${c[4]}{r},{drift})", fmt=FMT_MOD)
         for cL, (ms, me) in (("P", ("nr_MStartPm1", "nr_MEndPm1")),
                              ("Q", ("nr_MStartP", "nr_MEndP")),
                              ("R", ("nr_MStartP1", "nr_MEndP1"))):

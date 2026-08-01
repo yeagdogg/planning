@@ -146,6 +146,7 @@ def lr_headers() -> list[str]:
         "Net trend, plan yr+1 (opt)", "Other adj factor (A_other)",
         "Reason for other adj", "Apply mod adjustment?",
         "Net rate selection, plan yr (opt)", "Net rate selection, plan yr+1 (opt)",
+        "Projected mod, end of CURRENT yr (M_endPrior) — base for Mod Log actions",
     ]
 
 
@@ -172,7 +173,7 @@ def build_inputs(ctx: Ctx):
         f"your book. {ctx.we_key} carries the documented worked example used by the Checks sheet.",
         fnt=font(FAIL_RED, bold=True, italic=True))
     put(ws, "T4",
-        "tbl_LR A:R is one contiguous paste block — keys, helpers, and live results sit to "
+        "tbl_LR A:S is one contiguous paste block — keys, helpers, and live results sit to "
         "the right. The rate change log lives on the Rate Log sheet.",
         fnt=F_SMALL_IT)
 
@@ -181,13 +182,15 @@ def build_inputs(ctx: Ctx):
             "tbl_LR — one row per BU x state (projected LR and mod inputs). "
             "Columns A:R are one contiguous paste block.")
     header_row(ws, L.LR_HDR, 1, lr_headers(),
-               widths=[9, 8, 11, 10, 12, 13, 12, 11, 12, 13, 12, 12, 11, 10, 18, 11, 12, 12])
+               widths=[9, 8, 11, 10, 12, 13, 12, 11, 12, 13, 12, 12, 11, 10, 18, 11, 12,
+                       12, 13])
     ws.row_dimensions[L.LR_HDR].height = 44
     put(ws, f"T{L.LR_HDR}", "Key", fnt=font(GREY_DARK, bold=True, size=9), fill=FILL_GREY)
     put(ws, f"T{L.LR_HDR - 1}", "engine helper — do not edit", fnt=F_SMALL_IT)
     fmt_by_col = {3: FMT_PCT, 4: FMT_GEN, 5: FMT_PCT, 6: FMT_MOD, 7: FMT_MOD, 8: FMT_DATE,
                   9: FMT_MOD, 10: FMT_MOD, 11: FMT_MOD, 12: FMT_EP, 13: FMT_PCT,
-                  14: FMT_IDX, 15: FMT_GEN, 16: FMT_GEN, 17: FMT_PCT, 18: FMT_PCT}
+                  14: FMT_IDX, 15: FMT_GEN, 16: FMT_GEN, 17: FMT_PCT, 18: FMT_PCT,
+                  19: FMT_MOD}
     required_cols = {1, 2, 3, 4, 6, 7, 8, 9, 16}
     for i in range(L.LR_ROWS):
         r = L.LR_FIRST + i
@@ -200,8 +203,9 @@ def build_inputs(ctx: Ctx):
             13: row and row["trend"], 14: row and row["a_other"],
             15: (row["a_other_label"] if row else None), 16: row and row["modadj"],
             17: row and row["netp"], 18: row and row["netp1"],
+            19: row and row.get("m_end_prior"),
         }
-        for c in range(1, 19):
+        for c in range(1, 20):
             input_cell(ws, f"{ws.cell(row=r, column=c).coordinate}", vals.get(c),
                        fmt=fmt_by_col.get(c, FMT_GEN), required=(c in required_cols))
         formula(ws, f"T{r}", f'=IF(OR($A{r}="",$B{r}=""),"",$A{r}&"|"&$B{r})',
@@ -217,7 +221,7 @@ def build_inputs(ctx: Ctx):
         "combined net price (rate x mod) renews this % above its year-ago cohort. History "
         "before 1/1/P still earns exactly as modeled. Blank = explicit program (classic). "
         "The P+1 column defaults to the P selection when blank.", "generator")
-    tbl = Table(displayName="tbl_LR", ref=f"A{L.LR_HDR}:R{L.LR_LAST}")
+    tbl = Table(displayName="tbl_LR", ref=f"A{L.LR_HDR}:S{L.LR_LAST}")
     tbl.tableStyleInfo = TABLE_STYLE
     ws.add_table(tbl)
     lr_names = {
@@ -240,6 +244,7 @@ def build_inputs(ctx: Ctx):
         "lr_netp": ("Q", "OPTIONAL net rate selection for P: YoY combined rate x mod target "
                          "from 1/1/P (blank = explicit program, D39)"),
         "lr_netp1": ("R", "OPTIONAL net selection for P+1 (blank = carry the P selection)"),
+        "lr_mendprior": ("S", "M_endPrior: projected avg written mod at 12/31/(P-1) — the base the Mod Log's stepped actions compound on (D70)"),
         "lr_key": ("T", "Helper: concatenated BU|State key (right of the paste block, D40)"),
     }
     for name, (colL, desc) in lr_names.items():

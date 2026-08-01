@@ -46,6 +46,7 @@ class SHEETS:
     CONTROL = "Control"
     INPUTS = "Inputs"
     RATE_LOG = "Rate Log"          # created by the C6 rate-log split
+    MOD_LOG = "Mod Log"            # D70 stepped schedule-mod actions
     NET_DELIVERY = "Net Delivery"  # D57 net-target decomposition
     NETCALC = "_netcalc"           # its hidden engine blocks
     PROGRAM_FLOW = "Program Flow"  # D59 descriptive program-flow grids
@@ -95,6 +96,7 @@ class Config:
     version: str
     spare_lr_rows: int
     rate_log_rows: int
+    mod_log_rows: int
     spare_seasonality_rows: int
 
     @property
@@ -179,6 +181,7 @@ def load_config(path: str | Path) -> Config:
         version=str(raw.get("version", GENERATOR_VERSION)),
         spare_lr_rows=int(cap.get("spare_lr_rows", 6)),
         rate_log_rows=int(cap.get("rate_log_rows", 240)),
+        mod_log_rows=int(cap.get("mod_log_rows", 120)),
         spare_seasonality_rows=int(cap.get("spare_seasonality_rows", 3)),
     )
 
@@ -232,6 +235,7 @@ def sample_lr_rows(cfg: Config, lob: LobCfg) -> list[dict]:
         row = dict(
             bu=bu, state=state, lr_proj=lr, basis="current", s=0.05,
             m_ind=m_ind, m0=m0, m0_asof=asof, m1=m1, m_prior=None, m2=None,
+            m_end_prior=_clamp_mod((m0 + m1) / 2.0),   # D70 educated guess
             ep=base["ep"] * (8 + (i * 13) % 17) * 100,  # ADJUSTED plan EP in 000s
             trend=None,  # blank inherits the Control default trend (D38)
             a_other=1.0, a_other_label="", modadj="ON",
@@ -341,11 +345,39 @@ def sample_seasonality_rows(cfg: Config) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
+def sample_mod_rows(cfg: Config, lob: LobCfg) -> list[dict]:
+    """Sample stepped mod actions (D70).
+
+    Deliberately NOT on the worked-example combo: build() asserts that combo
+    still reproduces engine.worked_example() exactly, and a mod action would
+    move it. The seeds demonstrate the three things the mechanic adds — a
+    dated action, partial achievement, and two actions compounding.
+    """
+    p = cfg.plan_year
+    st = cfg.states
+
+    def row(bu, state, m, d, chg, status, ach=None, comment=""):
+        return dict(bu=bu, state=state, eff=dt.date(p, m, d), chg=chg,
+                    status=status, achievement=ach, comment=comment)
+
+    rows: list[dict] = []
+    if len(st) > 2:
+        rows.append(row(_bu(cfg, 1), st[2], 3, 1, 0.020, "taken",
+                        comment="Directed mod tightening, already actioned"))
+        rows.append(row(_bu(cfg, 1), st[2], 9, 1, 0.015, "planned", 0.70,
+                        comment="Second push; 70% achievement assumed"))
+    if len(st) > 6:
+        rows.append(row(_bu(cfg, 2), st[6], 4, 15, 0.025, "planned", 0.80,
+                        comment="Mid-month action — day-blended like a filing"))
+    return rows
+
+
 def sample_to_combo(
     cfg: Config,
     lob: LobCfg,
     lr_row: dict,
     rate_rows: list[dict],
+    mod_rows: list[dict] | None = None,
     seasonality_on: bool = False,
     season_rows: list[dict] | None = None,
     trend_default: float = 0.0,
@@ -368,13 +400,27 @@ def sample_to_combo(
         for r in rate_rows
         if r["bu"] == lr_row["bu"] and r["state"] == lr_row["state"]
     )
+    mod_changes = tuple(
+        RateChange(
+            effective=r["eff"],
+            filed_pct=r["chg"],
+            status=r["status"],
+            considered=False,
+            achievement=1.0 if r["achievement"] is None else r["achievement"],
+            comment=r["comment"],
+        )
+        for r in (mod_rows or [])
+        if r["bu"] == lr_row["bu"] and r["state"] == lr_row["state"]
+    )
     return ComboInputs(
+        mod_changes=mod_changes,
         lr_proj=lr_row["lr_proj"],
         lr_basis=lr_row["basis"],
         sel_change=lr_row["s"],
         mods=ModInputs(
             m_ind=lr_row["m_ind"], m0=lr_row["m0"], m0_asof=lr_row["m0_asof"],
             m1=lr_row["m1"], m_prior=lr_row["m_prior"], m2=lr_row["m2"],
+            m_end_prior=lr_row.get("m_end_prior"),
         ),
         rate_changes=changes,
         net_trend=trend_default if lr_row["trend"] is None else lr_row["trend"],
@@ -412,6 +458,10 @@ class Layout:
     RL_FIRST = 7
     RL_ROWS = 240
     RL_LAST = 246
+    ML_HDR = 6            # Mod Log sheet (D70; own sheet, same shape)
+    ML_FIRST = 7
+    ML_ROWS = 120
+    ML_LAST = 126
     SE_HDR = 84
     SE_FIRST = 85
     SE_ROWS = 24
@@ -477,6 +527,11 @@ class Layout:
         cls.RL_FIRST = cls.RL_HDR + 1
         cls.RL_ROWS = cfg.rate_log_rows
         cls.RL_LAST = cls.RL_FIRST + cls.RL_ROWS - 1
+        # the mod log (D70) mirrors it on its own sheet
+        cls.ML_HDR = 6
+        cls.ML_FIRST = cls.ML_HDR + 1
+        cls.ML_ROWS = cfg.mod_log_rows
+        cls.ML_LAST = cls.ML_FIRST + cls.ML_ROWS - 1
         cls.SE_HDR = cls.LR_LAST + 4
         cls.SE_FIRST = cls.SE_HDR + 1
         cls.SE_ROWS = len(cfg.states) + cfg.spare_seasonality_rows
@@ -500,6 +555,7 @@ class Ctx:
     wb: Workbook
     lr_rows: list
     rate_rows: list
+    mod_rows: list
     season_rows: list
     oracle_m: engine.EngineResult      # worked-example combo, monthly
     oracle_c: engine.EngineResult      # worked-example combo, continuous
@@ -538,6 +594,7 @@ class Ctx:
 # answers -> the selected-combo deep-dive chain -> what-ifs -> audit -> docs.
 SHEET_ORDER = [
     SHEETS.README, SHEETS.CONTROL, SHEETS.INPUTS, SHEETS.RATE_LOG,
+    SHEETS.MOD_LOG,
     SHEETS.PORTFOLIO, SHEETS.STATE_SUMMARY, SHEETS.PROGRAM_FLOW,
     SHEETS.NET_DELIVERY, SHEETS.BRIDGE,
     SHEETS.WALKTHROUGH, SHEETS.ONE_PAGER, SHEETS.FLOW, SHEETS.SCENARIOS,
@@ -556,18 +613,20 @@ HIDDEN_SHEETS = {SHEETS.LISTS, SHEETS.CALC, SHEETS.NETCALC, SHEETS.ORACLE}
 def build(cfg: Config, lob_name: str) -> Workbook:
     from . import (sheets_briefs, sheets_calc, sheets_engine, sheets_inputs,
                    sheets_main, sheets_netdelivery, sheets_programflow,
-                   sheets_ratelog, sheets_report, sheets_walkthrough)
+                   sheets_modlog, sheets_ratelog, sheets_report,
+                   sheets_walkthrough)
 
     Layout.configure(cfg)
     lob = cfg.lob(lob_name)
     lr_rows = sample_lr_rows(cfg, lob)
     rate_rows = sample_rate_rows(cfg, lob)
+    mod_rows = sample_mod_rows(cfg, lob)
     season_rows = sample_seasonality_rows(cfg)
 
     # ---- oracle bake for the worked-example combo (BU-A | first state) -----
     we_row = next(r for r in lr_rows if r["bu"] == _bu(cfg, 0) and r["state"] == cfg.states[0])
     we_key = f"{we_row['bu']}|{we_row['state']}"
-    combo = sample_to_combo(cfg, lob, we_row, rate_rows)
+    combo = sample_to_combo(cfg, lob, we_row, rate_rows, mod_rows)
     if cfg.plan_year == 2027 and lob.term_months == 12:
         # The seeded sample must reproduce §9 exactly for annual-term books
         # (comments/EP/s may differ, so compare results, not input dataclasses).
@@ -595,7 +654,7 @@ def build(cfg: Config, lob_name: str) -> Workbook:
 
     ctx = Ctx(
         cfg=cfg, lob=lob, wb=wb, lr_rows=lr_rows, rate_rows=rate_rows,
-        season_rows=season_rows, oracle_m=oracle_m, oracle_c=oracle_c,
+        mod_rows=mod_rows, season_rows=season_rows, oracle_m=oracle_m, oracle_c=oracle_c,
         oracle_solver_r=solver_res.required_change, we_key=we_key, we_row=we_row,
     )
 
@@ -603,6 +662,7 @@ def build(cfg: Config, lob_name: str) -> Workbook:
     sheets_inputs.build_lists(ctx)
     sheets_inputs.build_inputs(ctx)
     sheets_ratelog.build_rate_log(ctx)
+    sheets_modlog.build_mod_log(ctx)
     sheets_inputs.build_control(ctx)
     sheets_engine.build_rate_engine(ctx)
     sheets_engine.build_mod_engine(ctx)
