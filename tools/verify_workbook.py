@@ -167,6 +167,8 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
     deleted = 0
     total_axes = 0
     vis_only = []
+    legend_over = []
+    n_legends = 0
     with zipfile.ZipFile(path) as z:
         for name in z.namelist():
             if re.match(r"xl/charts/chart\d+\.xml$", name):
@@ -177,11 +179,22 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
                 # resave rewrites with the c: prefix — accept either
                 if not re.search(r'<(c:)?plotVisOnly val="0"', xml):
                     vis_only.append(name)
+                # D69: a legend with no explicit <c:overlay val="0"> is drawn ON
+                # TOP of the series. openpyxl omits the element and ECMA-376
+                # defaults a missing overlay to TRUE, so Excel materialises
+                # val="1" on resave — the same omitted-element trap as D36.
+                leg = re.search(r"<(c:)?legend>.*?</(c:)?legend>", xml, re.S)
+                if leg:
+                    n_legends += 1
+                    if not re.search(r'<(c:)?overlay val="0"', leg.group(0)):
+                        legend_over.append(name.split("/")[-1])
     check("chart axes visible after Excel resave (1 intentional hide only)",
           total_axes >= 16 and deleted == 1,
           f"{deleted} deleted of {total_axes} axes")
     check("every chart plots hidden cells (plotVisOnly=0)", not vis_only,
           "; ".join(vis_only[:5]))
+    check(f"no legend overlaps its plot area ({n_legends} legends, D69)",
+          not legend_over, "; ".join(legend_over[:6]))
 
     print("Phase C: oracle ties (default state)")
     p = cfg.plan_year

@@ -33,7 +33,7 @@ from .xlstyle import (
     ALIGN_C, ALIGN_L, BORDER_THIN, F_LABEL, F_SMALL_IT, FAIL_RED, FILL_GREY,
     FILL_NAVY, FILL_PANEL, FILL_STEEL, FMT_DATE, FMT_IDX, FMT_INT, FMT_MOD,
     FMT_PCT, GREY_DARK, NAVY,
-    STEEL, WARN_AMBER, col, font, formula, header_row, input_cell, jump, label,
+    STEEL, WARN_AMBER, col, chart_legend, font, formula, header_row, input_cell, jump, label,
     link, nav_bar, presentation_setup, print_setup, prose, put, quote_sheet,
     section, set_widths, title,
 )
@@ -728,6 +728,8 @@ def build_net_delivery(ctx: Ctx):
     stack.x_axis.delete = False
     stack.y_axis.delete = False
     stack.y_axis.number_format = "0.0%"
+    # after the += merge, so it lands on the COMBINED chart legend (D69)
+    chart_legend(stack)
     ws.add_chart(stack, f"F{r + 1}")
 
     # one uniform width across both year bands: the summary's columns and the

@@ -21,7 +21,7 @@ from .build_workbook import Ctx, Layout as L, SHEETS
 from .xlstyle import (
     ALIGN_C, BORDER_THIN, F_LABEL, F_SMALL_IT, FAIL_RED, FILL_GREEN, FILL_GREY,
     FILL_PANEL, FILL_RED, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT, GREY_DARK, NAVY,
-    PASS_GREEN, STEEL, col, font, formula, header_row, jump, label, link,
+    PASS_GREEN, STEEL, col, chart_legend, font, formula, header_row, jump, label, link,
     presentation_setup, print_setup, prose, put, quote_sheet, section, set_widths,
     title,
 )
@@ -411,6 +411,7 @@ def build_walkthrough(ctx: Ctx):
     mini.visible_cells_only = False
     mini.x_axis.delete = False
     mini.y_axis.delete = False
+    chart_legend(mini)           # legend beside the plot, not on it (D69)
     ws.add_chart(mini, "K8")
 
     set_widths(ws, {"A": 2, "B": 42, "C": 13, "D": 13, "E": 13, "F": 13, "G": 12,

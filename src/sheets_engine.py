@@ -19,7 +19,7 @@ from .build_workbook import Ctx, Layout as L
 from .xlstyle import (
     ALIGN_C, BORDER_THIN, F_HEADER, F_LABEL, F_SMALL_IT, FILL_GREY, FILL_NAVY, FILL_PANEL,
     FMT_DATE, FMT_GEN, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT, GREY_DARK, STEEL,
-    col, font, formula, header_row, jump, label, link, note, presentation_setup,
+    col, chart_legend, font, formula, header_row, jump, label, link, note, presentation_setup,
     print_setup, put, section, set_widths, title,
 )
 
@@ -570,6 +570,7 @@ def build_mod_engine(ctx: Ctx):
     pathc.visible_cells_only = False
     pathc.x_axis.delete = False
     pathc.y_axis.delete = False
+    chart_legend(pathc)          # legend beside the plot, not on it (D69)
     ws.add_chart(pathc, "J14")
 
     set_widths(ws, {"A": 6, "B": 12, "C": 10, "D": 7, "E": 9, "F": 9, "G": 9, "H": 9,

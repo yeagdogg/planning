@@ -117,9 +117,10 @@ under every exercised state; no volatile / dynamic-array / prohibited functions;
 cells; no external links; the §9 worked example reproduced exactly (Bridge = oracle monthly
 convention to 1e-9, and 63.36% at 4 decimals on annual-term books); **every BU×state combo**
 tied to a per-combo oracle run (9 metrics each); solver round-trip (+5.0% at 4/1); chart axes
-intact after the Excel resave; scenario, attribution, seasonality, basis, mod-toggle,
+intact and no legend overlapping its plot after the Excel resave; scenario, attribution,
+seasonality, basis, mod-toggle,
 degenerate-input, and plan-year-change exercises each tied to fresh oracle runs. At last run:
-Property **222 checks / 0 failed** (full), the other five LOB files 65 (or 63 for the
+Property **223 checks / 0 failed** (full), the other five LOB files 76 (or 74 for the
 6-month-term Inland Marine) / 0 failed each (phases A–C), the combined book **43 / 0**
 (`tools/verify_book.py`), pytest 144/144. The business
 units and states in `config/config.yaml` are addressed positionally, so renaming them to

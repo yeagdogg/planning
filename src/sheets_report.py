@@ -14,7 +14,7 @@ from .xlstyle import (
     ALIGN_C, ALIGN_WRAP, BAND_FILL, BORDER_THIN, F_HEADER, F_INPUT, F_LABEL, F_LINK,
     F_SMALL_IT, FAIL_RED, FILL_AMBER, FILL_GREEN, FILL_GREY, FILL_NAVY, FILL_PANEL,
     FILL_RED, FILL_REQ, FMT_DATE, FMT_GEN, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT,
-    GREY_DARK, LINK_GREEN, NAVY, PASS_GREEN, STEEL, col, font, formula, header_row,
+    GREY_DARK, LINK_GREEN, NAVY, PASS_GREEN, STEEL, col, chart_legend, font, formula, header_row,
     jump, label, link, nav_bar, note, presentation_setup, print_setup, prose, put,
     quote_sheet as _q, section, set_widths, text_height, title,
 )
@@ -51,6 +51,9 @@ def _chart(c, title_text, height=8, width=15, y_title=None):
         c.x_axis.delete = False
     if c.y_axis.delete is None:
         c.y_axis.delete = False
+    # ...and the same trap on the legend: omitted <c:overlay> defaults to TRUE,
+    # so Excel draws the legend over the plot (D69)
+    chart_legend(c)
     return c
 
 

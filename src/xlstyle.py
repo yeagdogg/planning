@@ -263,6 +263,27 @@ def set_widths(ws, spec: dict):
         ws.column_dimensions[letter].width = w
 
 
+def chart_legend(c, pos="b"):
+    """Move the legend OUT of the plot area (D69).
+
+    openpyxl leaves ``overlay`` as None, so ``<c:overlay>`` is omitted — and
+    ECMA-376's default for a missing overlay is TRUE. Excel therefore
+    materialises ``<c:overlay val="1"/>`` on resave and draws the legend ON TOP
+    of the series. Exactly the shape of D36 (the omitted ``<c:delete>`` on an
+    axis): an optional element left out acquires a hostile default, and the
+    damage only appears after the Excel round-trip.
+
+    Bottom by default: every chart here is a month or cohort series, so a
+    bottom legend costs height that is cheap and keeps the full plot width.
+    Note ``Legend`` has no ``position`` alias — the attribute is ``legendPos``.
+    """
+    if getattr(c, "legend", None) is None:
+        return c
+    c.legend.legendPos = pos
+    c.legend.overlay = False
+    return c
+
+
 def presentation_setup(ws, gridlines_off=True, zoom=100, freeze=None, tab_color=None):
     ws.sheet_view.showGridLines = not gridlines_off
     ws.sheet_view.zoomScale = zoom
