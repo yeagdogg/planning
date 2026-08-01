@@ -239,6 +239,25 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
         check("worked example CY LR rounds to 63.36%",
               round(float(nval(wb, "nr_CYLR_P")), 4) == 0.6336, str(nval(wb, "nr_CYLR_P")))
 
+    # D76: the current-process reconciliation, on the default (drift-only)
+    # selection. The waterfall legs are exercised on a stepped combo in 9j.
+    me_top = L.ME_COH_LAST + 2
+    rec = engine.process_reconciliation(p, combo)
+    me0 = wb["Mod Engine"]
+    for cl, want, nm in ((f"K{me_top + 3}", rec.m_avg, "current-process M_avg"),
+                         (f"L{me_top + 3}", rec.lr_process, "current-process plan LR"),
+                         (f"K{me_top + 7}", rec.m_earned, "model earned mod"),
+                         (f"L{me_top + 7}", rec.lr_model, "model plan LR"),
+                         (f"K{me_top + 8}", rec.m_end_prior, "start level"),
+                         (f"K{me_top + 9}", rec.m_end_plan, "end level"),
+                         (f"M{me_top + 12}", rec.gap_pts, "process-minus-model gap")):
+        check(f"[reconciliation] {nm} ties oracle",
+              approx(me0[cl].value, want, 1e-9),
+              f"wb={me0[cl].value} oracle={want}")
+    check("[reconciliation] a drift-only combo shows no step split",
+          not rec.stepped and me0[f"M{me_top + 4}"].value == "n/a",
+          f"stepped={rec.stepped} wb={me0[f'M{me_top + 4}'].value!r}")
+
     # monthly series: written index, written mod, earned index by month
     re_ws, me_ws = wb["Rate Engine"], wb["Mod Engine"]
     ok_w = ok_m = ok_e = True
@@ -1275,6 +1294,44 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
              ("Inputs", f"{lr_letter('lr_m0asof')}{ms_xl}"): deg_asof,
              ("Net Delivery", "B5"): _bu(cfg, 2),
              ("Net Delivery", f"D{ms_tab}"): dt.date(p, 4, 15)}, a9h_deg)
+
+    # 9j. D76: the reconciliation waterfall where it has three legs to show.
+    # Only a combo with logged mod actions splits into term / timing / history,
+    # and the default selection has none — select one and tie every leg.
+    if mod_rows:
+        me_top = L.ME_COH_LAST + 2
+        ms_bu, ms_st = mod_rows[0]["bu"], mod_rows[0]["state"]
+        ms_lr = next((x for x in lr_rows
+                      if x["bu"] == ms_bu and x["state"] == ms_st), None)
+        if ms_lr is not None:
+            want = engine.process_reconciliation(
+                p, sample_to_combo(cfg, lob, ms_lr, rate_rows, mod_rows))
+
+            def a9j(wb):
+                me = wb["Mod Engine"]
+                check("[reconciliation: stepped combo] selection followed",
+                      me["B3"].value == f"{ms_bu}|{ms_st}", repr(me["B3"].value))
+                for cl, w_, nm in (
+                        (f"K{me_top + 3}", want.m_avg, "M_avg"),
+                        (f"L{me_top + 3}", want.lr_process, "current-process plan LR"),
+                        (f"M{me_top + 4}", want.term_pts, "term leg"),
+                        (f"M{me_top + 5}", want.timing_pts, "timing leg"),
+                        (f"M{me_top + 6}", want.history_pts, "history leg"),
+                        (f"K{me_top + 7}", want.m_earned, "model earned mod"),
+                        (f"K{me_top + 9}", want.m_end_plan, "end level (log-derived)"),
+                        (f"K{me_top + 10}", want.theta_actual, "share of the step earned"),
+                        (f"M{me_top + 12}", want.gap_pts, "gap")):
+                    check(f"[reconciliation: stepped combo] {nm} ties oracle",
+                          approx(me[cl].value, w_, 1e-9),
+                          f"wb={me[cl].value} oracle={w_}")
+                check("[reconciliation: stepped combo] waterfall closes",
+                      approx(nval(wb, "me_ProcWaterfall"), 0.0, 1e-9),
+                      f"wb={nval(wb, 'me_ProcWaterfall')}")
+                check("[reconciliation: stepped combo] model leg IS the plan LR",
+                      approx(me[f"L{me_top + 7}"].value, nval(wb, "nr_CYLR_P"), 1e-9),
+                      f"wb={me[f'L{me_top + 7}'].value} bridge={nval(wb, 'nr_CYLR_P')}")
+            run("reconciliation: stepped combo selected",
+                {("Control", "C7"): ms_bu, ("Control", "C8"): ms_st}, a9j)
 
     # 9i. program-basis plan LR (D65): switch the worked example ONTO a net
     # selection and the gap must open exactly as the oracle says

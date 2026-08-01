@@ -272,6 +272,103 @@ def write_cohort_block(
     )
 
 
+def _mod_reconciliation(ws, ctx: Ctx, top: int) -> None:
+    """Reconcile the shop's endpoint-average process to the earned model (D76).
+
+    Every figure comes from aggregates over the cohort table already on this
+    sheet — the three counterfactual valuations differ only in which written
+    mod each cohort carries, and the weights never move. No second engine
+    block, which also means no second engine to drift out of step with the
+    first. Oracle: engine.process_reconciliation.
+    """
+    cf, cl = L.ME_COH_FIRST, L.ME_COH_LAST
+    w, ec = f"$D${cf}:$D${cl}", f"$G${cf}:$G${cl}"
+    som = f"$B${cf}:$B${cl}"
+    jan1 = "DATE(nr_PlanYear,1,1)"
+    den = f"SUMPRODUCT({w},{ec})"
+    hist, plan = f"({som}<{jan1})", f"({som}>={jan1})"
+    start, end = "$K$" + str(top + 8), "$K$" + str(top + 9)
+    # the plan LR each valuation implies. A_mod is pinned at 1 exactly where
+    # the engine pins it, so in those states every row reads the same number
+    lr = lambda m: (f'=IF(OR(nr_NetMode,nr_ModAdjMaster="OFF",nr_ModAdjRow="OFF"),'
+                    f"nr_CYLR_P,nr_CYLR_P*nr_MEarned_P/{m})")
+
+    section(ws, top, "J", "Reconciliation to the current process")
+    put(ws, f"J{top + 1}",
+        "Averaging the two year-end mods is EXACT for one action on 1/1, a twelve-month "
+        "term, and a flat prior year. Each line below leaves one of those conditions and "
+        "prices what it costs; together they close the gap with nothing left over.",
+        fnt=F_SMALL_IT)
+    header_row(ws, top + 2, 11, ["Mod value", "Plan LR", "pts"],
+               fill=FILL_GREY, fnt=font(GREY_DARK, bold=True, size=9))
+
+    # hidden counterfactual valuations: flat prior year, steps at 1/1 / as dated
+    fj, ff = f"$N${top + 8}", f"$N${top + 9}"
+    formula(ws, f"N{top + 8}",
+            f"=IF($C$11=0,nr_MEarned_P,{start}*SUMPRODUCT({w},{ec},"
+            f"{hist}+{plan}*({end}/{start}))/{den})", fmt=FMT_MOD)
+    formula(ws, f"N{top + 9}",
+            f"=IF($C$11=0,nr_MEarned_P,SUMPRODUCT({w},{ec},"
+            f"{hist}*{start}+{plan}*$E${cf}:$E${cl})/{den})", fmt=FMT_MOD)
+    put(ws, f"O{top + 8}", "flat prior yr, 1/1", fnt=font(GREY_DARK, size=8))
+    put(ws, f"O{top + 9}", "flat prior yr, dated", fnt=font(GREY_DARK, size=8))
+
+    rows = [
+        ("Current process — average the two year-end mods",
+         f"=({start}+{end})/2", None, True),
+        ("...  + term: this book turns over in fewer than 12 months", None,
+         f"=IF($C$11=0,\"n/a\",(({lr(fj)[1:]})-$L${top + 3})*100)", False),
+        ("...  + timing: actions dated as logged, not all on 1/1", None,
+         f"=IF($C$11=0,\"n/a\",(({lr(ff)[1:]})-({lr(fj)[1:]}))*100)", False),
+        ("...  + history: carry-in DRIFTED up to the start level", None,
+         f"=IF($C$11=0,\"n/a\",($L${top + 7}-({lr(ff)[1:]}))*100)", False),
+        ("Model — earned through the book", "=nr_MEarned_P", None, True),
+    ]
+    for i, (lbl, kf, mf, bold) in enumerate(rows):
+        r = top + 3 + i
+        put(ws, f"J{r}", lbl, fnt=(F_LABEL if bold else font(GREY_DARK, size=10)))
+        if kf:
+            formula(ws, f"K{r}", kf, fmt=FMT_MOD, border=BORDER_THIN, bold=bold)
+            formula(ws, f"L{r}", lr(f"$K${r}"), fmt=FMT_PCT, border=BORDER_THIN, bold=bold)
+        if mf:
+            formula(ws, f"M{r}", mf, fmt="+0.00;-0.00;0.00", border=BORDER_THIN)
+    put(ws, f"J{top + 8}", "Start level — written mod at 12/31 of the current year", fnt=F_LABEL)
+    formula(ws, f"K{top + 8}", "=$C$12", fmt=FMT_MOD, border=BORDER_THIN)
+    put(ws, f"J{top + 9}", "End level — written mod at 12/31 of the plan year", fnt=F_LABEL)
+    formula(ws, f"K{top + 9}",
+            f"=IF($C$11=0,nr_M1,$C$12*$V${cf + 35})", fmt=FMT_MOD, border=BORDER_THIN)
+    put(ws, f"J{top + 10}",
+        "Share of the action CY P actually earns (the process assumes 50.0%)", fnt=F_LABEL)
+    formula(ws, f"K{top + 10}",
+            f'=IF(OR($C$11=0,{end}={start}),"n/a",({ff}-{start})/({end}-{start}))',
+            fmt=FMT_PCT, border=BORDER_THIN)
+    formula(ws, f"L{top + 10}",
+            f'=IF($C$11=0,"— no actions logged: the path is a drift line, so there is '
+            f'nothing to split —",IF(nr_NetMode,"— net selection supersedes the mod leg '
+            f'(D39): neither valuation reaches the plan LR —",IF(OR(nr_ModAdjMaster='
+            f'"OFF",nr_ModAdjRow="OFF"),"— mod adjustment OFF: A_mod is pinned at 1.000 '
+            f'under both methods —","")))')
+    ws[f"L{top + 10}"].font = font(GREY_DARK, size=9, italic=True)
+
+    # the gap, and the check that the three legs actually close it
+    put(ws, f"J{top + 12}", "Current process minus model (LR points)", fnt=F_LABEL)
+    formula(ws, f"M{top + 12}", f"=($L${top + 3}-$L${top + 7})*100",
+            fmt="+0.00;-0.00;0.00", border=BORDER_THIN, bold=True)
+    ctx.define("me_ProcGap", "Mod Engine", f"$M${top + 12}",
+               "Current-process plan LR minus the model's, in LR points (D76)")
+    formula(ws, f"N{top + 12}",
+            f'=IF($C$11=0,0,ABS(SUM($M${top + 4}:$M${top + 6})+$M${top + 12}))',
+            fmt="0.0000000000")
+    ctx.define("me_ProcWaterfall", "Mod Engine", f"$N${top + 12}",
+               "|term + timing + history + gap| — zero when the waterfall closes")
+    for a in (f"N{top + 8}", f"N{top + 9}", f"N{top + 12}"):
+        ws[a].font = font(GREY_DARK, size=8)
+    put(ws, f"J{top + 13}",
+        "A positive gap means the current process reads a LOWER plan loss ratio than the "
+        "book earns — it credits more mod relief than arrives. Negative is conservative.",
+        fnt=F_SMALL_IT)
+
+
 def cy_aggregate(w_rng: str, ec_rng: str, val_rng: str | None) -> str:
     """E_CY / Mbar_CY aggregate-ratio formula over a cohort block."""
     if val_rng is None:
@@ -717,8 +814,10 @@ def build_mod_engine(ctx: Ctx):
     chart_legend(pathc)          # legend beside the plot, not on it (D69)
     ws.add_chart(pathc, "J14")
 
+    _mod_reconciliation(ws, ctx, L.ME_COH_LAST + 2)
+
     set_widths(ws, {"A": 6, "B": 12, "C": 10, "D": 7, "E": 9, "F": 9, "G": 9, "H": 9,
-                    "I": 3, "J": 26, "K": 10, "L": 11})
+                    "I": 3, "J": 26, "K": 10, "L": 11, "M": 11, "N": 11})
     # step-index construction is audit detail, like the rate leg's I..M
     for cL in "TUVWXY":
         ws.column_dimensions[cL].outlineLevel = 1

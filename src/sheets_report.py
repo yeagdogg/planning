@@ -590,6 +590,8 @@ def build_checks(ctx: Ctx):
        "=0", "=nd_NetSelfChk", 1e-9, "FAIL"))
     A(("Structure", "Mod-step columns reproduce the engine mod path on stepped combos",
        "=0", "=nd_MaxStepDiff", 1e-9, "FAIL"))
+    A(("Structure", "Current-process waterfall closes the gap exactly (term+timing+history)",
+       "=0", "=me_ProcWaterfall", 1e-9, "FAIL"))
     A(("Advisory", "Net Delivery feasibility flags in view (mod/rate bounds, thin share)",
        "=0", '=IF(nd_BU="All",0,SUMPRODUCT((ndd_flags<>"")*(ndd_flags<>"—")*1))',
        0, "WARN"))
@@ -854,6 +856,37 @@ def build_methodology(ctx: Ctx):
          "Identity check (§3.3.5): with uniform writings, annual term, and a globally linear "
          "path, the CY earned mod equals the written mod at 1/1 of that year, within 0.0002; "
          "the check self-suspends when its preconditions fail (D29).",
+         ]),
+        ("5b. Reconciliation to the current process (D76)", [
+         "The current process values the mod leg by averaging the two year-end mods, "
+         "M_avg = (M_endPrior + M_1) / 2, and takes A_mod = M_ind / M_avg. That is not a "
+         "crude approximation to be argued with — it is the EXACT answer for one action "
+         "on 1/1, a twelve-month term, and a prior year that sits flat at M_endPrior. "
+         "Pinned as an oracle test, because if it ever stopped holding the exhibit would "
+         "be comparing two different plans rather than two methods.",
+         "So every difference from it is attributable, and the Mod Engine tab prices each "
+         "one as a waterfall from the current process to the model, each leg changing "
+         "exactly one condition. TERM: a book that turns over in fewer than twelve months "
+         "earns a plan-year action in MORE than half the year, while the endpoint average "
+         "always assumes half. TIMING: an action dated later than 1/1 earns in less. "
+         "HISTORY: the business carried into the plan year does not sit at M_endPrior, it "
+         "DRIFTED up to that level, so the carry-in earns a lower mod than averaging the "
+         "endpoints credits it with. Ordered least to most actionable — the term is a "
+         "property of the book, the history is already written, the dates are the decision "
+         "still open — and a Checks row ties the three legs to the gap at 1e-9, so it is a "
+         "decomposition rather than an attribution with a plug.",
+         "Alongside them: the share of the action CY P actually earns, against the 50.0% "
+         "the endpoint average implies. It is measured on a flat-prior-year "
+         "counterfactual, deliberately: with the history mixed in, that 'share' stops "
+         "being a share of anything and can come out negative on an ordinary combo. A "
+         "positive gap means the current process reads a LOWER plan loss ratio than the "
+         "book earns — it credits more mod relief than arrives. Undefined and shown as "
+         "n/a where there is no action to take a share of: a combo with an empty Mod Log "
+         "has a drift line rather than a step, and the gap between averaging that line's "
+         "endpoints and earning it through the book is reported without a split. A net "
+         "selection or the mod toggle OFF pins A_mod at 1.000 under BOTH methods, so the "
+         "reconciliation is zero — not because the methods agree, but because neither "
+         "number reaches the answer.",
          ]),
         ("6. The bridge", [
          "LR_current = LR_input x (1 + s) when the input basis is 'proposed'; unchanged when "
@@ -1168,7 +1201,9 @@ READ_ME_GUIDE = [
                     "mod, and loss."),
     ("Rate Engine", "Audit trail: 48 writing cohorts x earning matrix behind the earned "
                     "rate level."),
-    ("Mod Engine", "Audit trail: the written schedule-mod path and the earned mod."),
+    ("Mod Engine", "Audit trail: the written schedule-mod path and the earned mod — and "
+                   "at the foot, what the current endpoint-average process would have "
+                   "said, with the difference priced leg by leg."),
     ("Checks", "The trust panel — must show ALL CHECKS PASS."),
     ("Methodology", "The full writeup: formulas as implemented, conventions, named ranges."),
 ]

@@ -21,6 +21,7 @@ from dataclasses import replace
 
 import pytest
 
+from src import engine
 from src.engine import (
     ComboInputs,
     ModInputs,
@@ -335,3 +336,135 @@ def test_blank_m_end_prior_with_m_prior_and_a_degenerate_as_of():
     xs = float(dt.date(P - 1, 12, 31).toordinal() + 1)
     want = 0.860 + (0.900 - 0.860) / (x1 - x0) * (xs - x0)
     assert eng.mod_base == pytest.approx(want, abs=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# Current-process reconciliation (D76)
+#
+# The endpoint average is not a crude approximation — it is the EXACT answer
+# for a single step on 1/1 at a twelve-month term. Every difference from the
+# model is therefore attributable, and splits into term and timing.
+# ---------------------------------------------------------------------------
+
+
+def test_the_two_methods_agree_exactly_on_a_january_step_at_a_twelve_month_term():
+    """The identity the whole exhibit is built on. If this ever breaks, the
+    reconciliation is comparing two different plans, not two methods."""
+    rec = engine.process_reconciliation(P, _combo([_step(1, 1, 0.06)]))
+    assert rec.m_avg == pytest.approx(rec.m_earned, abs=1e-12)
+    assert rec.gap_pts == pytest.approx(0.0, abs=1e-12)
+    assert rec.theta_actual == pytest.approx(0.5, abs=1e-12)
+    assert rec.term_pts == pytest.approx(0.0, abs=1e-12)
+    assert rec.timing_pts == pytest.approx(0.0, abs=1e-12)
+
+
+@pytest.mark.parametrize("term,theta", [(12, 0.5), (6, 0.75), (3, 0.875)])
+def test_term_effect_is_the_whole_gap_for_a_january_step(term, theta):
+    """A 1/1 step leaves no timing to explain, so the term carries all of it."""
+    rec = engine.process_reconciliation(
+        P, _combo([_step(1, 1, 0.06)], term_months=term))
+    assert rec.theta_actual == pytest.approx(theta, abs=1e-12)
+    assert rec.theta_term == pytest.approx(theta, abs=1e-12)
+    assert rec.timing_pts == pytest.approx(0.0, abs=1e-12)
+    assert rec.history_pts == pytest.approx(0.0, abs=1e-12)   # history IS flat here
+    assert rec.term_pts == pytest.approx(
+        (rec.lr_model - rec.lr_process) * 100.0, abs=1e-12)
+
+
+def test_timing_effect_is_the_whole_gap_at_a_twelve_month_term():
+    """Twelve months puts theta_term back at 0.5, so a later date is the only
+    thing left to explain — and it always costs, because a step dated after
+    1/1 earns strictly less into the year."""
+    rec = engine.process_reconciliation(P, _combo([_step(7, 1, 0.06)]))
+    assert rec.theta_term == pytest.approx(0.5, abs=1e-12)
+    assert rec.theta_actual < 0.5
+    assert rec.term_pts == pytest.approx(0.0, abs=1e-12)
+    assert rec.timing_pts > 0.0          # less mod earned -> higher plan LR
+    assert rec.history_pts == pytest.approx(0.0, abs=1e-12)
+
+
+def test_the_waterfall_adds_up_exactly():
+    """Term + timing must reconstruct the gap with no residual, on every
+    combination of term and date — that is what makes it a decomposition
+    rather than an attribution with a plug."""
+    for term in (1, 3, 6, 12):
+        for m in (1, 4, 7, 11):
+            rec = engine.process_reconciliation(
+                P, _combo([_step(m, 15, 0.05)], term_months=term))
+            assert rec.term_pts + rec.timing_pts + rec.history_pts ==                 pytest.approx(-rec.gap_pts, abs=1e-12)
+
+
+def test_multiple_steps_still_reconcile_exactly():
+    rec = engine.process_reconciliation(P, _combo(
+        [_step(2, 1, 0.03), _step(6, 10, -0.015), _step(10, 1, 0.02)]))
+    assert rec.term_pts + rec.timing_pts + rec.history_pts ==         pytest.approx(-rec.gap_pts, abs=1e-12)
+    assert rec.m_end_plan == pytest.approx(
+        M_END_PRIOR * 1.03 * 0.985 * 1.02, abs=1e-12)
+
+
+def test_a_drift_only_combo_reports_the_gap_without_a_step_split():
+    rec = engine.process_reconciliation(P, _combo([], mods=_mods(m1=0.90)))
+    assert not rec.stepped
+    assert rec.theta_actual != rec.theta_actual        # nan
+    assert rec.term_pts != rec.term_pts                # nan — no step to split
+    assert rec.gap_pts != 0.0                          # the gap itself is real
+    assert any("drift line" in w for w in rec.warnings)
+
+
+def test_mod_off_makes_the_reconciliation_trivial():
+    rec = engine.process_reconciliation(
+        P, _combo([_step(4, 1, 0.05)], mod_adjustment_enabled=False))
+    assert rec.a_mod_process == 1.0 and rec.a_mod_model == 1.0
+    assert rec.gap_pts == pytest.approx(0.0, abs=1e-12)
+    assert any("mod adjustment is OFF" in w for w in rec.warnings)
+
+
+def test_model_leg_ties_the_bridge():
+    """The model side is not a re-derivation — it must BE the plan LR."""
+    for m in (1, 5, 9):
+        combo = _combo([_step(m, 1, 0.04)])
+        rec = engine.process_reconciliation(P, combo)
+        assert rec.lr_model == pytest.approx(run_bridge(P, combo).cy_lr_p, abs=1e-12)
+
+
+def test_history_drift_is_isolated_from_the_step_share():
+    """The reason the waterfall has three legs and not two. A drifting prior
+    year leaves the STEP alone — theta must be identical to the flat-history
+    combo — and shows up entirely in the history leg."""
+    step = [_step(1, 1, 0.06)]
+    flat = engine.process_reconciliation(P, _combo(step))
+    drift = engine.process_reconciliation(P, _combo(
+        step, mods=_mods(m0=0.820, m0_asof=dt.date(P - 1, 9, 30))))
+    assert drift.theta_actual == pytest.approx(flat.theta_actual, abs=1e-12)
+    assert drift.theta_term == pytest.approx(flat.theta_term, abs=1e-12)
+    assert drift.term_pts == pytest.approx(flat.term_pts, abs=1e-12)
+    assert drift.timing_pts == pytest.approx(flat.timing_pts, abs=1e-12)
+    # carry-in written below M_endPrior -> less mod earned -> higher plan LR
+    assert flat.history_pts == pytest.approx(0.0, abs=1e-12)
+    assert drift.history_pts > 0.05
+
+
+def test_theta_stays_a_share_of_the_step_on_a_real_combo():
+    """The bug this decomposition was rewritten to avoid: with the history
+    mixed in, theta came out NEGATIVE on a live combo — a "share earned" that
+    is not in [0, 1] is not a share of anything."""
+    rec = engine.process_reconciliation(P, _combo(
+        [_step(3, 1, 0.02), _step(9, 1, 0.015)],
+        mods=_mods(m0=0.820, m0_asof=dt.date(P - 1, 9, 30))))
+    assert 0.0 < rec.theta_actual < 1.0
+    assert 0.0 < rec.theta_term < 1.0
+    assert rec.theta_actual < rec.theta_term      # dated later than 1/1
+
+
+def test_a_net_selection_leaves_nothing_for_the_two_methods_to_disagree_about():
+    """D39 supersedes the mod leg entirely, so A_mod is 1 under BOTH
+    valuations and the reconciliation is zero by construction — not because
+    the methods happen to agree, but because neither one reaches the answer."""
+    combo = _combo([_step(4, 1, 0.05)], net_sel_p=0.08)
+    rec = engine.process_reconciliation(P, combo)
+    assert rec.lr_process == pytest.approx(rec.lr_model, abs=1e-12)
+    assert rec.lr_model == pytest.approx(run_bridge(P, combo).cy_lr_p, abs=1e-12)
+    assert rec.gap_pts == pytest.approx(0.0, abs=1e-12)
+    assert any("net rate selection" in w for w in rec.warnings)
+    # the two mod VALUATIONS still differ — they just do not reach the LR
+    assert rec.m_avg != pytest.approx(rec.m_earned, abs=1e-6)

@@ -1269,6 +1269,164 @@ def mod_timing_table(
 
 
 # ---------------------------------------------------------------------------
+# Current-process reconciliation (DECISIONS.md D76)
+#
+# The shop values the mod leg by averaging the two year-end mods:
+#
+#     M_avg = (M_endPrior + M_1) / 2,     A_mod = M_ind / M_avg
+#
+# The model earns the mod through the book instead. The two agree EXACTLY for
+# a single step on 1/1, a twelve-month term, and a flat prior-year history —
+# pinned by test_january_step_reproduces_the_endpoint_average — and that is
+# the whole point of this exhibit: the endpoint average is not a crude
+# approximation, it is the exact answer to a specific case, so every
+# difference from it is attributable to leaving that case. Three ways out:
+#
+#   TERM    — a book that turns over faster earns a plan-year action in MORE
+#             than half the year. The endpoint average always assumes half.
+#   TIMING  — an action dated later than 1/1 earns in less.
+#   HISTORY — the business carried into the plan year does not sit at
+#             M_endPrior; it DRIFTED up to that level, so the carry-in earns a
+#             lower mod than averaging the endpoints credits it with.
+#
+# Term and timing are properties of the STEP and share one yardstick: theta,
+# the share of the step CY P earns, against the process's implied 0.5. Both
+# are measured on a flat-history counterfactual so the third effect cannot
+# contaminate them — history is not a property of the step at all, and mixing
+# it into theta is what makes a "share earned" number quietly meaningless.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ProcessReconciliation:
+    m_end_prior: float       # level the plan year starts from
+    m_end_plan: float        # level it ends at (M_1, or the log's derived M_1)
+    m_avg: float             # (start + end) / 2 — the current process's number
+    m_earned: float          # what the model earns through the book
+    a_mod_process: float
+    a_mod_model: float
+    lr_process: float        # CY P plan LR on the current-process mod leg
+    lr_model: float          # CY P plan LR as the model computes it
+    gap_pts: float           # process minus model, in LR points
+    theta_process: float     # 0.5 by construction
+    theta_term: float        # step share earned at 1/1, flat history
+    theta_actual: float      # step share earned as dated, flat history
+    term_pts: float          # LR points from the term alone
+    timing_pts: float        # LR points from the effective dates
+    history_pts: float       # LR points from prior-year drift in the carry-in
+    stepped: bool            # False -> no step to split; only the gap shows
+    warnings: list
+
+
+def _lr_on_mod(combo: ComboInputs, res: EngineResult, m_valuation: float) -> float:
+    """CY P plan LR with the mod leg valued at ``m_valuation``.
+
+    A_mod is pinned at 1 whenever the engine pins it — mod adjustment off, or a
+    net selection superseding the mod leg (D39). In those states every
+    valuation returns the same plan LR, which is the honest answer: no mod
+    number reaches the result, so there is nothing for the two methods to
+    disagree about.
+    """
+    pinned = combo.net_mode or not combo.mod_adjustment_enabled
+    a_mod = 1.0 if pinned else combo.mods.m_ind / m_valuation
+    return res.lr_current * res.a_rate_p * a_mod * combo.a_other
+
+
+def process_reconciliation(plan_year: int, combo: ComboInputs) -> ProcessReconciliation:
+    """Reconcile the current endpoint-average process to the earned model (D76).
+
+    Both valuations price the SAME plan — same log, same anchors — so the gap
+    between them is method, not assumption. It is reported as a waterfall in
+    LR points, each leg changing exactly one thing:
+
+        endpoint average
+          + TERM     steps at 1/1, flat history, at the book's real term
+          + TIMING   steps moved to their real dates
+          + HISTORY  the real drifting prior-year path restored
+          = the model
+
+    Ordered least to most actionable. The term is a property of the book that
+    nobody chooses; the history is already written; the dates are the decision
+    still open, so the timing bar is the one a planner can act on. Because
+    each leg is a single substitution evaluated through the same engine, the
+    three add to the gap exactly — no residual, no plug.
+    """
+    eng = MonthlyEngine(plan_year, combo)
+    res = run_bridge(plan_year, combo)
+    warnings: list[str] = []
+
+    x_switch = _cod(dt.date(plan_year - 1, 12, 31))
+    m_start = (eng.mod_base if eng.mod_base is not None
+               else (combo.mods.m_end_prior if combo.mods.m_end_prior is not None
+                     else eng.mod_path.value(x_switch)))
+    m_end = eng.derived_m1()
+    m_avg = (m_start + m_end) / 2.0
+    m_earned = eng.earned_mod_cy(plan_year)
+
+    if combo.net_mode:
+        warnings.append(
+            "This combo carries a net rate selection, which supersedes the mod "
+            "leg entirely (D39): the plan LR shown here is the net-mode result "
+            "and neither mod valuation reaches it. Read Net Delivery instead."
+        )
+    if not combo.mod_adjustment_enabled:
+        warnings.append(
+            "The mod adjustment is OFF, so A_mod is pinned at 1.000 under both "
+            "methods and the reconciliation is trivially zero."
+        )
+
+    lr_process = _lr_on_mod(combo, res, m_avg)
+    lr_model = _lr_on_mod(combo, res, m_earned)
+
+    # theta: the share of the step CY P earns, on a flat-history counterfactual
+    # so prior-year drift cannot leak into a number that claims to describe the
+    # step. Undefined when there is no step to take a share of.
+    stepped = bool(combo.mod_changes) and abs(m_end - m_start) > 1e-12
+    if stepped:
+        flat = replace(combo.mods, m0=m_start, m_prior=None, m1=m_start,
+                       m2=None, m_end_prior=m_start)
+        jan1 = dt.date(plan_year, 1, 1)
+        moved = tuple(RateChange(jan1, mc.effective_pct, mc.status, mc.considered)
+                      for mc in combo.mod_changes)
+        m_flat_jan = MonthlyEngine(plan_year, combo, mods_override=flat,
+                                   mod_changes_override=moved).earned_mod_cy(plan_year)
+        m_flat = MonthlyEngine(plan_year, combo,
+                               mods_override=flat).earned_mod_cy(plan_year)
+        theta_term = (m_flat_jan - m_start) / (m_end - m_start)
+        theta_actual = (m_flat - m_start) / (m_end - m_start)
+        term_pts = (_lr_on_mod(combo, res, m_flat_jan) - lr_process) * 100.0
+        timing_pts = (_lr_on_mod(combo, res, m_flat)
+                      - _lr_on_mod(combo, res, m_flat_jan)) * 100.0
+        history_pts = (lr_model - _lr_on_mod(combo, res, m_flat)) * 100.0
+    else:
+        theta_term = theta_actual = float("nan")
+        term_pts = timing_pts = history_pts = float("nan")
+        if combo.mod_changes:
+            warnings.append(
+                "The logged actions net to no change in the year-end mod, so "
+                "there is no step to take a share of and the waterfall is not "
+                "defined; the gap between the two valuations still stands."
+            )
+        else:
+            warnings.append(
+                "No mod actions are logged, so the mod path is a drift line "
+                "rather than a step. There is nothing to split into term and "
+                "timing: the gap is simply the difference between averaging "
+                "that line's endpoints and earning it through the book."
+            )
+    return ProcessReconciliation(
+        m_end_prior=m_start, m_end_plan=m_end, m_avg=m_avg, m_earned=m_earned,
+        a_mod_process=(combo.mods.m_ind / m_avg) if combo.mod_adjustment_enabled else 1.0,
+        a_mod_model=(combo.mods.m_ind / m_earned) if combo.mod_adjustment_enabled else 1.0,
+        lr_process=lr_process, lr_model=lr_model,
+        gap_pts=(lr_process - lr_model) * 100.0,
+        theta_process=0.5, theta_term=theta_term, theta_actual=theta_actual,
+        term_pts=term_pts, timing_pts=timing_pts, history_pts=history_pts,
+        stepped=stepped, warnings=warnings,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Net delivery decomposition (DECISIONS.md D57)
 #
 # Given a net rate selection x from 1/1/P and ONE new rate change r at a
