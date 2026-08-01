@@ -455,10 +455,20 @@ def build_calc(ctx: Ctx):
         t = sb + (s - 1) * L.CALC_BLOCK_STRIDE
         put(ws, f"A{t}", f"Scenario S{s} engine block (selected combo)",
             fnt=font(GREY_DARK, bold=True, size=9))
+        # D70: a scenario inherits the selected combo's mod actions unchanged —
+        # the levers move the rate program and the mod LEVEL, never the log. The
+        # delta-M_1 lever shifts the base those actions compound on, which keeps
+        # "shift the projected mod path" meaning the same thing on both
+        # mechanisms AND keeps the blank-lever run identical to the base. Without
+        # this the Checks row "Scenario engine reproduces Base when all levers
+        # blank" fails the moment a combo with logged actions is selected.
+        f_grey(ws, f"M{t}", "='Mod Engine'!$C$11", FMT_INT)
+        f_grey(ws, f"N{t}", f"='Mod Engine'!$C$12+N(INDEX(sc_dm1,{s}))", FMT_MOD)
         anchors = write_mod_anchor_cells(
             ws, ctx, t + 1, 1, mind_ref="nr_MInd", m0_ref="nr_M0", asof_ref="nr_M0Asof",
             m1_ref="nr_M1", mprior_ref="nr_MPrior", m2_ref="nr_M2",
-            dm1_expr=f"+N(INDEX(sc_dm1,{s}))")
+            dm1_expr=f"+N(INDEX(sc_dm1,{s}))",
+            steps_cond=f"$M${t}>0", mend_ref=f"$N${t}")
         lg = sc_logs[s - 1]
         blk = write_cohort_block(
             ws, ctx, t + 3,
@@ -469,7 +479,11 @@ def build_calc(ctx: Ctx):
             net=dict(mode="nr_NetMode",
                      x=f"(nr_NetSelP+N(INDEX(sc_dnet,{s})))",
                      x1=f"(nr_NetSelP1+N(INDEX(sc_dnet,{s})))",
-                     modeff='nr_ModAdjEff="ON"', mind="nr_MInd"))
+                     modeff='nr_ModAdjEff="ON"', mind="nr_MInd"),
+            mod_refs=LogRefs(key_cond="nr_SelKey", eff="ml_eff", ln="ml_ln1p",
+                             effmonth="ml_effmonth", first="ml_first",
+                             daysafter="ml_daysafter"),
+            mod_col=22, mod_base_ref=f"$N${t}", mod_count_ref=f"$M${t}")
         rr = t + 51
         label(ws, f"A{rr}", f"S{s} results:")
         _grey(ws, f"A{rr}")
@@ -566,13 +580,25 @@ def build_calc(ctx: Ctx):
     f_grey(ws, f"N{t}", "=IF(N(att_asof)=0,nr_M0Asof,att_asof)", "mm/dd/yyyy")
     f_grey(ws, f"O{t}", "=IF(N(att_m1)=0,nr_M1,att_m1)", FMT_MOD)
     f_grey(ws, f"P{t}", "=IF(N(att_m2)=0,N(nr_M2),att_m2)", FMT_MOD)
+    # D70: taken mod actions ARE the actual path, so the actual-mod block reads
+    # the log too. With no att_* overrides typed this reproduces the base path
+    # exactly and the mod attribution factor is 1 — the property attribution has
+    # always had, restored. (Restating a mod action as partly achieved is not yet
+    # modelled; there is no actual-mod override to match att_actpct on rates.)
+    f_grey(ws, f"Q{t}", "='Mod Engine'!$C$11", FMT_INT)
+    f_grey(ws, f"R{t}", "='Mod Engine'!$C$12", FMT_MOD)
     anchors = write_mod_anchor_cells(
         ws, ctx, t + 1, 1, mind_ref="nr_MInd", m0_ref=f"$M${t}", asof_ref=f"$N${t}",
-        m1_ref=f"$O${t}", mprior_ref="nr_MPrior", m2_ref=f"$P${t}")
+        m1_ref=f"$O${t}", mprior_ref="nr_MPrior", m2_ref=f"$P${t}",
+        steps_cond=f"$Q${t}>0", mend_ref=f"$R${t}")
     blk = write_cohort_block(
         ws, ctx, t + 3, LogRefs(key_cond="nr_SelKey"), t_ref="nr_TermMonths",
         srow_ref="re_srow", ssum_ref="re_ssum", anchors=anchors,
-        include_rate=False, header=True, header_row_at=t + 2)
+        include_rate=False, header=True, header_row_at=t + 2,
+        mod_refs=LogRefs(key_cond="nr_SelKey", eff="ml_eff", ln="ml_ln1p",
+                         effmonth="ml_effmonth", first="ml_first",
+                         daysafter="ml_daysafter"),
+        mod_col=22, mod_base_ref=f"$R${t}", mod_count_ref=f"$Q${t}")
     rr = t + 51
     f_grey(ws, f"B{rr}",
            f"=SUMPRODUCT({blk['w']},{blk['ec_p']},{blk['Mw']})/SUMPRODUCT({blk['w']},{blk['ec_p']})",

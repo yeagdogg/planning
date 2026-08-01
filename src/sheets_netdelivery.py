@@ -46,11 +46,18 @@ PCT_S = "+0.0%;-0.0%;0.0%"
 # ---- _netcalc geometry (module-level so the harness can address blocks) ----
 NDL_FIRST = 4                           # live-log strip first row
 NC_STRIDE = 56
+# D70 stepped-mod strip, parked right of everything the block already uses
+# (W..Y, AB..AI on cohort rows; AK/AL on the band block) so nothing is
+# overloaded and the whole mechanic reads as one contiguous appendix
+NC_MOD_CNT_COL = 39                     # AM — mod actions logged for this combo
+NC_MOD_BASE_COL = 40                    # AN — M_endPrior, what they compound on
+NC_MOD_COL = 41                         # AO..AS — the five step-index helpers
 
 # ---- Net Delivery sheet geometry ----
 ND_HDR = 8                              # summary table header row
 ND_FIRST = 9
-GRID_GAP = 4                            # rows between table/grids sections
+GRID_GAP = 5                            # rows from the IN VIEW row to the first grid
+                                        # section (the notes under the table live here)
 ND_PRIOR_COL = 2                        # B  — Jan P-1 on the rate-leg grid (D68)
 ND_PLAN_COL = 14                        # N  — Jan P on both grids
 ND_FLAG_COL = 26                        # Z  — flags, parked right of both bands so
@@ -208,19 +215,36 @@ def build_netcalc(ctx: Ctx):
                 fmt="0.00%")
         formula(ws, f"O{t}", eff_f, fmt="mm/dd/yyyy")
         formula(ws, f"V{t}", ovr_f, fmt="0.00%")
-        for cc in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+        # D70: how many mod actions this combo has logged, and the level they
+        # compound on. The mod log is read WHOLE here, unlike the rate log: a
+        # net selection supersedes planned FILINGS, but a logged mod action is
+        # the pricing plan this tab exists to measure the target against.
+        cnt_ref = f"${col(NC_MOD_CNT_COL)}${t}"
+        base_ref = f"${col(NC_MOD_BASE_COL)}${t}"
+        formula(ws, cnt_ref.replace("$", ""),
+                f'=IF($B{t}="",0,COUNTIF(ml_key,$B{t}))', fmt=FMT_INT)
+        formula(ws, base_ref.replace("$", ""),
+                f"=IF($C{t}=0,$H{t},IF(N(INDEX(lr_mendprior,$C{t}))=0,$H{t},"
+                f"INDEX(lr_mendprior,$C{t})))", fmt=FMT_MOD)
+        for cc in list("ABCDEFGHIJKLMNOPQRSTUVWXYZ") + [col(NC_MOD_CNT_COL),
+                                                        col(NC_MOD_BASE_COL)]:
             ws[f"{cc}{t}"].font = font(GREY_DARK, size=8)
 
         anchors = write_mod_anchor_cells(
             ws, ctx, t + 1, 1, mind_ref=f"$G${t}", m0_ref=f"$H${t}",
             asof_ref=f"$I${t}", m1_ref=f"$J${t}", mprior_ref=f"$K${t}",
-            m2_ref=f"$L${t}")
+            m2_ref=f"$L${t}", steps_cond=f"{cnt_ref}>0", mend_ref=base_ref)
         refs = LogRefs(key_cond=f"$B${t}", eff="ndl_eff", ln="ndl_ln",
                        effmonth="ndl_effmonth", first="ndl_first",
                        daysafter="ndl_days")
         write_cohort_block(ws, ctx, t + 3, refs, t_ref="nr_TermMonths",
                            srow_ref=f"$M${t}", ssum_ref=f"$N${t}",
-                           anchors=anchors, header=True, header_row_at=t + 2)
+                           anchors=anchors, header=True, header_row_at=t + 2,
+                           mod_refs=LogRefs(key_cond=f"$B${t}", eff="ml_eff",
+                                            ln="ml_ln1p", effmonth="ml_effmonth",
+                                            first="ml_first", daysafter="ml_daysafter"),
+                           mod_col=NC_MOD_COL, mod_base_ref=base_ref,
+                           mod_count_ref=cnt_ref)
 
         p0, p1 = t + 3 + 24, t + 3 + 35        # plan-year cohort rows
         y0, y1 = t + 3 + 12, t + 3 + 23        # year-ago cohort rows
@@ -237,13 +261,19 @@ def build_netcalc(ctx: Ctx):
             formula(ws, f"X{r}",
                     f"=IF($G{r}<$Q${t},0,IF($G{r}>$Q${t},$N{r},$U${t}*$J{r}))", fmt=FMT_IDX)
             formula(ws, f"Y{r}", f"=IF($F${t}=1,$O{r}/$O{y},1)", fmt=FMT_IDX)
-            # alpha/beta: M(m) = alpha + beta * M_1 along the anchor path
+            # alpha/beta: M(m) = alpha + beta * M_1 along the anchor path.
+            # D70: with actions logged there is no free M_1 to solve for — the
+            # log pins the path — so beta collapses to 0 and alpha becomes the
+            # stepped level itself. Every downstream user stays correct: the
+            # booked-program q (AE) reads the real path, and the implied-mod
+            # solve (results H) divides by SUMPRODUCT(AD, AB) = 0 and reports
+            # n/a, which is the honest answer rather than a fabricated one.
             formula(ws, f"AB{r}",
-                    f"=IF(AND(N($K${t})<>0,$F{r}<={x_asof}),0,"
-                    f"($F{r}-{x_asof})/({x_end}-{x_asof}))", fmt="0.0000")
+                    f"=IF({cnt_ref}>0,0,IF(AND(N($K${t})<>0,$F{r}<={x_asof}),0,"
+                    f"($F{r}-{x_asof})/({x_end}-{x_asof})))", fmt="0.0000")
             formula(ws, f"AC{r}",
-                    f"=IF(AND(N($K${t})<>0,$F{r}<={x_asof}),$O{r},{m0v}*(1-$AB{r}))",
-                    fmt=FMT_MOD)
+                    f"=IF(OR({cnt_ref}>0,AND(N($K${t})<>0,$F{r}<={x_asof})),$O{r},"
+                    f"{m0v}*(1-$AB{r}))", fmt=FMT_MOD)
             # h(m) at the rate in force (results row F, forward reference)
             formula(ws, f"AD{r}",
                     f"=$H{r}*($W{r}+$X{r}*IF(ISNUMBER($F${rr}),$F${rr},0))"
@@ -323,6 +353,7 @@ def build_netcalc(ctx: Ctx):
                 f'&IF(AND(ISNUMBER($F{rr}),ABS($F{rr})>nr_SolvMaxRate),"RATE-BOUND ","")'
                 f'&IF(AND(ISNUMBER($L{rr}),$L{rr}<nr_SolvMinShare),"THIN-SHARE ","")'
                 f'&IF($W${t}>1,"MULTI-PLANNED ","")'
+                f'&IF({cnt_ref}>0,"MOD-STEPS ","")'
                 f'&IF($F${t}=0,"RATE-ONLY","")))')
         # booked-program plan LR vs the asserted net-mode plan LR
         formula(ws, f"N{rr}",
@@ -377,6 +408,7 @@ def build_netcalc(ctx: Ctx):
                     ("A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L",
                      "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X",
                      "Y", "Z", "AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI")})
+    set_widths(ws, {col(NC_MOD_CNT_COL + j): 10 for j in range(7)})   # AM..AS (D70)
 
 
 # ---------------------------------------------------------------------------
@@ -529,6 +561,12 @@ def build_net_delivery(ctx: Ctx):
         "carries one change at one date); a state with more is flagged MULTI-PLANNED. "
         "The Solver answers a different question (CY plan LR under the explicit "
         "program, D13).", fnt=F_SMALL_IT)
+    put(ws, f"A{tot + 4}",
+        "MOD-STEPS means the combo already has actions in the Mod Log, so its pricing "
+        "path is decided rather than open: the projected mod row below follows those "
+        "actions, and the implied year-end mod reads n/a because the log — not this "
+        "tab — now sets it. Read the gap row instead: it is what your logged actions "
+        "still leave for the target to find.", fnt=F_SMALL_IT)
 
     # ---- twin state x month grids, the rate leg two years wide (D68) ----
     # Same seam and the same colours as Program Flow — steel for the year now
@@ -536,7 +574,7 @@ def build_net_delivery(ctx: Ctx):
     # identically. Unlike Program Flow the prior block carries no outline
     # group: this tab's summary keeps its INPUT columns (D, E) under B..M, and
     # collapsing would hide them.
-    g1 = tot + 4
+    g1 = tot + GRID_GAP
     section(ws, g1, "A", "How the target is delivered, month by month — the rate leg")
     put(ws, f"A{g1 + 1}",
         "YoY change on renewals from the rate side: history plus the change in force at "

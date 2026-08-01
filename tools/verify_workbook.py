@@ -38,7 +38,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src import engine  # noqa: E402
 from src.build_workbook import (  # noqa: E402
     Layout as L, SHEETS, _bu, degenerate_combo, load_config, output_path,
-    sample_lr_rows, sample_rate_rows, sample_seasonality_rows, sample_to_combo,
+    sample_lr_rows, sample_mod_rows, sample_rate_rows, sample_seasonality_rows,
+    sample_to_combo,
 )
 from tools.recalc import recalc  # noqa: E402
 
@@ -200,8 +201,9 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
     p = cfg.plan_year
     lr_rows = sample_lr_rows(cfg, lob)
     rate_rows = sample_rate_rows(cfg, lob)
+    mod_rows = sample_mod_rows(cfg, lob)   # D70: the oracle must see the log
     we = next(r for r in lr_rows if r["bu"] == _bu(cfg, 0) and r["state"] == cfg.states[0])
-    combo = sample_to_combo(cfg, lob, we, rate_rows)
+    combo = sample_to_combo(cfg, lob, we, rate_rows, mod_rows)
     m = engine.run_bridge(p, combo, "monthly")
     c = engine.run_bridge(p, combo, "continuous")
 
@@ -243,7 +245,7 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
     calc = wb["_calc"]
     bad = 0
     for i, lrr in enumerate(lr_rows):
-        cmb = sample_to_combo(cfg, lob, lrr, rate_rows)
+        cmb = sample_to_combo(cfg, lob, lrr, rate_rows, mod_rows)
         om = engine.run_bridge(p, cmb, "monthly")
         r = L.CALC_RES_FIRST + i
         for colL, exp in (("C", om.crl_ind), ("E", om.e_cy[p]), ("F", om.e_cy[p + 1]),
@@ -289,7 +291,7 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
     ss = wb["State Summary"]
     results = {}
     for lrr in lr_rows:
-        om = engine.run_bridge(p, sample_to_combo(cfg, lob, lrr, rate_rows), "monthly")
+        om = engine.run_bridge(p, sample_to_combo(cfg, lob, lrr, rate_rows, mod_rows), "monthly")
         results[(lrr["bu"], lrr["state"])] = (lrr["ep"], om)
     bad = 0
     tot_ep = tot_l27 = tot_l28 = 0.0
@@ -343,7 +345,7 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
         net_row = next((x for x in lr_rows
                         if x["bu"] == _bu(cfg, 2) and x["state"] == net_state), None)
         if net_row is not None and net_row.get("netp") is not None:
-            ncmb = sample_to_combo(cfg, lob, net_row, rate_rows)
+            ncmb = sample_to_combo(cfg, lob, net_row, rate_rows, mod_rows)
             # D63: with no typed override the tab adopts the PLANNED plan-year
             # filing (date and effective %); the suggestion is still computed
             planned = engine.planned_change_in_plan_year(p, ncmb)
@@ -487,7 +489,7 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
     bad = bad_y = 0
     for i, stname in enumerate(_states(cfg)):
         rowdef = next(x for x in lr_rows if x["bu"] == _bu(cfg, 0) and x["state"] == stname)
-        cpf = engine.program_flow_by_month(p, sample_to_combo(cfg, lob, rowdef, rate_rows))
+        cpf = engine.program_flow_by_month(p, sample_to_combo(cfg, lob, rowdef, rate_rows, mod_rows))
         r = PF_SUM_FIRST + i
 
         def _cell(cmap, key, row_=r):
@@ -546,7 +548,7 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
     bad = bad_w = bad_a = 0
     bad_y = bad_ya = bad_epw = 0
     for i, rowdef in enumerate(lr_rows):
-        cmb2 = sample_to_combo(cfg, lob, rowdef, rate_rows)
+        cmb2 = sample_to_combo(cfg, lob, rowdef, rate_rows, mod_rows)
         cpf = engine.program_flow_by_month(p, cmb2)
         eng2 = engine.MonthlyEngine(p, cmb2)
         rr2 = L.CALC_RES_FIRST + i
@@ -599,7 +601,7 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
     from src.sheets_calc import PROG_LR
     bad = bad_id = 0
     for i, rowdef in enumerate(lr_rows):
-        cmb3 = sample_to_combo(cfg, lob, rowdef, rate_rows)
+        cmb3 = sample_to_combo(cfg, lob, rowdef, rate_rows, mod_rows)
         lp, lp1 = engine.program_basis_plan_lr(p, cmb3)
         rr3 = L.CALC_RES_FIRST + i
         if not (approx(cs[f"{xcol(PROG_LR['cylr'])}{rr3}"].value, lp, 1e-9)
@@ -619,7 +621,7 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
     net_combo = next((x for x in lr_rows if x.get("netp") is not None), None)
     if net_combo is not None:
         ni = lr_rows.index(net_combo)
-        ncmb3 = sample_to_combo(cfg, lob, net_combo, rate_rows)
+        ncmb3 = sample_to_combo(cfg, lob, net_combo, rate_rows, mod_rows)
         lp, _ = engine.program_basis_plan_lr(p, ncmb3)
         gap = (lp - engine.run_bridge(p, ncmb3, "monthly").cy_lr_p) * 100.0
         check("[program basis] Portfolio row shows the combo's program LR and gap",
@@ -628,7 +630,7 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
               f"wb={wb['Portfolio'][f'P{L.PF_FIRST + ni}'].value} oracle={lp}")
         # State Summary 'All' view: EP-weighted across the state's BUs
         sr = 8 + list(_states(cfg)).index(net_combo["state"])
-        rows_s = [(x["ep"], sample_to_combo(cfg, lob, x, rate_rows))
+        rows_s = [(x["ep"], sample_to_combo(cfg, lob, x, rate_rows, mod_rows))
                   for x in lr_rows if x["state"] == net_combo["state"]]
         exp_prog = (sum(ep * engine.program_basis_plan_lr(p, c)[0] for ep, c in rows_s)
                     / sum(ep for ep, _ in rows_s))
@@ -672,16 +674,17 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
     st = cfg.states
     lr_rows = sample_lr_rows(cfg, lob)
     rate_rows = sample_rate_rows(cfg, lob)
+    mod_rows = sample_mod_rows(cfg, lob)   # D70: the oracle must see the log
     season_rows = sample_seasonality_rows(cfg)
     we = next(r for r in lr_rows if r["bu"] == _bu(cfg, 0) and r["state"] == st[0])
-    base_combo = sample_to_combo(cfg, lob, we, rate_rows)
+    base_combo = sample_to_combo(cfg, lob, we, rate_rows, mod_rows)
     base_m = engine.run_bridge(p, base_combo, "monthly")
     scratch = scratch_dir / "exercise.xlsx"
     we_row_xl = L.LR_FIRST + lr_rows.index(we)
 
     def combo_of(bu, state, **kw):
         row = next(r for r in lr_rows if r["bu"] == bu and r["state"] == state)
-        return sample_to_combo(cfg, lob, row, rate_rows, **kw)
+        return sample_to_combo(cfg, lob, row, rate_rows, mod_rows, **kw)
 
     def run(label_, mutations, assertions):
         _mutate(path, scratch, mutations)
@@ -940,11 +943,11 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
 
     # 9c. trend default inheritance: blank combos inherit 2%, explicit entries win
     trend_m = engine.run_bridge(
-        p, sample_to_combo(cfg, lob, we, rate_rows, trend_default=0.02), "monthly")
+        p, sample_to_combo(cfg, lob, we, rate_rows, mod_rows, trend_default=0.02), "monthly")
     ovr_state = st[1] if len(st) > 1 else st[0]
     ovr_row = next(r for r in lr_rows if r["bu"] == _bu(cfg, 1) and r["state"] == ovr_state)
     ovr_m = engine.run_bridge(
-        p, sample_to_combo(cfg, lob, ovr_row, rate_rows, trend_default=0.02), "monthly")
+        p, sample_to_combo(cfg, lob, ovr_row, rate_rows, mod_rows, trend_default=0.02), "monthly")
     ovr_calc_row = L.CALC_RES_FIRST + lr_rows.index(ovr_row)
 
     def a9c(wb):
@@ -1024,7 +1027,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
         net_row = next((x for x in lr_rows
                         if x["bu"] == _bu(cfg, 2) and x["state"] == net_state), None)
         if net_row is not None and net_row.get("netp") is not None:
-            ncmb = sample_to_combo(cfg, lob, net_row, rate_rows)
+            ncmb = sample_to_combo(cfg, lob, net_row, rate_rows, mod_rows)
             si8 = list(st).index(net_state)
             t8 = block_top(si8)
             rr8 = t8 + 51
@@ -1273,11 +1276,11 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
     # (iv) All view (D60): the EP-weighted book view ties the combined oracle
     def _state_comb(stname):
         return engine.combined_flow_by_month(
-            p, [sample_to_combo(cfg, lob, x, rate_rows)
+            p, [sample_to_combo(cfg, lob, x, rate_rows, mod_rows)
                 for x in lr_rows if x["state"] == stname])
     comb0, comb6 = _state_comb(st[0]), _state_comb(st[6])
     book = engine.combined_flow_by_month(
-        p, [sample_to_combo(cfg, lob, x, rate_rows) for x in lr_rows])
+        p, [sample_to_combo(cfg, lob, x, rate_rows, mod_rows) for x in lr_rows])
 
     def a9h4(wb):
         pfs = wb[SHEETS.PROGRAM_FLOW]
@@ -1339,7 +1342,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
         net_row5 = next((x for x in lr_rows
                          if x["bu"] == _bu(cfg, 2) and x["state"] == net_state5), None)
         if net_row5 is not None and net_row5.get("netp") is not None:
-            ncmb5 = sample_to_combo(cfg, lob, net_row5, rate_rows)
+            ncmb5 = sample_to_combo(cfg, lob, net_row5, rate_rows, mod_rows)
             pf_net = engine.program_flow_by_month(p, ncmb5)
             x5, x15 = ncmb5.net_sel_p, ncmb5.net_x1
             from src.sheets_programflow import PF_SUM_FIRST as pf_first5

@@ -56,7 +56,9 @@ def build_mod_log(ctx: Ctx):
           "taking mod (raising price); negative = giving it away. Actions compound on the "
           "projected CURRENT-year-end mod (M_endPrior on Inputs) from 1/1 of the plan year "
           "— everything before that is carried by the drift path, so nothing is counted "
-          "twice.")
+          "twice. Logging a combo's FIRST action also makes M_endPrior live: the drift path "
+          "then lands on it at 12/31 of the current year instead of running on to M_1, so "
+          "expect the current year's earned mod to move a little the first time.")
     nav_bar(ws, 3, 1, ["Control", "Inputs", "Rate Log", "Net Delivery", "Checks"], step=2)
     put(ws, "A4",
         "SAMPLE DATA: replace the populated rows with your own actions. Do not insert or "
@@ -137,7 +139,15 @@ def build_mod_log(ctx: Ctx):
                 f'&IF(AND($E{r}="taken",$F{r}<>"",$F{r}<>1),"achievement ignored on a taken '
                 f'row — restate the change ","")'
                 f'&IF(AND($I{r}<>"",COUNTIF(lr_key,$I{r})=0),"key not in tbl_LR ","")'
-                f'&IF($Q{r}=1,"another action shares this month ","")))')
+                f'&IF($Q{r}=1,"another action shares this month ","")'
+                # D39 x D70: a net selection supersedes the mod leg from 1/1/P,
+                # so the action shapes Net Delivery but not the plan LR — the
+                # "why did nothing move?" question, answered before it is asked
+                f'&IF($I{r}="","",IF(COUNTIF(lr_key,$I{r})=0,"",'
+                f'IF(ISBLANK(INDEX(lr_netp,MATCH($I{r},lr_key,0))),"",'
+                f'"combo is on a net rate selection — the net path supersedes the mod leg '
+                f'(D39), so this shapes Net Delivery, not the plan LR ")))'
+                f'))')
         for cL in "TU":
             ws[f"{cL}{r}"].font = font(GREY_DARK, size=9)
         ws[f"U{r}"].font = font(FAIL_RED, size=9, italic=True)

@@ -174,6 +174,41 @@ def test_no_mod_rows_is_bit_identical_to_the_drift_build():
     assert a.a_mod_p == b.a_mod_p and a.e_cy == b.e_cy
 
 
+def test_under_a_net_selection_the_step_is_inert_but_the_re_anchor_is_not():
+    """D39 x D70, and the one interaction that surprises people.
+
+    A plan-year mod action cannot reach a NET-mode plan LR: the net path takes
+    over from 1/1/P, so A_mod is 1 and the mod leg is superseded. What DOES
+    move the number is the RE-ANCHOR — logging the first action makes
+    M_endPrior live, and the drift path now lands on it at 12/31/(P-1) instead
+    of running on to M_1, which reshapes the prior-year mod the net path is
+    seeded from. Put M_endPrior back on the old drift line and the plan LR
+    returns exactly, which is what localises the whole effect to the anchor.
+    """
+    mods = _mods(m0=0.860, m1=0.900, m_end_prior=0.880)
+    net = _combo(mods=mods, net_sel_p=0.08)
+    x1 = mods.m0_asof.toordinal() + 1
+    x2 = dt.date(P, 12, 31).toordinal() + 1
+    on_line = mods.m0 + (mods.m1 - mods.m0) / (x2 - x1) * (
+        dt.date(P - 1, 12, 31).toordinal() + 1 - x1)
+
+    stepped = _combo([_step(5, 1, -0.03)], mods=replace(mods, m_end_prior=on_line),
+                     net_sel_p=0.08)
+    a, b = run_bridge(P, net, "monthly"), run_bridge(P, stepped, "monthly")
+    assert a.a_mod_p == 1.0 and b.a_mod_p == 1.0        # net supersedes the mod leg
+    assert b.cy_lr_p == pytest.approx(a.cy_lr_p, abs=1e-12)
+
+    # ...and the test is not vacuous: the step really does move the earned mod,
+    # it just cannot reach the plan LR while the net selection is in force
+    assert MonthlyEngine(P, stepped).earned_mod_cy(P) != pytest.approx(
+        MonthlyEngine(P, net).earned_mod_cy(P), abs=1e-6)
+
+    # off net mode the same action lands on the plan LR
+    off = replace(stepped, net_sel_p=None)
+    assert run_bridge(P, off, "monthly").cy_lr_p != pytest.approx(
+        run_bridge(P, replace(net, net_sel_p=None), "monthly").cy_lr_p, abs=1e-6)
+
+
 def test_monthly_and_continuous_agree_on_a_stepped_path():
     combo = _combo([_step(4, 1, 0.03), _step(10, 1, 0.02)],
                    rate_changes=(RateChange(dt.date(P - 1, 7, 1), 0.05, "taken", True),))

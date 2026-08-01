@@ -21,7 +21,8 @@ import openpyxl
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # noqa: E402
 
 from src import engine  # noqa: E402
-from src.build_workbook import (load_config, sample_lr_rows, sample_rate_rows,  # noqa: E402
+from src.build_workbook import (load_config, sample_lr_rows, sample_mod_rows,  # noqa: E402
+                                sample_rate_rows,
                                 sample_to_combo)
 from src.sheets_book import COLS, PF_FIRST, SS_FIRST  # noqa: E402
 from tools.build_book import book_path  # noqa: E402
@@ -98,8 +99,9 @@ def phase_bc(path: Path, cfg, do_recalc=True):
     for lob in cfg.lobs:
         lr_rows = sample_lr_rows(cfg, lob)
         rate_rows = sample_rate_rows(cfg, lob)
+        mod_rows = sample_mod_rows(cfg, lob)   # D70: the oracle must see the log
         for rowdef in lr_rows:
-            cmb = sample_to_combo(cfg, lob, rowdef, rate_rows)
+            cmb = sample_to_combo(cfg, lob, rowdef, rate_rows, mod_rows)
             om = engine.run_bridge(p, cmb, "monthly")
             prog = engine.program_basis_plan_lr(p, cmb)
             oracle[(lob.name, rowdef["bu"], rowdef["state"])] = (rowdef, om, prog)

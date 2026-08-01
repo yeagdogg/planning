@@ -29,6 +29,11 @@ COH_HEADERS = ["#", "Written month", "Month end", "Days", "Mo#", "Mid-month",
                "Written mod (M_w)", "Earned in P-1 (ec)", "Earned in P (ec)",
                "Earned in P+1 (ec)", "Hist net price (q)", "Net path (Q)", "Index in force"]
 
+# D70 stepped-mod columns, written at ``mod_col`` — the mod leg's I..N in
+# miniature, so the two legs can be audited side by side
+MOD_HEADERS = ["Mod idx before mo", "Mod idx at mo end", "# mod acts in mo",
+               "Days after 1st act", "Mod step index"]
+
 
 @dataclass(frozen=True)
 class LogRefs:
@@ -126,6 +131,9 @@ def write_cohort_block(
         hr = header_row_at if header_row_at is not None else first_row - 1
         header_row(ws, hr, 1, COH_HEADERS,
                    fill=FILL_GREY, fnt=font(GREY_DARK, bold=True, size=9))
+        if mod_col is not None:
+            header_row(ws, hr, mod_col, MOD_HEADERS,
+                       fill=FILL_GREY, fnt=font(GREY_DARK, bold=True, size=9))
     last = first_row + L.N_COH - 1
     for i in range(L.N_COH):
         r = first_row + i
@@ -471,11 +479,17 @@ def build_mod_engine(ctx: Ctx):
     section(ws, 4, "E", "Mod path anchors (x = close-of-day boundary: date + 1; see Methodology)")
     header_row(ws, 5, 5, ["Anchor", "x (boundary date)", "M value", "Slope / day", "pts / month"],
                widths=[26, 12, 10, 12, 10], fill=FILL_NAVY)
+    # D70: with actions in the Mod Log the drift path stops a year early, at
+    # 12/31/(P-1) on M_endPrior, and the step log carries the plan year onward.
+    # Anchor A2 moves rather than being overridden, so the two mechanisms meet
+    # end to end and no movement is ever counted twice.
     anchor_rows = [
         ("A0: backward (as-of - 12 mo)", "=EDATE(nr_M0Asof,-12)+1",
          "=IF(N(nr_MPrior)=0,$G$7-($G$8-$G$7)/($F$8-$F$7)*($F$7-$F$6),nr_MPrior)"),
         ("A1: M_0 as-of", "=nr_M0Asof+1", "=nr_M0"),
-        ("A2: M_1 at plan-yr end", "=DATE(nr_PlanYear,12,31)+1", "=nr_M1"),
+        ("A2: M_1 at plan-yr end (12/31 of the CURRENT year when the log drives)",
+         "=IF($C$11>0,DATE(nr_PlanYear-1,12,31)+1,DATE(nr_PlanYear,12,31)+1)",
+         "=IF($C$11>0,$C$12,nr_M1)"),
         ("A3: M_2 at plan-yr+1 end", "=DATE(nr_PlanYear+1,12,31)+1",
          "=IF(N(nr_M2)=0,nr_M1,nr_M2)"),
     ]
@@ -491,7 +505,9 @@ def build_mod_engine(ctx: Ctx):
             formula(ws, f"I{r}", f"=$H${r}*30.4375*100", fmt="0.00", border=BORDER_THIN)
             ws[f"I{r}"].font = font(GREY_DARK, size=9)
     note(ws, "E10", "Blank M_prior places A0 on the M_0->M_1 line (backward extrapolation of that "
-                    "segment, §3.3.1). Blank M_2 = M_1 (flat beyond 12/31/P).")
+                    "segment, §3.3.1). Blank M_2 = M_1 (flat beyond 12/31/P). With actions in "
+                    "the Mod Log, A2 lands a year earlier — at 12/31 of the current year on "
+                    "M_endPrior — and the log carries the path from there (D70).")
     anchors = ModAnchors(
         x=("$F$6", "$F$7", "$F$8", "$F$9"), m=("$G$6", "$G$7", "$G$8", "$G$9"),
         s=("$H$6", "$H$7", "$H$8"))
@@ -508,6 +524,24 @@ def build_mod_engine(ctx: Ctx):
         r = 5 + i
         label(ws, f"A{r}", lbl)
         link(ws, f"C{r}", f, fmt=fmt, border=BORDER_THIN)
+    # D70: the two cells that decide whether this sheet runs on drift or on the
+    # Mod Log. Derived here rather than on the Bridge — the resolver block is
+    # already at its layout budget, and these are only ever read locally.
+    label(ws, "A11", "Mod actions logged for this combo")
+    formula(ws, "C11", "=COUNTIF(ml_key,nr_SelKey)", fmt=FMT_INT, border=BORDER_THIN)
+    label(ws, "A12", "Projected mod, end of CURRENT yr (M_endPrior)")
+    formula(ws, "C12",
+            "=IF(br_selrow=0,nr_M0,IF(N(INDEX(lr_mendprior,br_selrow))=0,nr_M0,"
+            "INDEX(lr_mendprior,br_selrow)))", fmt=FMT_MOD, border=BORDER_THIN)
+    for rr in ("C11", "C12"):
+        ws[rr].font = font(GREY_DARK, size=10)
+    # one flat line, no wrap: column A is 6 wide and a wrapped note here would
+    # stretch the row down the sheet
+    put(ws, "A13",
+        '=IF($C$11=0,"No mod actions logged — the written path is pure drift '
+        '(M_0 -> M_1 -> M_2), exactly as before.","The Mod Log drives from 1/1: '
+        '"&$C$11&" action(s) compound on "&TEXT($C$12,"0.000")&", and drift is '
+        'confined to history.")', fnt=F_SMALL_IT)
 
     out = [
         ('="Earned mod CY "&(nr_PlanYear-1)', "F", FMT_MOD, "nr_MEarned_Pm1",
@@ -549,19 +583,30 @@ def build_mod_engine(ctx: Ctx):
     ctx.define("me_identity", "Mod Engine", "$L$11",
                "Written mod at 1/1/P — equals CY P earned mod under the §3.3.5 identity")
     label(ws, "J12", "Identity applicable?")
+    # a logged action puts a STEP in the path, and the Jan-1 identity is a
+    # property of straight lines — so the Mod Log suspends it (D70)
     formula(ws, "L12",
-            "=AND(N(nr_MPrior)=0,nr_TermMonths=12,NOT(re_season_active))", border=BORDER_THIN)
+            "=AND(N(nr_MPrior)=0,nr_TermMonths=12,NOT(re_season_active),$C$11=0)",
+            border=BORDER_THIN)
     ctx.define("me_identity_ok", "Mod Engine", "$L$12",
                "TRUE when the linear-mod identity preconditions hold (no M_prior kink, "
-               "annual term, uniform writings)")
+               "annual term, uniform writings, no logged mod actions)")
 
     # Cohort table (links to Rate Engine + local M_w)
-    section(ws, 15, "A", "Writing cohorts — written mod path (columns A-D, F-H link to the Rate Engine)")
+    section(ws, 15, "A", "Writing cohorts — written mod path (columns A-D, F-H link to the "
+                         "Rate Engine; T-Y build the Mod Log's step index)")
     header_row(ws, 16, 1, ["#", "Written month", "Mid-month", "Weight w", "Written mod (M_w)",
                            "Earned in P-1", "Earned in P", "Earned in P+1"],
                widths=[5, 12, 10, 8, 10, 9, 9, 9], fill=FILL_GREY,
                fnt=font(GREY_DARK, bold=True, size=9))
     ws.row_dimensions[16].height = 30
+    # D70 step helpers at T..Y — the mod leg's own index construction, the same
+    # five shapes the rate leg builds in I..M. Everything derives from the
+    # cohort month in B, so the strip is self-contained and auditable in place.
+    header_row(ws, 16, 20, ["Month end", "Mod idx before mo", "Mod idx at mo end",
+                            "# mod acts in mo", "Days after 1st act", "Mod step index"],
+               widths=[10, 11, 11, 9, 11, 10], fill=FILL_GREY,
+               fnt=font(GREY_DARK, bold=True, size=9))
     re = "'Rate Engine'"
     for i in range(L.N_COH):
         r = L.ME_COH_FIRST + i
@@ -569,7 +614,27 @@ def build_mod_engine(ctx: Ctx):
         link(ws, f"B{r}", f"={re}!$B{r}", fmt="mmm yyyy")
         link(ws, f"C{r}", f"={re}!$F{r}", fmt="0.0")
         link(ws, f"D{r}", f"={re}!$H{r}", fmt="0.00")
-        formula(ws, f"E{r}", mod_value_formula(f"$C{r}", anchors), fmt=FMT_MOD)
+        formula(ws, f"T{r}", f"=EOMONTH($B{r},0)", fmt=FMT_DATE)
+        formula(ws, f"U{r}",
+                f"=EXP(SUMPRODUCT((ml_eff<$B{r})*(ml_key=nr_SelKey)*ml_ln1p))", fmt=FMT_IDX)
+        formula(ws, f"V{r}",
+                f"=EXP(SUMPRODUCT((ml_eff<=$T{r})*(ml_key=nr_SelKey)*ml_ln1p))", fmt=FMT_IDX)
+        formula(ws, f"W{r}",
+                f'=COUNTIFS(ml_key,nr_SelKey,ml_eff,">="&$B{r},ml_eff,"<="&$T{r})',
+                fmt=FMT_INT)
+        formula(ws, f"X{r}",
+                f"=SUMIFS(ml_daysafter,ml_key,nr_SelKey,ml_effmonth,$B{r},ml_first,1)",
+                fmt=FMT_INT)
+        formula(ws, f"Y{r}",
+                f"=IF($W{r}=0,$V{r},(1-MIN(1,$X{r}/($T{r}-$B{r}+1)))*$U{r}"
+                f"+MIN(1,$X{r}/($T{r}-$B{r}+1))*$V{r})", fmt=FMT_IDX)
+        for cL in "TUVWXY":
+            ws[f"{cL}{r}"].font = font(GREY_DARK, size=9)
+        # B is the first of the cohort month, so B >= 1/1/P is exactly the
+        # block writer's absolute-month test $G >= nr_MStartP
+        formula(ws, f"E{r}",
+                f"=IF(AND($C$11>0,$B{r}>=DATE(nr_PlanYear,1,1)),$C$12*$Y{r},"
+                f"{mod_value_formula(f'$C{r}', anchors)[1:]})", fmt=FMT_MOD)
         link(ws, f"F{r}", f"={re}!$P{r}", fmt="0.0000")
         link(ws, f"G{r}", f"={re}!$Q{r}", fmt="0.0000")
         link(ws, f"H{r}", f"={re}!$R{r}", fmt="0.0000")
@@ -609,5 +674,8 @@ def build_mod_engine(ctx: Ctx):
 
     set_widths(ws, {"A": 6, "B": 12, "C": 10, "D": 7, "E": 9, "F": 9, "G": 9, "H": 9,
                     "I": 3, "J": 26, "K": 10, "L": 11})
+    # step-index construction is audit detail, like the rate leg's I..M
+    for cL in "TUVWXY":
+        ws.column_dimensions[cL].outlineLevel = 1
     presentation_setup(ws, gridlines_off=False, zoom=90, freeze="A17", tab_color=STEEL)
     print_setup(ws)
