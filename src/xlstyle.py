@@ -284,6 +284,36 @@ def chart_legend(c, pos="b"):
     return c
 
 
+def unoverlay_titles(wb):
+    """Force every chart and axis TITLE to reserve its own space (D71).
+
+    The same omitted-element trap as the legend one line above, one level
+    deeper: ``Title`` also carries a ``<c:overlay>``, openpyxl leaves it None,
+    and Excel materialises ``val="1"`` on resave — so axis titles are drawn ON
+    TOP of the plot area and read as unreadable text sitting behind the bars.
+
+    Swept over the whole workbook at save time rather than fixed at each of the
+    sixteen ``add_chart`` sites: this class of bug is one a new chart silently
+    reintroduces, and a sweep cannot be forgotten. ``verify_workbook`` phase A
+    holds the line by requiring ``<c:overlay val="0"/>`` inside every title.
+    """
+    n = 0
+    for ws in wb.worksheets:
+        for ch in getattr(ws, "_charts", []):
+            # a combined chart (c1 += c2) keeps its parts, and each one can
+            # carry its own axes — walk the whole family, not just the head
+            parts = [ch] + list(getattr(ch, "_charts", []) or [])
+            for part in parts:
+                for holder in (part, getattr(part, "x_axis", None),
+                               getattr(part, "y_axis", None),
+                               getattr(part, "z_axis", None)):
+                    t = getattr(holder, "title", None)
+                    if t is not None and hasattr(t, "overlay"):
+                        t.overlay = False
+                        n += 1
+    return n
+
+
 def presentation_setup(ws, gridlines_off=True, zoom=100, freeze=None, tab_color=None):
     ws.sheet_view.showGridLines = not gridlines_off
     ws.sheet_view.zoomScale = zoom

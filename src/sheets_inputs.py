@@ -7,7 +7,10 @@ a single workbook-level input; tbl_Seasonality is keyed by state.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from openpyxl.comments import Comment
+from openpyxl.utils import get_column_letter as col_letter
 from openpyxl.formatting.rule import CellIsRule
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.table import Table, TableStyleInfo
@@ -136,18 +139,114 @@ def build_lists(ctx: Ctx):
 # (D43) so they still cross-reference Methodology and the named ranges.
 
 
+@dataclass(frozen=True)
+class LrCol:
+    """One tbl_LR column, declared once.
+
+    The header, width, number format, sample seed, required flag, data
+    validation and defined name all hang off this single ordered list, so a
+    column can be moved by moving one entry — nothing can drift out of step
+    with the letter it lives at. (Before D72 these were six parallel
+    structures keyed by position; reordering meant editing all six in lockstep
+    and a mismatch showed up as a validation quietly guarding the wrong
+    column.)
+    """
+
+    name: str                 # defined name, e.g. "lr_mind"
+    header: str
+    key: str | None           # sample-row dict key; None = not seeded
+    fmt: str
+    width: int
+    desc: str
+    required: bool = False
+    dv: str = ""              # data-validation group tag (see LR_DV)
+
+
+# The mod block runs CHRONOLOGICALLY — M_prior, M_0 (with its as-of date),
+# M_endPrior, M_1, M_2 — behind M_ind, which leads because it is the
+# indication's assumption rather than a point on the projected path.
+LR_COLS: tuple[LrCol, ...] = (
+    LrCol("lr_bu", "BU", "bu", FMT_GEN, 9, "tbl_LR business unit", True, "bu"),
+    LrCol("lr_state", "State", "state", FMT_GEN, 8, "tbl_LR state", True, "state"),
+    LrCol("lr_lrproj", "Projected loss ratio", "lr_proj", FMT_PCT, 11,
+          "Projected loss ratio from the indication", True, "lr"),
+    LrCol("lr_basis", "LR basis", "basis", FMT_GEN, 10,
+          "LR basis: current | proposed", True, "basis"),
+    LrCol("lr_s", "Indication selected chg (s)", "s", FMT_PCT, 12,
+          "Selected/indicated change s (used when basis = proposed)", False, "pct"),
+    LrCol("lr_mind", "Mod assumed in indication (M_ind)", "m_ind", FMT_MOD, 13,
+          "M_ind: avg schedule mod assumed in the indication", True, "mod"),
+    LrCol("lr_mprior", "Mod ~1 yr before as-of (M_prior, opt)", "m_prior", FMT_MOD, 13,
+          "M_prior: avg mod ~12 months before M_0 (optional)", False, "mod"),
+    LrCol("lr_m0", "Current avg written mod (M_0)", "m0", FMT_MOD, 12,
+          "M_0: current avg written mod", True, "mod"),
+    LrCol("lr_m0asof", "Current mod as-of date", "m0_asof", FMT_DATE, 11,
+          "M_0 as-of date (close of day)", True, "date"),
+    LrCol("lr_mendprior", "Projected mod, end of CURRENT yr (M_endPrior)",
+          "m_end_prior", FMT_MOD, 13,
+          "M_endPrior: projected avg written mod at 12/31/(P-1) — the base the "
+          "Mod Log's stepped actions compound on (D70)", False, "mod"),
+    LrCol("lr_m1", "Projected mod, end of plan yr (M_1)", "m1", FMT_MOD, 12,
+          "M_1: projected avg written mod at 12/31/P", True, "mod"),
+    LrCol("lr_m2", "Projected mod, end plan yr+1 (M_2, opt)", "m2", FMT_MOD, 12,
+          "M_2: projected avg written mod at 12/31/(P+1); blank = M_1", False, "mod"),
+    LrCol("lr_ep", "Adj plan EP (000s)", "ep", FMT_EP, 12,
+          "ADJUSTED plan earned premium (000s) — the weight behind Portfolio "
+          "totals and State Summary aggregates", False, "ep"),
+    LrCol("lr_trend", "Net trend, plan yr+1 (opt)", "trend", FMT_PCT, 11,
+          "Annual net loss-over-premium trend for the P+1 view", False, "pct"),
+    LrCol("lr_aother", "Other adj factor (A_other)", "a_other", FMT_IDX, 10,
+          "A_other manual adjustment factor", False, "aother"),
+    LrCol("lr_aotherlbl", "Reason for other adj", "a_other_label", FMT_GEN, 18,
+          "Label required when A_other <> 1"),
+    LrCol("lr_modadj", "Apply mod adjustment?", "modadj", FMT_GEN, 11,
+          "Per-combo mod adjustment toggle (ON/OFF)", True, "onoff"),
+    LrCol("lr_netp", "Net rate selection, plan yr (opt)", "netp", FMT_PCT, 12,
+          "OPTIONAL net rate selection for P: YoY combined rate x mod target "
+          "from 1/1/P (blank = explicit program, D39)", False, "net"),
+    LrCol("lr_netp1", "Net rate selection, plan yr+1 (opt)", "netp1", FMT_PCT, 12,
+          "OPTIONAL net selection for P+1 (blank = carry the P selection)", False, "net"),
+)
+
+# data-validation groups, applied to every column carrying the tag
+LR_DV: dict[str, dict] = {
+    # tbl_LR defines the roster, so its own BU/State dropdowns are
+    # SUGGESTION-ONLY (blocking=False): pick an existing value or type a new
+    # one — every list downstream then follows automatically (D42).
+    "bu": dict(kind="list", blocking=False, formula1="=lst_bu"),
+    "state": dict(kind="list", blocking=False, formula1="=lst_state"),
+    "basis": dict(kind="list", formula1="=lst_basis"),
+    "onoff": dict(kind="list", formula1="=lst_onoff"),
+    "lr": dict(kind="decimal", operator="between", formula1="0", formula2="3",
+               error="Loss ratio must be between 0 and 300% (entered as a fraction)."),
+    "pct": dict(kind="decimal", operator="between", formula1="-0.5", formula2="1",
+                error="Enter a decimal fraction between -50% and +100%."),
+    "mod": dict(kind="decimal", operator="between", formula1="0.5", formula2="1.5",
+                error="Schedule mods must lie in [0.5, 1.5]."),
+    "ep": dict(kind="decimal", operator="greaterThanOrEqual", formula1="0",
+               error="Plan EP must be non-negative."),
+    "aother": dict(kind="decimal", operator="between", formula1="0.5", formula2="2",
+                   error="A_other must lie in [0.5, 2.0]."),
+    "date": dict(kind="date", operator="between", formula1="DATE(1990,1,1)",
+                 formula2="DATE(2100,12,31)",
+                 error="Enter a real as-of date (it must precede 12/31 of the plan "
+                       "year; the Checks sheet enforces that bound)."),
+    "net": dict(kind="decimal", operator="between", formula1="-0.5", formula2="1",
+                error="Net rate selection must lie in [-50%, +100%] (decimal "
+                      "fraction; blank = off)."),
+}
+
+LR_LAST_COL = col_letter(len(LR_COLS))          # "S" today; derived, never typed
+LR_KEY_COL = col_letter(len(LR_COLS) + 1)       # BU|State helper, right of the block
+
+
+def lr_letter(name: str) -> str:
+    """Column letter of a tbl_LR column, by defined name."""
+    return col_letter(next(i for i, c in enumerate(LR_COLS, 1) if c.name == name))
+
+
 def lr_headers() -> list[str]:
-    return [
-        "BU", "State", "Projected loss ratio", "LR basis",
-        "Indication selected chg (s)", "Mod assumed in indication (M_ind)",
-        "Current avg written mod (M_0)", "Current mod as-of date",
-        "Projected mod, end of plan yr (M_1)", "Mod ~1 yr before as-of (M_prior, opt)",
-        "Projected mod, end plan yr+1 (M_2, opt)", "Adj plan EP (000s)",
-        "Net trend, plan yr+1 (opt)", "Other adj factor (A_other)",
-        "Reason for other adj", "Apply mod adjustment?",
-        "Net rate selection, plan yr (opt)", "Net rate selection, plan yr+1 (opt)",
-        "Projected mod, end of CURRENT yr (M_endPrior) — base for Mod Log actions",
-    ]
+    return [c.header for c in LR_COLS]
 
 
 def rl_headers() -> list[str]:
@@ -173,82 +272,52 @@ def build_inputs(ctx: Ctx):
         f"your book. {ctx.we_key} carries the documented worked example used by the Checks sheet.",
         fnt=font(FAIL_RED, bold=True, italic=True))
     put(ws, "T4",
-        "tbl_LR A:S is one contiguous paste block — keys, helpers, and live results sit to "
-        "the right. The rate change log lives on the Rate Log sheet.",
+        f"tbl_LR A:{LR_LAST_COL} is one contiguous paste block — keys, helpers, and live "
+        "results sit to the right. The rate change log lives on the Rate Log sheet.",
         fnt=F_SMALL_IT)
 
     # ------------------------------------------------------------------ tbl_LR
     section(ws, L.LR_HDR - 1, "A",
             "tbl_LR — one row per BU x state (projected LR and mod inputs). "
-            "Columns A:R are one contiguous paste block.")
-    header_row(ws, L.LR_HDR, 1, lr_headers(),
-               widths=[9, 8, 11, 10, 12, 13, 12, 11, 12, 13, 12, 12, 11, 10, 18, 11, 12,
-                       12, 13])
+            f"Columns A:{LR_LAST_COL} are one contiguous paste block.")
+    header_row(ws, L.LR_HDR, 1, lr_headers(), widths=[c.width for c in LR_COLS])
     ws.row_dimensions[L.LR_HDR].height = 44
-    put(ws, f"T{L.LR_HDR}", "Key", fnt=font(GREY_DARK, bold=True, size=9), fill=FILL_GREY)
-    put(ws, f"T{L.LR_HDR - 1}", "engine helper — do not edit", fnt=F_SMALL_IT)
-    fmt_by_col = {3: FMT_PCT, 4: FMT_GEN, 5: FMT_PCT, 6: FMT_MOD, 7: FMT_MOD, 8: FMT_DATE,
-                  9: FMT_MOD, 10: FMT_MOD, 11: FMT_MOD, 12: FMT_EP, 13: FMT_PCT,
-                  14: FMT_IDX, 15: FMT_GEN, 16: FMT_GEN, 17: FMT_PCT, 18: FMT_PCT,
-                  19: FMT_MOD}
-    required_cols = {1, 2, 3, 4, 6, 7, 8, 9, 16}
+    K = LR_KEY_COL
+    put(ws, f"{K}{L.LR_HDR}", "Key", fnt=font(GREY_DARK, bold=True, size=9), fill=FILL_GREY)
+    put(ws, f"{K}{L.LR_HDR - 1}", "engine helper — do not edit", fnt=F_SMALL_IT)
     for i in range(L.LR_ROWS):
         r = L.LR_FIRST + i
         row = ctx.lr_rows[i] if i < len(ctx.lr_rows) else None
-        vals = {
-            1: row and row["bu"], 2: row and row["state"], 3: row and row["lr_proj"],
-            4: row and row["basis"], 5: row and row["s"], 6: row and row["m_ind"],
-            7: row and row["m0"], 8: row and row["m0_asof"], 9: row and row["m1"],
-            10: row and row["m_prior"], 11: row and row["m2"], 12: row and row["ep"],
-            13: row and row["trend"], 14: row and row["a_other"],
-            15: (row["a_other_label"] if row else None), 16: row and row["modadj"],
-            17: row and row["netp"], 18: row and row["netp1"],
-            19: row and row.get("m_end_prior"),
-        }
-        for c in range(1, 20):
-            input_cell(ws, f"{ws.cell(row=r, column=c).coordinate}", vals.get(c),
-                       fmt=fmt_by_col.get(c, FMT_GEN), required=(c in required_cols))
-        formula(ws, f"T{r}", f'=IF(OR($A{r}="",$B{r}=""),"",$A{r}&"|"&$B{r})',
+        for c, spec in enumerate(LR_COLS, 1):
+            v = row.get(spec.key) if (row and spec.key) else None
+            input_cell(ws, ws.cell(row=r, column=c).coordinate, v,
+                       fmt=spec.fmt, required=spec.required)
+        formula(ws, f"{K}{r}", f'=IF(OR($A{r}="",$B{r}=""),"",$A{r}&"|"&$B{r})',
                 fmt=FMT_GEN, border=BORDER_THIN)
-        ws[f"T{r}"].font = font(GREY_DARK, size=9)
-    ws[f"P{L.LR_HDR}"].comment = Comment(
+        ws[f"{K}{r}"].font = font(GREY_DARK, size=9)
+    ws[f"{lr_letter('lr_modadj')}{L.LR_HDR}"].comment = Comment(
         "Per-combo mod adjustment toggle. Set OFF if the indication's premium trend already "
         "reflects schedule mod drift — otherwise the drift is double-counted. The Control "
         "sheet master toggle must also be ON for the adjustment to apply.", "generator")
-    ws[f"Q{L.LR_HDR}"].comment = Comment(
+    ws[f"{lr_letter('lr_netp')}{L.LR_HDR}"].comment = Comment(
         "OPTIONAL net rate selection (DECISIONS.md D39). When set, cohorts written on/after "
         "1/1/P abandon the planned rate program and the projected mod path: each cohort's "
         "combined net price (rate x mod) renews this % above its year-ago cohort. History "
         "before 1/1/P still earns exactly as modeled. Blank = explicit program (classic). "
         "The P+1 column defaults to the P selection when blank.", "generator")
-    tbl = Table(displayName="tbl_LR", ref=f"A{L.LR_HDR}:S{L.LR_LAST}")
+    ws[f"{lr_letter('lr_mendprior')}{L.LR_HDR}"].comment = Comment(
+        "Where you expect the average written mod to land at 12/31 of the CURRENT year. "
+        "Inert until the combo has actions on the Mod Log; from the first action it becomes "
+        "the level those actions compound on, and the drift path lands here instead of "
+        "running on to M_1 (DECISIONS.md D70).", "generator")
+    tbl = Table(displayName="tbl_LR", ref=f"A{L.LR_HDR}:{LR_LAST_COL}{L.LR_LAST}")
     tbl.tableStyleInfo = TABLE_STYLE
     ws.add_table(tbl)
-    lr_names = {
-        "lr_bu": ("A", "tbl_LR business unit"), "lr_state": ("B", "tbl_LR state"),
-        "lr_lrproj": ("C", "Projected loss ratio from the indication"),
-        "lr_basis": ("D", "LR basis: current | proposed"),
-        "lr_s": ("E", "Selected/indicated change s (used when basis = proposed)"),
-        "lr_mind": ("F", "M_ind: avg schedule mod assumed in the indication"),
-        "lr_m0": ("G", "M_0: current avg written mod"),
-        "lr_m0asof": ("H", "M_0 as-of date (close of day)"),
-        "lr_m1": ("I", "M_1: projected avg written mod at 12/31/P"),
-        "lr_mprior": ("J", "M_prior: avg mod ~12 months before M_0 (optional)"),
-        "lr_m2": ("K", "M_2: projected avg written mod at 12/31/(P+1); blank = M_1"),
-        "lr_ep": ("L", "ADJUSTED plan earned premium (000s) — the weight behind Portfolio "
-                       "totals and State Summary aggregates"),
-        "lr_trend": ("M", "Annual net loss-over-premium trend for the P+1 view"),
-        "lr_aother": ("N", "A_other manual adjustment factor"),
-        "lr_aotherlbl": ("O", "Label required when A_other <> 1"),
-        "lr_modadj": ("P", "Per-combo mod adjustment toggle (ON/OFF)"),
-        "lr_netp": ("Q", "OPTIONAL net rate selection for P: YoY combined rate x mod target "
-                         "from 1/1/P (blank = explicit program, D39)"),
-        "lr_netp1": ("R", "OPTIONAL net selection for P+1 (blank = carry the P selection)"),
-        "lr_mendprior": ("S", "M_endPrior: projected avg written mod at 12/31/(P-1) — the base the Mod Log's stepped actions compound on (D70)"),
-        "lr_key": ("T", "Helper: concatenated BU|State key (right of the paste block, D40)"),
-    }
-    for name, (colL, desc) in lr_names.items():
-        ctx.define(name, "Inputs", f"${colL}${L.LR_FIRST}:${colL}${L.LR_LAST}", desc)
+    for c, spec in enumerate(LR_COLS, 1):
+        ctx.define(spec.name, "Inputs",
+                   f"${col_letter(c)}${L.LR_FIRST}:${col_letter(c)}${L.LR_LAST}", spec.desc)
+    ctx.define("lr_key", "Inputs", f"${K}${L.LR_FIRST}:${K}${L.LR_LAST}",
+               "Helper: concatenated BU|State key (right of the paste block, D40)")
 
     # ---- live per-row results (echo columns V:Y, right of the Key helper) ----
     # The hidden _calc results table aligns 1:1 with tbl_LR, so editing any
@@ -313,31 +382,15 @@ def build_inputs(ctx: Ctx):
     # DV sits ON the input cells only (a paste passes straight over it); the
     # paste blocks contain no formula columns (D40).
     fr, lr_ = L.LR_FIRST, L.LR_LAST
-    # tbl_LR defines the roster, so its own BU/State dropdowns are
-    # SUGGESTION-ONLY (blocking=False): pick an existing value or type a new
-    # one — every list downstream then follows automatically (D42).
-    _dv(ws, "list", [f"A{fr}:A{lr_}"], blocking=False, formula1="=lst_bu")
-    _dv(ws, "list", [f"B{fr}:B{lr_}"], blocking=False, formula1="=lst_state")
-    _dv(ws, "list", [f"D{fr}:D{lr_}"], formula1="=lst_basis")
-    _dv(ws, "list", [f"P{fr}:P{lr_}"], formula1="=lst_onoff")
-    _dv(ws, "decimal", [f"C{fr}:C{lr_}"], operator="between", formula1="0", formula2="3",
-        error="Loss ratio must be between 0 and 300% (entered as a fraction).")
-    _dv(ws, "decimal", [f"E{fr}:E{lr_}", f"M{fr}:M{lr_}"], operator="between",
-        formula1="-0.5", formula2="1", error="Enter a decimal fraction between -50% and +100%.")
-    _dv(ws, "decimal", [f"F{fr}:F{lr_}", f"G{fr}:G{lr_}", f"I{fr}:I{lr_}",
-                        f"J{fr}:J{lr_}", f"K{fr}:K{lr_}"], operator="between",
-        formula1="0.5", formula2="1.5", error="Schedule mods must lie in [0.5, 1.5].")
-    _dv(ws, "decimal", [f"L{fr}:L{lr_}"], operator="greaterThanOrEqual", formula1="0",
-        error="Plan EP must be non-negative.")
-    _dv(ws, "decimal", [f"N{fr}:N{lr_}"], operator="between", formula1="0.5", formula2="2",
-        error="A_other must lie in [0.5, 2.0].")
-    _dv(ws, "date", [f"H{fr}:H{lr_}"], operator="between",
-        formula1="DATE(1990,1,1)", formula2="DATE(2100,12,31)",
-        error="Enter a real as-of date (it must precede 12/31 of the plan year; "
-              "the Checks sheet enforces that bound).")
-    _dv(ws, "decimal", [f"Q{fr}:Q{lr_}", f"R{fr}:R{lr_}"], operator="between",
-        formula1="-0.5", formula2="1",
-        error="Net rate selection must lie in [-50%, +100%] (decimal fraction; blank = off).")
+    # one validation per LR_DV tag, over every column carrying it — so a moved
+    # column takes its own rule with it and cannot end up guarding a neighbour
+    for tag, spec in LR_DV.items():
+        ranges = [f"{col_letter(i)}{fr}:{col_letter(i)}{lr_}"
+                  for i, c in enumerate(LR_COLS, 1) if c.dv == tag]
+        if not ranges:
+            continue
+        kw = dict(spec)
+        _dv(ws, kw.pop("kind"), ranges, **kw)
     _dv(ws, "decimal", [rng(2, L.SE_FIRST, 13, L.SE_LAST)], operator="between",
         formula1="0", formula2="100", error="Seasonality weights are non-negative.")
     _dv(ws, "list", [f"A{L.SE_FIRST}:A{L.SE_LAST}"], formula1="=lst_state")

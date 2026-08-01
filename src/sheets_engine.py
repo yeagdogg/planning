@@ -46,14 +46,15 @@ class LogRefs:
     first: str = "rl_first"
     daysafter: str = "rl_daysafter"
     taken_only: bool = False   # solver base: taken rows only (DECISIONS.md D13)
+    status: str = "rl_status"  # which log's status column taken_only filters on
 
     @property
     def sp_status(self) -> str:   # extra SUMPRODUCT factor
-        return '*(rl_status="taken")' if self.taken_only else ""
+        return f'*({self.status}="taken")' if self.taken_only else ""
 
     @property
     def ifs_status(self) -> str:  # extra SUMIFS/COUNTIFS condition pair
-        return ',rl_status,"taken"' if self.taken_only else ""
+        return f',{self.status},"taken"' if self.taken_only else ""
 
 
 @dataclass(frozen=True)
@@ -181,16 +182,17 @@ def write_cohort_block(
                 c = [col(mod_col + i) for i in range(5)]
                 formula(ws, f"{c[0]}{r}",
                         f"=EXP(SUMPRODUCT(({mod_refs.eff}<$B{r})*(ml_key={mk})"
-                        f"*{mod_refs.ln}))", fmt=FMT_IDX)
+                        f"{mod_refs.sp_status}*{mod_refs.ln}))", fmt=FMT_IDX)
                 formula(ws, f"{c[1]}{r}",
                         f"=EXP(SUMPRODUCT(({mod_refs.eff}<=$C{r})*(ml_key={mk})"
-                        f"*{mod_refs.ln}))", fmt=FMT_IDX)
+                        f"{mod_refs.sp_status}*{mod_refs.ln}))", fmt=FMT_IDX)
                 formula(ws, f"{c[2]}{r}",
                         f"=COUNTIFS(ml_key,{mk},{mod_refs.eff},\">=\"&$B{r},"
-                        f"{mod_refs.eff},\"<=\"&$C{r})", fmt=FMT_INT)
+                        f"{mod_refs.eff},\"<=\"&$C{r}{mod_refs.ifs_status})", fmt=FMT_INT)
                 formula(ws, f"{c[3]}{r}",
                         f"=SUMIFS({mod_refs.daysafter},ml_key,{mk},"
-                        f"{mod_refs.effmonth},$B{r},{mod_refs.first},1)", fmt=FMT_INT)
+                        f"{mod_refs.effmonth},$B{r},{mod_refs.first},1"
+                        f"{mod_refs.ifs_status})", fmt=FMT_INT)
                 formula(ws, f"{c[4]}{r}",
                         f"=IF(${c[2]}{r}=0,${c[1]}{r},"
                         f"(1-MIN(1,${c[3]}{r}/$D{r}))*${c[0]}{r}"

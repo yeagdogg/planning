@@ -1080,6 +1080,195 @@ def solver_timing_table(
 
 
 # ---------------------------------------------------------------------------
+# Mod-step solve (DECISIONS.md D73)
+#
+# The mod leg inverts on exactly the same algebra as the rate leg, which is
+# the whole reason a dated mod ACTION was worth building: earned mod is linear
+# in a new step c at date D,
+#
+#     Mbar(c) = (K_pre + (1+c)·K_post) / D,
+#
+# with the D31 first-in-month day-blend in D's own month. Plan LR moves
+# INVERSELY with Mbar (A_mod = M_ind / Mbar), so where the rate solve needs
+# E_needed = CRL / A_rate_needed, the mod solve needs
+#
+#     Mbar_needed = LR_cur · A_rate · M_ind · A_other / target.
+#
+# Base convention mirrors D13 one dimension over: planned mod ACTIONS are
+# excluded (they are what you are solving for) while the rate program is taken
+# as given, including planned filings — the question is "my filings are
+# decided; what mod action do I still need?", which is the mirror image of
+# Mode A rather than a second copy of it.
+#
+# One trap of our own making: under D70 the first logged action re-anchors the
+# drift path onto M_endPrior, so a combo with NO actions today would earn a
+# different P-1 mod once any action exists. Computing the base on a bare drift
+# engine would therefore linearise around the wrong point. The fix is to build
+# the base engine with a ZERO-magnitude step already at D: it re-anchors
+# exactly as the solved answer will, contributes a factor of 1.0 everywhere,
+# and makes the base literally the c = 0 member of the family being solved.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ModSolverResult:
+    required_step: float        # c, the effective (achieved) mod change
+    directed_equivalent: float  # c / achievement — what you must direct
+    k_pre: float
+    k_post: float
+    denominator: float
+    mbar_needed: float
+    post_share: float           # earnable share of CY P sitting on/after D
+    feasible: bool
+    warnings: list
+
+
+def _taken_mod_changes(combo: ComboInputs) -> tuple[RateChange, ...]:
+    return tuple(mc for mc in combo.mod_changes if mc.status == STATUS_TAKEN)
+
+
+def _mod_solver_components(
+    plan_year: int, combo: ComboInputs, eff_date: dt.date
+) -> tuple[float, float, float, MonthlyEngine]:
+    """K_pre, K_post, D over CY P with planned mod actions excluded (D13/D73).
+
+    Mirrors ``_solver_components`` one-for-one. The cohort month containing
+    ``eff_date`` splits at the FIRST action in that month — the new one or an
+    existing taken one, whichever lands earlier — and its post-split weight is
+    valued at the fully-compounded end-of-month mod, so the closed form
+    inverts ``written_mod`` exactly rather than approximately.
+    """
+    # the c = 0 member of the family: a zero step at D so the D70 re-anchor is
+    # already in force and the linearisation is exact rather than nearly right
+    base = base_plus(_taken_mod_changes(combo), eff_date, 0.0)
+    eng = MonthlyEngine(plan_year, combo, mod_changes_override=base)
+    k_eff = month_index(eff_date.year, eff_date.month)
+    som, eom, dim = mi_first(k_eff), mi_last(k_eff), mi_days(k_eff)
+    in_month = [mc.effective for mc in base if som <= mc.effective <= eom]
+    first = min([eff_date] + in_month)
+    p_split = ((eom - first).days + 1) / dim
+    m_pre = eng.mod_base * step_index_at(base, som - dt.timedelta(days=1))
+    m_eom = eng.mod_base * step_index_at(base, eom)
+    k_pre = k_post = den = 0.0
+    for k in eng.cohorts:
+        wk_ec = eng.w(k) * eng.ec(k, plan_year)
+        if wk_ec == 0.0:
+            continue
+        den += wk_ec
+        if k < k_eff:
+            k_pre += wk_ec * eng.written_mod(k)
+        elif k > k_eff:
+            k_post += wk_ec * eng.written_mod(k)
+        else:
+            k_pre += wk_ec * (1.0 - p_split) * m_pre
+            k_post += wk_ec * p_split * m_eom
+    return k_pre, k_post, den, eng
+
+
+def solve_mod_for_target(
+    plan_year: int,
+    combo: ComboInputs,
+    target_cy_lr: float,
+    eff_date: dt.date,
+    achievement: float = 1.0,
+    max_reasonable_step: float = 0.15,
+    min_post_share: float = 0.05,
+    mod_bounds: tuple[float, float] = (0.5, 1.5),
+) -> ModSolverResult:
+    """Required mod step c at ``eff_date`` to hit ``target_cy_lr``."""
+    k_pre, k_post, den, eng = _mod_solver_components(plan_year, combo, eff_date)
+    res = run_bridge(plan_year, combo)
+    warnings: list[str] = []
+    post_share = k_post / (k_pre + k_post) if (k_pre + k_post) else 0.0
+
+    if not combo.mod_adjustment_enabled:
+        warnings.append(
+            "The mod adjustment is OFF for this combo, so A_mod is pinned at 1.000 "
+            "and no mod action can move the plan LR. Turn it on, or solve on rate."
+        )
+    if combo.net_sel_p is not None:
+        warnings.append(
+            "This combo carries a net rate selection, which supersedes the mod leg "
+            "from 1/1 (D39) — a mod action shapes Net Delivery, not the plan LR."
+        )
+    mbar_needed = (res.lr_current * res.a_rate_p * combo.a_other
+                   * combo.mods.m_ind / target_cy_lr) if target_cy_lr else float("nan")
+    if post_share < min_post_share:
+        warnings.append(
+            f"Only {post_share:.1%} of CY {plan_year} earned exposure sits on/after "
+            f"{eff_date}; a mod action this late cannot carry the year."
+        )
+    if k_post == 0.0:
+        warnings.append(
+            f"No CY {plan_year} earned exposure sits on/after {eff_date}; "
+            "no mod action at this date can move the plan-year result."
+        )
+        c = float("nan")
+    else:
+        c = (mbar_needed * den - k_pre) / k_post - 1.0
+        if abs(c) > max_reasonable_step:
+            warnings.append(
+                f"Required step {c:+.1%} exceeds the ±{max_reasonable_step:.0%} "
+                "reasonability bound."
+            )
+        # the resulting year-end mod has to be a mod someone could actually file
+        m_end = eng.mod_base * step_index_at(
+            base_plus(_taken_mod_changes(combo), eff_date, c),
+            dt.date(plan_year, 12, 31))
+        lo, hi = mod_bounds
+        if not (lo <= m_end <= hi):
+            warnings.append(
+                f"Year-end mod would land at {m_end:.3f}, outside the filed range "
+                f"[{lo:.2f}, {hi:.2f}]."
+            )
+    feasible = (k_post != 0.0 and c == c and abs(c) <= max_reasonable_step
+                and post_share >= min_post_share
+                and combo.mod_adjustment_enabled and combo.net_sel_p is None)
+    return ModSolverResult(
+        required_step=c,
+        directed_equivalent=c / achievement if achievement else float("nan"),
+        k_pre=k_pre,
+        k_post=k_post,
+        denominator=den,
+        mbar_needed=mbar_needed,
+        post_share=post_share,
+        feasible=feasible,
+        warnings=warnings,
+    )
+
+
+def base_plus(changes: Sequence[RateChange], eff: dt.date, c: float) -> tuple:
+    """``changes`` with one more step of ``c`` on ``eff`` (already achieved)."""
+    return tuple(changes) + (RateChange(eff, c, STATUS_TAKEN, False),)
+
+
+def mod_timing_table(
+    plan_year: int, combo: ComboInputs, target_cy_lr: float, achievement: float = 1.0
+) -> list[dict]:
+    """The March-versus-May exhibit: required mod step by effective month.
+
+    One row per month of the plan year. The required step grows as the date
+    slips because less of the year is left to earn it, and past some month the
+    arithmetic runs off the end — ``feasible`` marks where the cliff is.
+    """
+    rows = []
+    for m in range(1, 13):
+        eff = dt.date(plan_year, m, 1)
+        r = solve_mod_for_target(plan_year, combo, target_cy_lr, eff, achievement)
+        rows.append(
+            dict(
+                month=m,
+                effective=eff,
+                required_step=r.required_step,
+                directed=r.directed_equivalent,
+                post_share=r.post_share,
+                feasible=r.feasible,
+            )
+        )
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # Net delivery decomposition (DECISIONS.md D57)
 #
 # Given a net rate selection x from 1/1/P and ONE new rate change r at a

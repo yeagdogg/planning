@@ -686,6 +686,10 @@ def build(cfg: Config, lob_name: str) -> Workbook:
     sheets_report.build_readme(ctx)
 
     ctx.flush_names()
+    # D71: every chart is built by now, so sweep their titles out of the plot
+    # area in one place — a per-chart fix is a thing the next chart forgets.
+    from .xlstyle import unoverlay_titles
+    unoverlay_titles(wb)
     wb.calculation.calcMode = "auto"
     wb.calculation.fullCalcOnLoad = True
     return wb

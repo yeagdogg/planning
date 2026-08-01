@@ -41,6 +41,7 @@ from src.build_workbook import (  # noqa: E402
     sample_lr_rows, sample_mod_rows, sample_rate_rows, sample_seasonality_rows,
     sample_to_combo,
 )
+from src.sheets_inputs import lr_letter  # noqa: E402
 from tools.recalc import recalc  # noqa: E402
 
 ERR_STRINGS = ("#DIV/0!", "#REF!", "#N/A", "#NAME?", "#VALUE!", "#NUM!", "#NULL!",
@@ -170,6 +171,8 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
     vis_only = []
     legend_over = []
     n_legends = 0
+    title_over = []
+    n_titles = 0
     with zipfile.ZipFile(path) as z:
         for name in z.namelist():
             if re.match(r"xl/charts/chart\d+\.xml$", name):
@@ -189,6 +192,14 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
                     n_legends += 1
                     if not re.search(r'<(c:)?overlay val="0"', leg.group(0)):
                         legend_over.append(name.split("/")[-1])
+                # D71: chart and AXIS titles carry the same <c:overlay>, and an
+                # overlaid axis title is drawn behind the plot area. Guarding
+                # every title (not just the legend) is what keeps a newly added
+                # chart from silently reintroducing it.
+                for t in re.finditer(r"<(c:)?title>.*?</(c:)?title>", xml, re.S):
+                    n_titles += 1
+                    if not re.search(r'<(c:)?overlay val="0"', t.group(0)):
+                        title_over.append(name.split("/")[-1])
     check("chart axes visible after Excel resave (1 intentional hide only)",
           total_axes >= 16 and deleted == 1,
           f"{deleted} deleted of {total_axes} axes")
@@ -196,6 +207,8 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
           "; ".join(vis_only[:5]))
     check(f"no legend overlaps its plot area ({n_legends} legends, D69)",
           not legend_over, "; ".join(legend_over[:6]))
+    check(f"no chart or axis title overlaps its plot area ({n_titles} titles, D71)",
+          not title_over, "; ".join(title_over[:6]))
 
     print("Phase C: oracle ties (default state)")
     p = cfg.plan_year
@@ -708,7 +721,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
     def a2(wb):
         check("[combo mod OFF] CY LR ties oracle", approx(nval(wb, "nr_CYLR_P"),
               off_m.cy_lr_p, 1e-9))
-    run("combo mod OFF", {("Inputs", f"P{we_row_xl}"): "OFF"}, a2)
+    run("combo mod OFF", {("Inputs", f"{lr_letter('lr_modadj')}{we_row_xl}"): "OFF"}, a2)
 
     # 3. basis proposed on the worked-example combo
     prop_m = engine.run_bridge(p, replace(base_combo, lr_basis="proposed", sel_change=0.05),
@@ -719,7 +732,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
               approx(nval(wb, "nr_LRcur"), 0.65 * 1.05, 1e-12))
         check("[basis proposed] CY LR ties oracle", approx(nval(wb, "nr_CYLR_P"),
               prop_m.cy_lr_p, 1e-9))
-    run("basis proposed", {("Inputs", f"D{we_row_xl}"): "proposed"}, a3)
+    run("basis proposed", {("Inputs", f"{lr_letter('lr_basis')}{we_row_xl}"): "proposed"}, a3)
 
     # 4. seasonality ON for a state with a seeded profile
     se_state = season_rows[0]["state"] if season_rows else None
@@ -972,7 +985,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
               approx(nval(wb, "nr_CYLR_P1"), net_m.cy_lr_p1, 1e-9))
         check("[net 8%] A_mod collapses to 1", approx(nval(wb, "nr_Amod_P"), 1.0, 1e-12))
         check("[net 8%] net mode flag TRUE", nval(wb, "nr_NetMode") is True)
-    run("net selection 8%", {("Inputs", f"Q{we_row_xl}"): 0.08}, a9d)
+    run("net selection 8%", {("Inputs", f"{lr_letter('lr_netp')}{we_row_xl}"): 0.08}, a9d)
 
     # 9e. scenario D-net lever on top of a net selection
     net_s1 = engine.run_bridge(p, replace(base_combo, net_sel_p=0.10), "monthly")
@@ -983,7 +996,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
               approx(got, net_s1.cy_lr_p, 1e-9), f"wb={got} oracle={net_s1.cy_lr_p}")
         check("[net + D-net 2%] base column still ties 8% net",
               approx(wb["Scenarios"]["C14"].value, net_m.cy_lr_p, 1e-9))
-    run("net + scenario D-net", {("Inputs", f"Q{we_row_xl}"): 0.08,
+    run("net + scenario D-net", {("Inputs", f"{lr_letter('lr_netp')}{we_row_xl}"): 0.08,
                                  ("Scenarios", "C10"): 0.02}, a9e)
 
     # 9f. in-book rename of a BU and a state (D42): every dropdown list, the
@@ -991,7 +1004,8 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
     ren_state = st[1] if len(st) > 1 else st[0]
     ren_row = next(x for x in lr_rows if x["bu"] == _bu(cfg, 1) and x["state"] == ren_state)
     ren_lr_xl = L.LR_FIRST + lr_rows.index(ren_row)
-    muts = {("Inputs", f"A{ren_lr_xl}"): "BU-X", ("Inputs", f"B{ren_lr_xl}"): "ZZ",
+    muts = {("Inputs", f"{lr_letter('lr_bu')}{ren_lr_xl}"): "BU-X",
+            ("Inputs", f"{lr_letter('lr_state')}{ren_lr_xl}"): "ZZ",
             ("Control", "C7"): "BU-X", ("Control", "C8"): "ZZ"}
     for i, rr in enumerate(rate_rows):
         if rr["bu"] == _bu(cfg, 1) and rr["state"] == ren_state:
@@ -1044,7 +1058,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
                 check("[net delivery: WE net 8%] suggested r* ties oracle",
                       approx(got, r_we, 1e-9), f"wb={got} oracle={r_we}")
             run("net delivery: worked example net-on",
-                {("Inputs", f"Q{we_row_xl}"): 0.08, ("Net Delivery", "B5"): _bu(cfg, 0)},
+                {("Inputs", f"{lr_letter('lr_netp')}{we_row_xl}"): 0.08, ("Net Delivery", "B5"): _bu(cfg, 0)},
                 a9g1)
 
             # (ii) a mid-month state date exercises the day-blend p
@@ -1184,7 +1198,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
               nval(wb, "ck_overall") == "ALL CHECKS PASS",
               str(nval(wb, "ck_overall")))
     run("program basis: worked example switched to net",
-        {("Inputs", f"Q{we_row_xl}"): 0.08}, a9i)
+        {("Inputs", f"{lr_letter('lr_netp')}{we_row_xl}"): 0.08}, a9i)
 
     # 9h. Program Flow / dashboard written-legs exercises (D59)
     from src.sheets_programflow import (PF_PLAN_COL as PFPC, PF_PRIOR_COL as PFYC,
