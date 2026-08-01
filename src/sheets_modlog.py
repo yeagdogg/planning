@@ -123,7 +123,18 @@ def build_mod_log(ctx: Ctx):
         formula(ws, f"R{r}",
                 f'=IF($C{r}="","",COUNTIFS(ml_key,$I{r},ml_eff,"<"&$C{r})'
                 f"+COUNTIFS($I${fr}:$I{r},$I{r},$C${fr}:$C{r},$C{r}))", fmt=FMT_INT)
-        for cL in "IJKLMNOPQR":
+        # first action among the TAKEN rows of this key + cohort month. The
+        # plain first-flag (P) is status-blind, so a planned action earlier in
+        # the month would steal it and the mod solve's taken-only base would
+        # silently drop the taken action from that cohort — D58, on the mod leg.
+        formula(ws, f"V{r}",
+                f'=IF(OR($C{r}="",$E{r}<>"taken"),0,'
+                f'IF(AND(COUNTIFS(ml_key,$I{r},ml_effmonth,$L{r},ml_eff,"<"&$C{r},'
+                f'ml_status,"taken")=0,'
+                f"COUNTIFS($I${fr}:$I{r},$I{r},$L${fr}:$L{r},$L{r},"
+                f'$C${fr}:$C{r},$C{r},$E${fr}:$E{r},"taken")=1),1,0))',
+                fmt=FMT_INT)
+        for cL in "IJKLMNOPQRV":
             ws[f"{cL}{r}"].font = font(GREY_DARK, size=9)
         # live feedback: what share of the plan year this action actually earns
         formula(ws, f"T{r}",
@@ -170,6 +181,8 @@ def build_mod_log(ctx: Ctx):
         "ml_first": ("P", "Helper: 1 for the first action in its BU|State cohort month"),
         "ml_dup": ("Q", "Helper: 1 when >1 action shares a BU|State cohort month"),
         "ml_seq": ("R", "Helper: chronological rank of the action within its BU|State key"),
+        "ml_firsttaken": ("V", "Helper: 1 for the first TAKEN action in its key + cohort "
+                               "month (the mod solve's status-aware split flag, D58/D73)"),
     }
     for name, (colL, desc) in ml_names.items():
         ctx.define(name, SHEETS.MOD_LOG, f"${colL}${fr}:${colL}${lr_}", desc)
@@ -192,6 +205,9 @@ def build_mod_log(ctx: Ctx):
         "what share of the plan year the action actually earns for the combo selected on "
         "Control — the cost of a late effective date, in the one number that makes it "
         "obvious.", fnt=F_SMALL_IT)
-    set_widths(ws, {"T": 16, "U": 30})
+    put(ws, f"V{L.ML_HDR}", "First taken?", fnt=font(GREY_DARK, bold=True, size=9),
+        fill=FILL_GREY)
+    set_widths(ws, {"T": 16, "U": 30, "V": 11})
+    ws.column_dimensions["V"].outlineLevel = 1
     presentation_setup(ws, gridlines_off=False, freeze=f"C{L.ML_FIRST}", tab_color=STEEL)
     print_setup(ws)

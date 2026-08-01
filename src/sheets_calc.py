@@ -620,25 +620,64 @@ def build_calc(ctx: Ctx):
     # rl_first is filter-blind, and a planned row earlier in a taken row's
     # cohort month would steal the flag, zero the L column, and silently drop
     # the taken change from that cohort's W0 (D58; oracle filters first).
+    # D73: the block carries a MOD leg too, so the same block serves Mode A/B
+    # (solve on rate) and Mode C (solve on a dated mod step).
+    #   V = mod-action count for the solve combo, +1 for the step being solved
+    #       for. The count drives the re-anchor, and the answer will always
+    #       contain at least one action, so the base must already be
+    #       re-anchored — the workbook form of the oracle's zero-step base.
+    #   W = M_endPrior for the solve combo (M_0 when blank)
+    # every mod input resolved for slv_key, NOT the Control selection — the
+    # Solver's override can detach the two, and reading nr_M0 here would
+    # quietly solve the wrong combo
+    sr = "MATCH(slv_key,lr_key,0)"
+    f_grey(ws, f"V{t}", "=COUNTIF(ml_key,slv_key)+1", FMT_INT)
+    f_grey(ws, f"W{t}",
+           f"=IF(COUNTIF(lr_key,slv_key)=0,1,"
+           f"IF(N(INDEX(lr_mendprior,{sr}))=0,INDEX(lr_m0,{sr}),"
+           f"INDEX(lr_mendprior,{sr})))", FMT_MOD)
+    f_grey(ws, f"X{t}", f"=IF(COUNTIF(lr_key,slv_key)=0,1,INDEX(lr_m0,{sr}))", FMT_MOD)
+    f_grey(ws, f"Y{t}",
+           f"=IF(COUNTIF(lr_key,slv_key)=0,DATE(nr_PlanYear-1,10,1),"
+           f"INDEX(lr_m0asof,{sr}))", "mm/dd/yyyy")
+    f_grey(ws, f"Z{t}", f"=IF(COUNTIF(lr_key,slv_key)=0,0,N(INDEX(lr_mprior,{sr})))",
+           FMT_MOD)
+    anchors_s = write_mod_anchor_cells(
+        ws, ctx, t + 1, 1,
+        mind_ref="nr_MInd", m0_ref=f"$X${t}", asof_ref=f"$Y${t}",
+        m1_ref=f"$W${t}", mprior_ref=f"$Z${t}", m2_ref=f"$W${t}",
+        steps_cond="TRUE", mend_ref=f"$W${t}")
     blk = write_cohort_block(
         ws, ctx, t + 3, LogRefs(key_cond="slv_key", taken_only=True,
                                 first="rl_firsttaken"),
         t_ref="nr_TermMonths", srow_ref=f"$M${t}", ssum_ref=f"$N${t}",
-        anchors=None, include_mod=False, header=True, header_row_at=t + 2)
+        anchors=anchors_s, header=True, header_row_at=t + 2,
+        mod_refs=LogRefs(key_cond="slv_key", eff="ml_eff", ln="ml_ln1p",
+                         effmonth="ml_effmonth", first="ml_firsttaken",
+                         daysafter="ml_daysafter", taken_only=True,
+                         status="ml_status"),
+        mod_col=27, mod_base_ref=f"$W${t}", mod_count_ref=f"$V${t}")
     bf, bl = blk["first"], blk["last"]
-    put(ws, f"S{t + 2}", "w-ec-W0", fnt=font(GREY_DARK, size=8))
-    put(ws, f"T{t + 2}", "cum", fnt=font(GREY_DARK, size=8))
-    put(ws, f"U{t + 2}", "w-ec-W0eom", fnt=font(GREY_DARK, size=8))
+    for cL, hdr_ in (("S", "w-ec-W0"), ("T", "cum"), ("U", "w-ec-W0eom"),
+                     ("AG", "w-ec-M0"), ("AH", "cum mod"), ("AI", "w-ec-Meom")):
+        put(ws, f"{cL}{t + 2}", hdr_, fnt=font(GREY_DARK, size=8))
+    mc = [col(27 + i) for i in range(5)]     # AA..AE: the mod index helper strip
     for i in range(L.N_COH):
         r = bf + i
         f_grey(ws, f"S{r}", f"=$H{r}*$Q{r}*$N{r}", FMT_IDX)
         f_grey(ws, f"T{r}", f"=SUM($S${bf}:$S{r})", FMT_IDX)
         f_grey(ws, f"U{r}", f"=$H{r}*$Q{r}*$J{r}", FMT_IDX)
+        # mod analogues: level in force, running total, and the end-of-month
+        # mod the split month's post-share is valued at
+        f_grey(ws, f"AG{r}", f"=$H{r}*$Q{r}*$O{r}", FMT_IDX)
+        f_grey(ws, f"AH{r}", f"=SUM($AG${bf}:$AG{r})", FMT_IDX)
+        f_grey(ws, f"AI{r}", f"=$H{r}*$Q{r}*$W${t}*${mc[1]}{r}", FMT_IDX)
     rr = t + 51
     label(ws, f"A{rr}", "solver totals:")
     _grey(ws, f"A{rr}")
     f_grey(ws, f"B{rr}", f"=SUMPRODUCT({blk['w']},{blk['ec_p']})", FMT_IDX)   # D
     f_grey(ws, f"C{rr}", f"=SUM($S${bf}:$S${bl})", FMT_IDX)                   # total blend
+    f_grey(ws, f"D{rr}", f"=SUM($AG${bf}:$AG${bl})", FMT_IDX)                 # total mod
     ctx.lay_dyn["solver"] = dict(first=bf, last=bl)
     slv_names = {
         "slv_absmi": (f"$G${bf}:$G${bl}", "Solver block: absolute cohort month indices"),
@@ -652,6 +691,12 @@ def build_calc(ctx: Ctx):
         "slv_weom_c": (f"$U${bf}:$U${bl}", "Solver block: w-ec-W0_eom by cohort"),
         "slv_den": (f"$B${rr}", "Solver denominator D = SUM w-ec over CY P"),
         "slv_total": (f"$C${rr}", "Solver total SUM w-ec-W0 over CY P"),
+        # D73 mod leg
+        "slv_modcum": (f"$AH${bf}:$AH${bl}", "Solver block: cumulative w-ec-M_w (taken "
+                                             "mod actions only)"),
+        "slv_meom_c": (f"$AI${bf}:$AI${bl}", "Solver block: w-ec-M_eom by cohort"),
+        "slv_mtotal": (f"$D${rr}", "Solver total SUM w-ec-M_w over CY P"),
+        "slv_mbase": (f"$W${t}", "Solver block: M_endPrior the mod steps compound on"),
     }
     for name, (ref, desc) in slv_names.items():
         ctx.define(name, "_calc", ref, desc)

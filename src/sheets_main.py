@@ -14,9 +14,9 @@ from .xlstyle import (
     ALIGN_C, ALIGN_WRAP, BORDER_THIN, DOWN_BAR, F_HEADER, F_LABEL, F_SMALL_IT, FAIL_RED,
     FILL_GREY, FILL_NAVY, FILL_PANEL, FMT_DATE, FMT_EP_Z, FMT_GEN, FMT_IDX, FMT_IDX_Z,
     FMT_INT, FMT_MOD, FMT_PCT, FMT_PCT_Z, GREY_DARK, NAVY, STEEL, STEEL_LIGHT,
-    TOTAL_BAR, UP_BAR, WARN_AMBER, col, font, formula, header_row, input_cell, jump,
-    label, link, nav_bar, note, presentation_setup, print_setup, prose, put, section,
-    set_widths, title,
+    TOTAL_BAR, UP_BAR, WARN_AMBER, chart_legend, col, font, formula, header_row,
+    input_cell, jump, label, link, nav_bar, note, presentation_setup, print_setup,
+    prose, put, section, set_widths, title,
 )
 
 PTS_Z = '+0.00 "pts";-0.00 "pts";""'
@@ -43,6 +43,11 @@ def _style_chart(chart, title_text, x_title=None, y_title=None, height=8.5, widt
         chart.x_axis.delete = False
     if chart.y_axis.delete is None:
         chart.y_axis.delete = False
+    # D69, centralised: a legend left at openpyxl's default is drawn ON TOP of
+    # the series. Callers that want no legend set it to None before styling and
+    # are untouched; everyone else gets it moved out of the plot area here,
+    # rather than each new chart having to remember (D71's lesson).
+    chart_legend(chart)
     return chart
 
 
@@ -1212,6 +1217,107 @@ def build_solver(ctx: Ctx):
                  "month (later start = less earned benefit; dashed = target)",
                  y_title="Full-year plan LR", height=8, width=14)
     ws.add_chart(lc, "K28")
+
+    # ---- Mode C: the same target, on the MOD lever (D73) ----
+    section(ws, 45, "B",
+            "Mode C — the same target on the PRICING lever: what dated mod action gets "
+            "you there, and what it costs to wait")
+    put(ws, "B46",
+        "Earned mod is linear in a dated mod step exactly as the earned rate index is "
+        "linear in a filed change, so this inverts in closed form too. Same target as "
+        "Mode A (C7); the rate program is taken AS GIVEN here, including planned filings "
+        "— the question is what pricing you still need on top of it. Planned mod actions "
+        "are excluded, because they are what you are solving for.", fnt=F_SMALL_IT)
+    label(ws, "B47", "Mod achievement % assumed")
+    input_cell(ws, "C47", 0.70, fmt=FMT_PCT)
+    note(ws, "D47", "mod is rarely fully realised — the DIRECTED column is what you have "
+                    "to aim at to land the required step")
+    # a mod step needs its OWN bound: the rate bound is far too loose here,
+    # because mods live in [0.5, 1.5] and a 15% step already moves 0.85 to 0.98
+    put(ws, "F47", "Reasonability bound |step|", fnt=font(GREY_DARK, size=9))
+    input_cell(ws, "G47", 0.15, fmt=FMT_PCT, required=False)
+    ctx.define("nr_SolvMaxMod", "Solver", "$G$47",
+               "Mode C reasonability bound on a single mod step (mods are levels in "
+               "[0.5, 1.5], so this is much tighter than the rate bound)")
+    lc_ = [
+        ("Mod adjustment in force for this combo?",
+         '=IF(COUNTIF(lr_key,slv_key)=0,0,IF(AND(nr_ModAdjMaster="ON",'
+         'INDEX(lr_modadj,MATCH(slv_key,lr_key,0))="ON"),1,0))', FMT_INT, "slv_modon"),
+        ("Mod assumed in indication (M_ind)",
+         "=IF(slv_row=0,1,INDEX(lr_mind,slv_row))", FMT_MOD, "slv_mind"),
+        ("Rate earn-in in force (A_rate)",
+         "=IF(slv_row=0,1,INDEX(calc_arate_p,slv_row))", FMT_IDX, "slv_arate"),
+        ("Earned mod needed (Mbar)",
+         '=IF(OR(slv_lrcur=0,$C$7=""),0,'
+         "slv_lrcur*slv_arate*slv_aother*slv_mind/$C$7)", FMT_MOD, "slv_mbarneed"),
+    ]
+    for i, (lbl, f, fmt, name) in enumerate(lc_):
+        r = 48 + i
+        label(ws, f"B{r}", lbl)
+        formula(ws, f"C{r}", f, fmt=fmt, border=BORDER_THIN)
+        ctx.define(name, "Solver", f"$C${r}", lbl)
+    formula(ws, "F48",
+            '=IF(slv_row=0,"",IF(slv_modon=0,'
+            '"MOD ADJUSTMENT IS OFF for this combo — A_mod is pinned at 1.000 and no mod '
+            'action can move the plan LR. Solve on rate instead.",'
+            'IF(INDEX(calc_netmode,slv_row)=1,"NET SELECTION ACTIVE — the net path '
+            'supersedes the mod leg from 1/1 (D39); these figures are the '
+            'explicit-program counterfactual.","")))')
+    ws["F48"].font = font(FAIL_RED, size=9, italic=True)
+
+    header_row(ws, 52, 2,
+               ["Effective month", "Effective", "K_pre", "K_post",
+                "Required mod step", "Directed (step / achievement)",
+                "Share left to earn", "Feasible?"],
+               widths=[13, 11, 10, 10, 14, 16, 13, 11])
+    for m in range(1, 13):
+        r = 52 + m
+        row_m = bf + 24 + (m - 1)          # cohort row of month m of P
+        formula(ws, f"B{r}", f'=TEXT(DATE(nr_PlanYear,{m},1),"mmm yyyy")', align=ALIGN_C)
+        formula(ws, f"C{r}", f"=DATE(nr_PlanYear,{m},1)", fmt=FMT_DATE, align=ALIGN_C)
+        # a 1st-of-month date makes the D31 split p = 1, so K_pre is the running
+        # total through the previous cohort and K_post is everything after,
+        # with the effective month itself valued at its END-of-month mod
+        link(ws, f"D{r}", f"='_calc'!$AH${row_m - 1}", fmt=FMT_IDX, align=ALIGN_C)
+        link(ws, f"E{r}", f"=slv_mtotal-'_calc'!$AH${row_m}+'_calc'!$AI${row_m}",
+             fmt=FMT_IDX, align=ALIGN_C)
+        formula(ws, f"F{r}",
+                f'=IF(OR($E{r}=0,slv_mbarneed=0),"n/a",'
+                f"(slv_mbarneed*slv_den-$D{r})/$E{r}-1)", fmt="0.000%", align=ALIGN_C)
+        formula(ws, f"G{r}",
+                f'=IF(OR(NOT(ISNUMBER($F{r})),$C$47=0),"n/a",$F{r}/$C$47)',
+                fmt="0.000%", align=ALIGN_C, bold=True)
+        formula(ws, f"H{r}", f"=$E{r}/($D{r}+$E{r})", fmt=FMT_PCT, align=ALIGN_C)
+        formula(ws, f"I{r}",
+                f'=IF(NOT(ISNUMBER($F{r})),"no",'
+                f'IF(AND(ABS($F{r})<=nr_SolvMaxMod,$H{r}>=nr_SolvMinShare,'
+                f'slv_modon=1),"YES","no"))', align=ALIGN_C)
+        formula(ws, f"J{r}", f'=IF($I{r}="YES",{m},0)', fmt=FMT_INT)
+        ws[f"J{r}"].font = font(GREY_DARK, size=8)
+    put(ws, "J52", "helper", fnt=font(GREY_DARK, size=8))
+    label(ws, "B66", "Latest month a mod action still carries the target", bold=True)
+    formula(ws, "E66",
+            '=IF(MAX($J$53:$J$64)=0,"No month works on the mod lever alone",'
+            'TEXT(DATE(nr_PlanYear,MAX($J$53:$J$64),1),"mmm yyyy"))', bold=True,
+            fill=FILL_PANEL)
+    put(ws, "B67",
+        "Read the two rows you care about side by side: acting early costs a smaller "
+        "step because more of the plan year is still there to earn it. Past the last "
+        "feasible month the arithmetic still returns a number, but it is one nobody "
+        "could file.", fnt=F_SMALL_IT)
+
+    mc_ = LineChart()
+    mc_.add_data(Reference(ws, min_col=6, min_row=52, max_row=64), titles_from_data=True)
+    mc_.add_data(Reference(ws, min_col=7, min_row=52, max_row=64), titles_from_data=True)
+    mc_.set_categories(Reference(ws, min_col=2, min_row=53, max_row=64))
+    _line_color(mc_.series[0], NAVY)
+    _line_color(mc_.series[1], STEEL, dashed=True)
+    mc_.y_axis.number_format = "0.0%"
+    _style_chart(mc_,
+                 "The cost of waiting: mod step required by effective month "
+                 "(dashed = what you must direct at the assumed achievement)",
+                 y_title="Required mod step", height=8, width=14)
+    ws.add_chart(mc_, "K52")
 
     set_widths(ws, {"A": 2, "B": 38, "C": 12, "D": 30, "E": 3, "F": 30, "G": 11})
     presentation_setup(ws, gridlines_off=True, tab_color=STEEL)
