@@ -26,6 +26,8 @@ from src.engine import (
     ModInputs,
     MonthlyEngine,
     RateChange,
+    add_months,
+    mi_mid_ordinal,
     month_index,
     program_flow_by_month,
     run_bridge,
@@ -263,3 +265,73 @@ def test_mod_steps_with_the_adjustment_off_are_advised_inert():
 def test_two_mod_steps_in_one_month_are_advised():
     combo = _combo([_step(4, 5, 0.02), _step(4, 20, 0.01)])
     assert any("share cohort month" in s for s in validate_inputs(P, combo))
+
+
+# ---------------------------------------------------------------------------
+# The degenerate as-of date: "mods as of 12/31 of the prior year"
+#
+# D70 moves the drift path's forward anchor back to 12/31/(P-1). An as-of date
+# on or after that leaves no history segment at all — the engine drops the
+# switch anchor rather than building a zero-width one. Ordinary thing to type,
+# so it is pinned rather than validated away.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("asof", [dt.date(P - 1, 12, 31), dt.date(P, 6, 30)])
+def test_asof_at_or_after_the_switch_leaves_a_flat_history(asof):
+    """M_prior blank: nothing anchors the history but M_0 itself."""
+    mods = _mods(m0=0.900, m0_asof=asof, m_end_prior=0.870)
+    eng = MonthlyEngine(P, _combo([RateChange(dt.date(P, 3, 1), 0.02, "taken", False)],
+                                  mods=mods))
+    for k in range(month_index(P - 2, 1), month_index(P, 1)):
+        assert eng.written_mod(k) == pytest.approx(0.900, abs=1e-12)
+
+
+@pytest.mark.parametrize("asof", [dt.date(P - 1, 12, 31), dt.date(P, 6, 30)])
+def test_asof_at_or_after_the_switch_keeps_the_prior_line(asof):
+    """M_prior present: the M_prior -> M_0 line, extrapolated, and nothing
+    snaps to m_end_prior — there is no segment left for it to anchor."""
+    mods = _mods(m0=0.900, m_prior=0.860, m0_asof=asof, m_end_prior=0.870)
+    eng = MonthlyEngine(P, _combo([RateChange(dt.date(P, 3, 1), 0.02, "taken", False)],
+                                  mods=mods))
+    x0, x1 = float(add_months(asof, -12).toordinal() + 1), float(asof.toordinal() + 1)
+    slope = (0.900 - 0.860) / (x1 - x0)
+    for k in range(month_index(P - 2, 1), month_index(P, 1)):
+        want = 0.860 + slope * (mi_mid_ordinal(k) - x0)
+        assert eng.written_mod(k) == pytest.approx(want, abs=1e-12)
+
+
+def test_degenerate_asof_still_steps_on_m_end_prior():
+    """The plan year is unaffected: the log still compounds on M_endPrior."""
+    mods = _mods(m0=0.900, m0_asof=dt.date(P - 1, 12, 31), m_end_prior=0.870)
+    eng = MonthlyEngine(P, _combo([RateChange(dt.date(P, 1, 1), 0.02, "taken", False)],
+                                  mods=mods))
+    assert eng.mod_base == pytest.approx(0.870, abs=1e-15)
+    assert eng.written_mod(month_index(P, 6)) == pytest.approx(0.870 * 1.02, abs=1e-12)
+
+
+def test_blank_m_end_prior_extends_the_drift_it_does_not_stop_at_m0():
+    """The contract the workbook has to match: a blank M_endPrior means the
+    planner has not RESTATED the level, not that the mod stops drifting. The
+    engine reads the unswitched anchor path at 12/31/(P-1); M_0 would silently
+    discard the drift already entered."""
+    mods = _mods(m0=0.840, m0_asof=dt.date(P - 1, 9, 30), m1=0.845, m_end_prior=None)
+    eng = MonthlyEngine(P, _combo([RateChange(dt.date(P, 4, 1), 0.02, "taken", False)],
+                                  mods=mods))
+    want = eng.mod_path.value(eng.x_switch)
+    assert eng.mod_base == pytest.approx(want, abs=1e-15)
+    assert eng.mod_base > 0.840 + 1e-5          # strictly past M_0 — drift is real
+    assert eng.mod_base < 0.845                 # but has not reached M_1 either
+
+
+def test_blank_m_end_prior_with_m_prior_and_a_degenerate_as_of():
+    """Both edge cases at once: no restated level AND no history segment. The
+    fallback lands on the M_prior -> M_0 line, which is the only line left."""
+    mods = _mods(m0=0.900, m_prior=0.860, m0_asof=dt.date(P, 6, 30), m_end_prior=None)
+    eng = MonthlyEngine(P, _combo([RateChange(dt.date(P, 7, 1), 0.02, "taken", False)],
+                                  mods=mods))
+    x0 = float(add_months(mods.m0_asof, -12).toordinal() + 1)
+    x1 = float(mods.m0_asof.toordinal() + 1)
+    xs = float(dt.date(P - 1, 12, 31).toordinal() + 1)
+    want = 0.860 + (0.900 - 0.860) / (x1 - x0) * (xs - x0)
+    assert eng.mod_base == pytest.approx(want, abs=1e-12)

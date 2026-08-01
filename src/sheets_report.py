@@ -588,6 +588,8 @@ def build_checks(ctx: Ctx):
        "=0", "=nd_YagoDiff", 1e-9, "FAIL"))
     A(("Structure", "Engine net path satisfies T(m)/T(m-12) = 1 + x (band combo)",
        "=0", "=nd_NetSelfChk", 1e-9, "FAIL"))
+    A(("Structure", "Mod-step columns reproduce the engine mod path on stepped combos",
+       "=0", "=nd_MaxStepDiff", 1e-9, "FAIL"))
     A(("Advisory", "Net Delivery feasibility flags in view (mod/rate bounds, thin share)",
        "=0", '=IF(nd_BU="All",0,SUMPRODUCT((ndd_flags<>"")*(ndd_flags<>"—")*1))',
        0, "WARN"))
@@ -908,6 +910,21 @@ def build_methodology(ctx: Ctx):
          "affine in M_1 along the anchor path, so the year-end written mod M_1' that "
          "delivers the target given r also solves in one sum. The required pricing "
          "change by month is (1+x)/(1+rate leg) - 1 — the Net Delivery grids.",
+         "The pricing ask is published twice (D75), because a LEVEL is the natural "
+         "answer only while the mod path is a drift line: once the Mod Log holds "
+         "actions the log pins the path, there is no free M_1 to solve for, and M_1' "
+         "reads n/a. The second form is an ACTION — a dated mod change at the "
+         "FILING's own date, since one filing normally carries both levers — and it "
+         "always answers. Along the stepped path the plan-year written mod is affine "
+         "in (1 + c), M_w(m) = A(m) + B(m) x (1 + c), mirroring W_new(m) = A + B x r "
+         "term for term, so the required step solves in the same one sum with the "
+         "same h(m) weights. Divide by the achievement assumption to get what you "
+         "must direct. Its base is the mod log WHOLE, not the Solver's taken-only "
+         "base: a net selection supersedes planned FILINGS (D39), but a logged mod "
+         "action is the pricing plan this exhibit measures the target against. "
+         "Asking for a step commits the combo to the stepped regime, so the D70 "
+         "re-anchor is in force even when the log is empty — history runs to "
+         "M_endPrior at 12/31/(P-1) and the step compounds on that level.",
          "Constraints and honesty: D must lie inside the plan year (a prior-year "
          "vehicle also changes the year-ago comparison base — enter it in the Rate "
          "Log); the P+1 selection is out of scope (its year-ago base is itself the "
@@ -1134,7 +1151,8 @@ READ_ME_GUIDE = [
                      "Net Delivery), the year now flowing beside the plan year. 'All' = "
                      "the EP-weighted book view."),
     ("Net Delivery", "For net-target combos: the month-by-month rate leg and the pricing "
-                     "change that satisfies the target, plus the suggested filing."),
+                     "change that satisfies the target — the filing to make and the mod "
+                     "change to file with it, both dated."),
     ("Bridge", "The selected combo's answer: projected LR -> CY plan LR, factor by factor."),
     ("Walkthrough", "The fully worked example — every calculation for the selected combo, "
                     "start to finish."),

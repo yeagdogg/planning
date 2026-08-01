@@ -1450,6 +1450,147 @@ def required_m1(
     return num / den
 
 
+@dataclass
+class NetModStepResult:
+    required_step: float        # c, the achieved mod step at mod_eff
+    directed_equivalent: float  # c / achievement — what you must direct
+    mod_eff: dt.date
+    mod_base: float             # level the step compounds on (12/31/(P-1))
+    m_end: float                # implied written mod at 12/31/P
+    ha: float                   # sum h(m)*A(m) — delivery the step cannot move
+    hb: float                   # sum h(m)*B(m) — the step's leverage
+    post_share: float           # share of delivered index the step can move
+    feasible: bool
+    warnings: list
+
+
+def required_mod_step(
+    plan_year: int,
+    combo: ComboInputs,
+    eff_date: dt.date,
+    r: float,
+    mod_eff: dt.date | None = None,
+    achievement: float = 1.0,
+    max_reasonable_step: float = 0.15,
+    min_post_share: float = 0.05,
+    mod_bounds: tuple[float, float] = (0.5, 1.5),
+) -> NetModStepResult:
+    """The dated mod step that closes the delivery gap the filing ``r`` leaves (D75).
+
+    ``required_m1`` answers the same question as a LEVEL — the written mod has
+    to reach M_1' by year end — which is the right shape of answer only while
+    the mod path is a drift line. Once anything is logged, the log pins the
+    path, there is no free M_1 to solve for, and that answer reads n/a. This
+    is the answer as an ACTION: file a mod change of ``c`` at ``mod_eff``
+    (defaulting to the filing's own date, since one filing normally carries
+    both levers) and gross it up by ``achievement`` to get what you direct.
+
+    Closed form, exactly parallel to ``required_m1``. Along the stepped path
+    the plan-year written mod is affine in (1 + c),
+
+        M_w(m) = A(m) + B(m) * (1 + c),
+
+    so with the same h(m) = w(m) * W_new(m) / (W(m-12) * M_w(m-12)) weights,
+
+        sum h*A + (1 + c) * sum h*B = (1 + x) * sum w.
+
+    The base is the mod log WHOLE. A net selection supersedes planned FILINGS
+    (D39), but a logged mod action is the pricing plan this exhibit measures
+    the target against — the same reading ``net_delivery_components`` already
+    takes for the projected path. That differs on purpose from the Solver's
+    taken-only base (D13): the Solver asks what you must ADD to what is
+    locked, this asks what the PLAN still has to deliver.
+
+    Adding a step commits the combo to the stepped regime, so the D70
+    re-anchor is in force even when the log is empty — history runs to
+    m_end_prior at 12/31/(P-1) and the step compounds on that level. Solving
+    on the c = 0 member of that same family makes the linearisation exact
+    rather than nearly right.
+    """
+    comp = net_delivery_components(plan_year, combo, eff_date)
+    if not comp.mod_on:
+        raise ValueError(
+            "required_mod_step is undefined when the mod adjustment is off: "
+            "delivery carries no mod leg, so no mod action can move it (D39)."
+        )
+    d_m = mod_eff if mod_eff is not None else eff_date
+    if not dt.date(plan_year, 1, 1) <= d_m <= dt.date(plan_year, 12, 31):
+        raise ValueError(
+            f"Mod effective date {d_m} must lie inside plan year {plan_year}: a "
+            "prior-year step also moves the year-ago comparison base and the "
+            "closed form stops being exact (log it as history instead)."
+        )
+    base = base_plus(combo.mod_changes, d_m, 0.0)
+    eng = MonthlyEngine(plan_year, combo,
+                        changes_override=_live_changes(plan_year, combo),
+                        mod_changes_override=base)
+    k_m = month_index(d_m.year, d_m.month)
+    som, eom, dim = mi_first(k_m), mi_last(k_m), mi_days(k_m)
+    in_month = [mc.effective for mc in base if som <= mc.effective <= eom]
+    p_mod = ((eom - min(in_month)).days + 1) / dim   # base holds d_m, so non-empty
+    s_pre = step_index_at(base, som - dt.timedelta(days=1))
+    s_eom = step_index_at(base, eom)
+
+    ha = hb = 0.0
+    for j in range(12):
+        mi = comp.months[j]
+        if mi < k_m:
+            am, bm = eng.mod_base * blended_step_index(base, mi), 0.0
+        elif mi > k_m:
+            am, bm = 0.0, eng.mod_base * blended_step_index(base, mi)
+        else:
+            am = eng.mod_base * (1.0 - p_mod) * s_pre
+            bm = eng.mod_base * p_mod * s_eom
+        h = (comp.w[j] * (comp.a[j] + comp.b[j] * r)
+             / (comp.w12[j] * eng.written_mod(mi - 12)))
+        ha += h * am
+        hb += h * bm
+
+    warnings: list[str] = []
+    post_share = hb / (ha + hb) if (ha + hb) else 0.0
+    if hb == 0.0:
+        warnings.append(
+            f"No plan-year written exposure sits on/after {d_m}; no mod action "
+            "at this date can change what the year delivers."
+        )
+        c = m_end = float("nan")
+    else:
+        c = ((1.0 + comp.x) * comp.sum_w - ha) / hb - 1.0
+        m_end = eng.mod_base * step_index_at(
+            base_plus(combo.mod_changes, d_m, c), dt.date(plan_year, 12, 31))
+        if abs(c) > max_reasonable_step:
+            warnings.append(
+                f"Required step {c:+.1%} exceeds the +/-{max_reasonable_step:.0%} "
+                "reasonability bound."
+            )
+        lo, hi = mod_bounds
+        if not (lo <= m_end <= hi):
+            warnings.append(
+                f"Year-end written mod would land at {m_end:.3f}, outside the "
+                f"filed range [{lo:.2f}, {hi:.2f}]."
+            )
+        if post_share < min_post_share:
+            warnings.append(
+                f"Only {post_share:.1%} of what the year delivers sits on/after "
+                f"{d_m}; a mod action this late cannot carry the target."
+            )
+    feasible = (hb != 0.0 and c == c and abs(c) <= max_reasonable_step
+                and post_share >= min_post_share
+                and mod_bounds[0] <= m_end <= mod_bounds[1])
+    return NetModStepResult(
+        required_step=c,
+        directed_equivalent=c / achievement if achievement else float("nan"),
+        mod_eff=d_m,
+        mod_base=eng.mod_base,
+        m_end=m_end,
+        ha=ha,
+        hb=hb,
+        post_share=post_share,
+        feasible=feasible,
+        warnings=warnings,
+    )
+
+
 def net_delivery_by_month(
     plan_year: int, combo: ComboInputs, eff_date: dt.date, r: float
 ) -> list[dict]:

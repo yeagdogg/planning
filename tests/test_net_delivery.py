@@ -277,3 +277,186 @@ def test_by_month_rows_are_coherent():
     oct_row, mar_row = rows[9], rows[2]
     assert oct_row["rate_leg"] < mar_row["rate_leg"] - 0.05
     assert oct_row["price_leg_required"] > mar_row["price_leg_required"] + 0.05
+
+
+# ---------------------------------------------------------------------------
+# The mod ask as a dated ACTION (D75) — required_mod_step
+#
+# required_m1 answers with a LEVEL, which is the right shape only while the
+# mod path is a drift line. These tests pin the action form: apply the solved
+# step to the log, and the combo delivers its own target exactly.
+# ---------------------------------------------------------------------------
+
+
+def _with_step(combo, d_m, c):
+    """``combo`` with one more mod step of ``c`` on ``d_m``."""
+    return replace(combo, mod_changes=engine.base_plus(combo.mod_changes, d_m, c))
+
+
+def _delivered_with_step(combo, eff, r, d_m, c):
+    """Round-trip: written-weighted delivered net once the step is LOGGED."""
+    return _delivered_avg(net_delivery_components(P, _with_step(combo, d_m, c), eff), r)
+
+
+MOD_LOG = (
+    RateChange(dt.date(P - 1, 7, 1), -0.02, "taken", False),   # history (drift owns)
+    RateChange(dt.date(P, 2, 1), -0.015, "taken", False),      # plan year
+    RateChange(dt.date(P, 6, 10), -0.01, "planned", False),    # read WHOLE (D57)
+)
+
+
+@pytest.mark.parametrize("d_m", [
+    dt.date(P, 1, 1), dt.date(P, 3, 1), dt.date(P, 6, 10),   # co-occupies with a step
+    dt.date(P, 6, 20), dt.date(P, 7, 15), dt.date(P, 11, 1),
+])
+@pytest.mark.parametrize("log", [(), MOD_LOG])
+def test_solved_step_reproduces_the_target(d_m, log):
+    combo = _combo(SHOWCASE, mod_changes=log)
+    r, _ = suggest_net_rate(P, combo, dt.date(P, 4, 1))
+    res = engine.required_mod_step(P, combo, dt.date(P, 4, 1), r, mod_eff=d_m)
+    assert _delivered_with_step(combo, dt.date(P, 4, 1), r, d_m, res.required_step) == \
+        pytest.approx(1.0 + combo.net_sel_p, abs=1e-12)
+
+
+@pytest.mark.parametrize("r", [-0.05, 0.0, 0.03, 0.11])
+def test_solved_step_reproduces_the_target_at_any_filing(r):
+    """The step closes whatever gap the filing leaves — including a filing
+    that already overshoots, where the required step turns negative."""
+    combo = _combo(SHOWCASE, mod_changes=MOD_LOG)
+    res = engine.required_mod_step(P, combo, dt.date(P, 4, 1), r, mod_eff=dt.date(P, 4, 1))
+    assert _delivered_with_step(combo, dt.date(P, 4, 1), r, dt.date(P, 4, 1),
+                                res.required_step) == \
+        pytest.approx(1.0 + combo.net_sel_p, abs=1e-12)
+
+
+def test_delivery_is_exactly_affine_in_one_plus_c():
+    """The closed form is a linearisation only if delivery really is affine in
+    (1 + c). Two probes fix the line; a third has to land on it."""
+    combo = _combo(SHOWCASE, mod_changes=MOD_LOG)
+    eff, d_m, r = dt.date(P, 4, 1), dt.date(P, 5, 1), 0.06
+    y0 = _delivered_with_step(combo, eff, r, d_m, 0.0)
+    y1 = _delivered_with_step(combo, eff, r, d_m, 0.10)
+    for c in (-0.07, 0.035, 0.25):
+        assert _delivered_with_step(combo, eff, r, d_m, c) == \
+            pytest.approx(y0 + (y1 - y0) * c / 0.10, abs=1e-12)
+
+
+def test_step_defaults_to_the_filings_own_date():
+    """One filing carries both levers unless the caller says otherwise."""
+    combo = _combo(SHOWCASE, mod_changes=MOD_LOG)
+    eff = dt.date(P, 5, 15)
+    r, _ = suggest_net_rate(P, combo, eff)
+    assert engine.required_mod_step(P, combo, eff, r).required_step == \
+        engine.required_mod_step(P, combo, eff, r, mod_eff=eff).required_step
+
+
+def test_once_the_step_is_logged_nothing_more_is_required():
+    """The fixed point: solve, log the answer, and a later solve asks for 0."""
+    combo = _combo(SHOWCASE, mod_changes=MOD_LOG)
+    eff = dt.date(P, 4, 1)
+    r, _ = suggest_net_rate(P, combo, eff)
+    first = engine.required_mod_step(P, combo, eff, r, mod_eff=dt.date(P, 4, 1))
+    done = _with_step(combo, dt.date(P, 4, 1), first.required_step)
+    for later in (dt.date(P, 4, 1), dt.date(P, 8, 1), dt.date(P, 11, 1)):
+        again = engine.required_mod_step(P, done, eff, r, mod_eff=later)
+        assert again.required_step == pytest.approx(0.0, abs=1e-12)
+
+
+def test_achievement_grosses_up_what_you_direct():
+    combo = _combo(SHOWCASE, mod_changes=MOD_LOG)
+    eff = dt.date(P, 4, 1)
+    res = engine.required_mod_step(P, combo, eff, 0.02, achievement=0.8)
+    assert res.directed_equivalent == pytest.approx(res.required_step / 0.8, abs=1e-15)
+    # and directing that much at 80% achievement is what actually delivers
+    assert _delivered_with_step(combo, eff, 0.02, eff,
+                                res.directed_equivalent * 0.8) == \
+        pytest.approx(1.0 + combo.net_sel_p, abs=1e-12)
+
+
+def test_later_dates_cost_more_and_carry_less():
+    """Slipping the date leaves less of the year to earn the step, so the ask
+    grows and the share it can move shrinks — the feasibility cliff."""
+    combo = _combo(SHOWCASE, mod_changes=MOD_LOG)
+    eff = dt.date(P, 4, 1)
+    rows = [engine.required_mod_step(P, combo, eff, 0.0, mod_eff=dt.date(P, m, 1))
+            for m in range(1, 13)]
+    assert all(a.required_step < b.required_step - 1e-9
+               for a, b in zip(rows, rows[1:]))          # r = 0 leaves a rate gap
+    assert all(a.post_share > b.post_share + 1e-9 for a, b in zip(rows, rows[1:]))
+    assert rows[0].feasible and not rows[-1].feasible
+
+
+def test_m_end_is_the_year_end_mod_the_step_produces():
+    combo = _combo(SHOWCASE, mod_changes=MOD_LOG)
+    eff = dt.date(P, 4, 1)
+    r, _ = suggest_net_rate(P, combo, eff)
+    res = engine.required_mod_step(P, combo, eff, r, mod_eff=dt.date(P, 5, 1))
+    done = MonthlyEngine(P, _with_step(combo, dt.date(P, 5, 1), res.required_step))
+    assert res.m_end == pytest.approx(done.derived_m1(), abs=1e-12)
+    assert res.mod_base == pytest.approx(done.mod_base, abs=1e-12)
+
+
+def test_explicit_m_end_prior_is_the_level_the_step_compounds_on():
+    """D70's re-anchor is in force even with an empty log, because ASKING for
+    a step commits the combo to the stepped regime."""
+    mods = ModInputs(m_ind=0.85, m0=0.86, m0_asof=dt.date(P - 1, 9, 30), m1=0.89,
+                     m_end_prior=0.875)
+    combo = _combo(SHOWCASE, mods=mods)
+    res = engine.required_mod_step(P, combo, dt.date(P, 4, 1), 0.05)
+    assert res.mod_base == pytest.approx(0.875, abs=1e-15)
+    assert _delivered_with_step(combo, dt.date(P, 4, 1), 0.05, dt.date(P, 4, 1),
+                                res.required_step) == \
+        pytest.approx(1.0 + combo.net_sel_p, abs=1e-12)
+
+
+def test_out_of_bounds_year_end_mod_is_flagged_not_hidden():
+    """A target that needs an unfileable mod still returns the number — with
+    the reason it cannot be filed attached."""
+    # the two bounds are independent: +61.9% is an unreasonable STEP that still
+    # lands on a fileable mod (1.340); +111.4% lands at 1.750, which is neither
+    steep = engine.required_mod_step(
+        P, _combo(SHOWCASE, net=0.60, mod_changes=MOD_LOG), dt.date(P, 4, 1), 0.02)
+    assert steep.required_step > 0.15 and not steep.feasible
+    assert any("reasonability" in w for w in steep.warnings)
+    assert not any("filed range" in w for w in steep.warnings)
+    wild = engine.required_mod_step(
+        P, _combo(SHOWCASE, net=1.00, mod_changes=MOD_LOG), dt.date(P, 4, 1), 0.02)
+    assert wild.m_end > 1.5 and not wild.feasible
+    assert any("filed range" in w for w in wild.warnings)
+
+
+def test_refuses_when_the_mod_adjustment_is_off():
+    combo = _combo(SHOWCASE, mod_adjustment_enabled=False)
+    with pytest.raises(ValueError, match="mod adjustment is off"):
+        engine.required_mod_step(P, combo, dt.date(P, 4, 1), 0.05)
+
+
+def test_refuses_a_step_dated_outside_the_plan_year():
+    combo = _combo(SHOWCASE)
+    with pytest.raises(ValueError, match="must lie inside plan year"):
+        engine.required_mod_step(P, combo, dt.date(P, 4, 1), 0.05,
+                                 mod_eff=dt.date(P - 1, 12, 1))
+
+
+def test_refuses_without_a_net_selection():
+    combo = _combo(SHOWCASE, net=None)
+    with pytest.raises(ValueError, match="requires a net rate selection"):
+        engine.required_mod_step(P, combo, dt.date(P, 4, 1), 0.05)
+
+
+def test_mod_step_survives_a_degenerate_as_of_date():
+    """"Mods as of 12/31 of the prior year" leaves no history segment for the
+    D70 switch anchor to sit on. The oracle drops it; the solve must still
+    round-trip, because the workbook builds that same path from anchor cells
+    and a zero-width segment there is a divide-by-zero."""
+    for asof in (dt.date(P - 1, 12, 31), dt.date(P, 6, 30)):
+        for m_prior in (None, 0.83):
+            mods = ModInputs(m_ind=0.85, m0=0.86, m0_asof=asof, m1=0.89,
+                             m_prior=m_prior, m_end_prior=0.875)
+            combo = _combo(SHOWCASE, mods=mods, mod_changes=MOD_LOG)
+            eff = dt.date(P, 4, 1)
+            r, _ = suggest_net_rate(P, combo, eff)
+            res = engine.required_mod_step(P, combo, eff, r)
+            assert res.mod_base == pytest.approx(0.875, abs=1e-15)
+            assert _delivered_with_step(combo, eff, r, eff, res.required_step) == \
+                pytest.approx(1.0 + combo.net_sel_p, abs=1e-12)

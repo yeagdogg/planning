@@ -76,20 +76,35 @@ def write_mod_anchor_cells(ws, ctx: Ctx, row: int, first_col: int,
     ``dm1_expr`` shifts M_1 and M_2 (scenario lever), e.g. "+N(INDEX(sc_dm1,2))".
     Blank M_prior -> the backward anchor is placed ON the M_0->M_1 line, which
     makes backward extrapolation exactly the extended M_0->M_1 segment (§3.3.1).
+
+    Under ``steps_cond`` the third anchor moves back to 12/31/(P-1) (D70), and
+    an as-of date on or after that lands it on top of the second anchor: the
+    slope denominator goes to zero and the whole block reads #DIV/0!. "Mods as
+    of 12/31 of the prior year" is an entirely ordinary thing to type, so the
+    degenerate case is handled rather than validated away. There is simply no
+    history segment left to run: the engine drops the switch anchor
+    (``MonthlyEngine`` skips it unless ``x_switch`` is strictly later), leaving
+    the M_prior -> M_0 line extrapolated, or a flat M_0 when M_prior is blank.
+    Nudging x2 one day past x1 and putting m2 on that same line reproduces
+    both, because a one-day segment at slope s is the line at slope s.
     """
     c = lambda i: f"${col(first_col + i)}${row}"
     x0, x1, x2, x3 = (c(i) for i in range(4))
     m0, m1, m2, m3 = (c(i) for i in range(4, 8))
     s0, s1, s2 = (c(i) for i in range(8, 11))
+    sw = "DATE(nr_PlanYear-1,12,31)+1"           # the D70 switch coordinate
+    deg = f"{sw}<={x1}"                          # no history segment survives
     fmls = {
         x0: f"=EDATE({asof_ref},-12)+1",
         x1: f"={asof_ref}+1",
         x2: ("=DATE(nr_PlanYear,12,31)+1" if not steps_cond else
-             f"=IF({steps_cond},DATE(nr_PlanYear-1,12,31)+1,DATE(nr_PlanYear,12,31)+1)"),
+             f"=IF({steps_cond},IF({deg},{x1}+1,{sw}),DATE(nr_PlanYear,12,31)+1)"),
         x3: "=DATE(nr_PlanYear+1,12,31)+1",
         m1: f"={m0_ref}",
         m2: (f"={m1_ref}{dm1_expr}" if not steps_cond else
-             f"=IF({steps_cond},{mend_ref},{m1_ref}{dm1_expr})"),
+             f"=IF({steps_cond},IF({deg},IF(N({mprior_ref})=0,{m1},"
+             f"{m1}+({m1}-{mprior_ref})/({x1}-{x0})),{mend_ref}),"
+             f"{m1_ref}{dm1_expr})"),
         m3: f"=IF(N({m2_ref})=0,{m1_ref},{m2_ref}){dm1_expr}",
         m0: f"=IF(N({mprior_ref})=0,{m1}-({m2}-{m1})/({x2}-{x1})*({x1}-{x0}),{mprior_ref})",
         s0: f"=({m1}-{m0})/({x1}-{x0})",
@@ -100,6 +115,33 @@ def write_mod_anchor_cells(ws, ctx: Ctx, row: int, first_col: int,
         formula(ws, addr.replace("$", ""), f, fmt=FMT_GEN)
         ws[addr.replace("$", "")].font = font(GREY_DARK, size=9)
     return ModAnchors(x=(x0, x1, x2, x3), m=(m0, m1, m2, m3), s=(s0, s1, s2))
+
+
+def mod_drift_at_switch(m0_ref: str, asof_ref: str, m1_ref: str,
+                        mprior_ref: str) -> str:
+    """Where the drift path reaches 12/31/(P-1) — the fallback for a blank
+    M_endPrior (D70).
+
+    Blank does not mean "the mod stops at M_0". It means the planner has not
+    restated the level, so the path they DID describe runs on to the switch
+    date, and that is what the oracle uses (``MonthlyEngine`` evaluates the
+    UNSWITCHED anchor path at 12/31/(P-1) when ``m_end_prior`` is None). M_0
+    is a cruder guess that silently discards the drift already entered — on
+    the sample book it is off by about a tenth of a mod point, which is small,
+    wrong, and invisible.
+
+    Two segments, because an as-of date at or after the switch puts it on the
+    M_prior -> M_0 leg instead. With M_prior blank the two legs are the same
+    line by construction, so the one branch covers it. Neither denominator can
+    vanish: the as-of date is validated before 12/31/P, and the M_prior anchor
+    is a fixed twelve months back.
+    """
+    sw = "(DATE(nr_PlanYear-1,12,31)+1)"
+    xa, xe = f"({asof_ref}+1)", "(DATE(nr_PlanYear,12,31)+1)"
+    xp = f"(EDATE({asof_ref},-12)+1)"
+    seg1 = f"({m0_ref}+({m1_ref}-{m0_ref})/({xe}-{xa})*({sw}-{xa}))"
+    seg0 = f"({mprior_ref}+({m0_ref}-{mprior_ref})/({xa}-{xp})*({sw}-{xp}))"
+    return f"IF(AND({sw}<{xa},N({mprior_ref})<>0),{seg0},{seg1})"
 
 
 def mod_value_formula(x_expr: str, a: ModAnchors) -> str:
@@ -533,8 +575,9 @@ def build_mod_engine(ctx: Ctx):
     formula(ws, "C11", "=COUNTIF(ml_key,nr_SelKey)", fmt=FMT_INT, border=BORDER_THIN)
     label(ws, "A12", "Projected mod, end of CURRENT yr (M_endPrior)")
     formula(ws, "C12",
-            "=IF(br_selrow=0,nr_M0,IF(N(INDEX(lr_mendprior,br_selrow))=0,nr_M0,"
-            "INDEX(lr_mendprior,br_selrow)))", fmt=FMT_MOD, border=BORDER_THIN)
+            "=IF(br_selrow=0,nr_M0,IF(N(INDEX(lr_mendprior,br_selrow))=0,"
+            + mod_drift_at_switch("nr_M0", "nr_M0Asof", "nr_M1", "N(nr_MPrior)")
+            + ",INDEX(lr_mendprior,br_selrow)))", fmt=FMT_MOD, border=BORDER_THIN)
     for rr in ("C11", "C12"):
         ws[rr].font = font(GREY_DARK, size=10)
     # one flat line, no wrap: column A is 6 wide and a wrapped note here would

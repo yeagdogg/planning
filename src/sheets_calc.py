@@ -23,7 +23,8 @@ ctx.lay_dyn for the visible sheets (Scenarios / Solver / Attribution) to link.
 from __future__ import annotations
 
 from .build_workbook import Ctx, Layout as L, SHEETS
-from .sheets_engine import LogRefs, write_cohort_block, write_mod_anchor_cells
+from .sheets_engine import (
+    LogRefs, mod_drift_at_switch, write_cohort_block, write_mod_anchor_cells)
 from .xlstyle import (FMT_IDX, FMT_INT, FMT_MOD, GREY_DARK, col, font, formula, label,
                       put, quote_sheet)
 
@@ -147,8 +148,9 @@ def build_calc(ctx: Ctx):
         # the level they compound on (blank M_endPrior falls back to M_0)
         f_grey(ws, f"P{t}", f"=COUNTIF(ml_key,$A${t})", FMT_INT)
         f_grey(ws, f"Q{t}",
-               f"=IF(N(INDEX(lr_mendprior,{n}))=0,$G${t},INDEX(lr_mendprior,{n}))",
-               FMT_MOD)
+               f"=IF(N(INDEX(lr_mendprior,{n}))=0,"
+               + mod_drift_at_switch(f"$G${t}", f"$H${t}", f"$I${t}", f"$J${t}")
+               + f",INDEX(lr_mendprior,{n}))", FMT_MOD)
         anchors = write_mod_anchor_cells(
             ws, ctx, t + 1, 1,
             mind_ref=f"$F${t}", m0_ref=f"$G${t}", asof_ref=f"$H${t}",
@@ -634,8 +636,10 @@ def build_calc(ctx: Ctx):
     f_grey(ws, f"V{t}", "=COUNTIF(ml_key,slv_key)+1", FMT_INT)
     f_grey(ws, f"W{t}",
            f"=IF(COUNTIF(lr_key,slv_key)=0,1,"
-           f"IF(N(INDEX(lr_mendprior,{sr}))=0,INDEX(lr_m0,{sr}),"
-           f"INDEX(lr_mendprior,{sr})))", FMT_MOD)
+           f"IF(N(INDEX(lr_mendprior,{sr}))=0,"
+           + mod_drift_at_switch(f"INDEX(lr_m0,{sr})", f"INDEX(lr_m0asof,{sr})",
+                                 f"INDEX(lr_m1,{sr})", f"N(INDEX(lr_mprior,{sr}))")
+           + f",INDEX(lr_mendprior,{sr})))", FMT_MOD)
     f_grey(ws, f"X{t}", f"=IF(COUNTIF(lr_key,slv_key)=0,1,INDEX(lr_m0,{sr}))", FMT_MOD)
     f_grey(ws, f"Y{t}",
            f"=IF(COUNTIF(lr_key,slv_key)=0,DATE(nr_PlanYear-1,10,1),"

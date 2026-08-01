@@ -386,6 +386,27 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
                   f"wb={ncs[f'O{t}'].value} oracle={d0}")
             check("[net delivery] implied year-end mod M_1' ties oracle",
                   approx(ncs[f"H{rr}"].value, m1p, 1e-9))
+            # D75: the same ask as a dated ACTION — the answer that survives
+            # once the Mod Log drives the path and M_1' goes n/a
+            ach = wb[SHEETS.NET_DELIVERY]["I5"].value
+            ms = engine.required_mod_step(p, ncmb, d0, r_force, achievement=ach)
+            for cl, want, nm in (("S", ms.required_step, "required mod step"),
+                                 ("T", ms.directed_equivalent, "directed equivalent"),
+                                 ("U", ms.m_end, "year-end mod it produces"),
+                                 ("V", ms.post_share, "reachable share")):
+                check(f"[net delivery] D75 {nm} ties oracle",
+                      approx(ncs[f"{cl}{rr}"].value, want, 1e-9),
+                      f"wb={ncs[f'{cl}{rr}'].value} oracle={want}")
+            # and the tab's own summary row must read the same cells
+            from src.sheets_netdelivery import ND_FIRST as _NDF
+            nd_row = _NDF + list(cfg.states).index(net_state)
+            check("[net delivery] D75 the TAB's summary columns show the action",
+                  approx(wb[SHEETS.NET_DELIVERY][f"O{nd_row}"].value,
+                         ms.required_step, 1e-9)
+                  and approx(wb[SHEETS.NET_DELIVERY][f"P{nd_row}"].value,
+                             ms.m_end, 1e-9),
+                  f"O={wb[SHEETS.NET_DELIVERY][f'O{nd_row}'].value} "
+                  f"P={wb[SHEETS.NET_DELIVERY][f'P{nd_row}'].value}")
             check("[net delivery] booked-program plan LR ties oracle",
                   approx(ncs[f"N{rr}"].value, prog, 1e-9))
             bad_m = sum(
@@ -1171,6 +1192,89 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
                      ("Rate Log", f"C{pl_xl}"): None, ("Rate Log", f"D{pl_xl}"): None,
                      ("Rate Log", f"E{pl_xl}"): None, ("Rate Log", f"F{pl_xl}"): None},
                     a9g7)
+
+    # 9h. D75: the mod-step solve where it actually bites — a combo that
+    # ALREADY carries mod actions, put onto a net selection. The default
+    # sample never lands here (the net combo has an empty mod log), so the
+    # stepped regime, the whole-log base, and the day-blend collision in D's
+    # own month are only reachable by mutation.
+    ms_row = next((x for x in lr_rows if any(
+        mr["bu"] == x["bu"] and mr["state"] == x["state"] for mr in mod_rows)
+        and x["bu"] == _bu(cfg, 2)), None)
+    if ms_row is not None:
+        from src.sheets_netdelivery import ND_FIRST as _NDF, block_top as _bt
+        ms_xl = L.LR_FIRST + lr_rows.index(ms_row)
+        ms_si = list(st).index(ms_row["state"])
+        ms_rr = _bt(ms_si) + 51
+        ms_tab = _NDF + ms_si
+        ms_combo = replace(sample_to_combo(cfg, lob, ms_row, rate_rows, mod_rows),
+                           net_sel_p=0.09)
+        # 4/15 lands ON the logged action; 4/1 lands BEFORE it, which moves the
+        # two-point split to D and changes the blend even at a zero step (D31)
+        for tag, d_ms in (("on the logged action", dt.date(p, 4, 15)),
+                          ("before the logged action", dt.date(p, 4, 1))):
+            r_ms, _ = engine.suggest_net_rate(p, ms_combo, d_ms)
+            want = engine.required_mod_step(p, ms_combo, d_ms, r_ms)
+
+            def a9h(wb, want=want, tag=tag, r_ms=r_ms):
+                ncs = wb["_netcalc"]
+                check(f"[net delivery: stepped combo, {tag}] r* ties oracle",
+                      approx(ncs[f"E{ms_rr}"].value, r_ms, 1e-9),
+                      f"wb={ncs[f'E{ms_rr}'].value} oracle={r_ms}")
+                for cl, w, nm in (("S", want.required_step, "required mod step"),
+                                  ("U", want.m_end, "year-end mod"),
+                                  ("V", want.post_share, "reachable share")):
+                    check(f"[net delivery: stepped combo, {tag}] D75 {nm} ties oracle",
+                          approx(ncs[f"{cl}{ms_rr}"].value, w, 1e-9),
+                          f"wb={ncs[f'{cl}{ms_rr}'].value} oracle={w}")
+                check(f"[net delivery: stepped combo, {tag}] MOD-STEPS flagged",
+                      "MOD-STEPS" in str(ncs[f"M{ms_rr}"].value or ""),
+                      repr(ncs[f"M{ms_rr}"].value))
+                check(f"[net delivery: stepped combo, {tag}] mod columns still "
+                      "reproduce the engine path", approx(nval(wb, "nd_MaxStepDiff"),
+                                                          0.0, 1e-9),
+                      f"nd_MaxStepDiff={nval(wb, 'nd_MaxStepDiff')}")
+            run(f"net delivery: stepped combo on a net selection, {tag}",
+                {("Inputs", f"{lr_letter('lr_netp')}{ms_xl}"): 0.09,
+                 ("Net Delivery", "B5"): _bu(cfg, 2),
+                 ("Net Delivery", f"D{ms_tab}"): d_ms}, a9h)
+
+        # the degenerate as-of: "mods as of 12/31 of the prior year" puts the
+        # D70 switch anchor on top of the M_0 anchor. The engine drops it and
+        # keeps the M_prior -> M_0 line; the workbook must not divide by zero.
+        deg_asof = dt.date(p - 1, 12, 31)
+        deg_combo = replace(ms_combo, mods=replace(ms_combo.mods, m0_asof=deg_asof))
+        deg_eng = engine.MonthlyEngine(p, deg_combo)
+        r_deg, _ = engine.suggest_net_rate(p, deg_combo, dt.date(p, 4, 15))
+        deg_step = engine.required_mod_step(p, deg_combo, dt.date(p, 4, 15), r_deg)
+
+        def a9h_deg(wb):
+            ncs = wb["_netcalc"]
+            t_ms = _bt(ms_si)
+            # match Excel error VALUES only — the cohort block's own headers
+            # ("#", "# chgs in mo", "# mod acts in mo") also start with a hash
+            errs = [c.coordinate for row in
+                    ncs.iter_rows(min_row=t_ms, max_row=t_ms + 51, max_col=64)
+                    for c in row
+                    if isinstance(c.value, str) and c.value in ERR_STRINGS]
+            check("[net delivery: as-of 12/31 prior year] block computes at all",
+                  not errs, f"{len(errs)} error cells, e.g. {errs[:4]}")
+            bad = sum(0 if approx(ncs[f"O{t_ms + 15 + j}"].value,
+                                  deg_eng.written_mod(engine.month_index(p - 1, 1) + j),
+                                  1e-9) else 1 for j in range(12))
+            check("[net delivery: as-of 12/31 prior year] history mod path ties oracle",
+                  bad == 0, f"{bad} mismatched months")
+            check("[net delivery: as-of 12/31 prior year] mod step still ties oracle",
+                  approx(ncs[f"S{ms_rr}"].value, deg_step.required_step, 1e-9),
+                  f"wb={ncs[f'S{ms_rr}'].value} oracle={deg_step.required_step}")
+            check("[net delivery: as-of 12/31 prior year] Checks still ALL PASS",
+                  nval(wb, "ck_overall") == "ALL CHECKS PASS",
+                  repr(nval(wb, "ck_overall")))
+        run("net delivery: mod as-of on the D70 switch date",
+            {("Inputs", f"{lr_letter('lr_netp')}{ms_xl}"): 0.09,
+             ("Inputs", f"{lr_letter('lr_m0asof')}{ms_xl}"): deg_asof,
+             ("Net Delivery", "B5"): _bu(cfg, 2),
+             ("Net Delivery", f"D{ms_tab}"): dt.date(p, 4, 15)}, a9h_deg)
 
     # 9i. program-basis plan LR (D65): switch the worked example ONTO a net
     # selection and the gap must open exactly as the oracle says

@@ -6,13 +6,21 @@ delivered month by month, and what filed change + pricing (mod) walk
 satisfies it?
 
 Math (oracle: engine.net_delivery_components / suggest_net_rate /
-required_m1 / net_program_plan_lr — every displayed figure ties at 1e-9):
+required_m1 / required_mod_step / net_program_plan_lr — every displayed
+figure ties at 1e-9):
   delivered(m) = [W(m)/W(m-12)] x [M(m)/M(m-12)]
 The rate leg's base is the LIVE rows (taken + planned before 1/1/P — D39,
 not the Solver's taken-only D13). One new change r at the state's date D
 enters affinely per month, W_new(m) = A(m) + B(m)*r, with the D31
 first-in-month day-blend, so the suggested filed change and the required
 year-end mod both solve in closed form.
+
+The mod ask is published twice (D75). As a LEVEL — the year-end written mod
+M_1' — which is the natural answer while the mod path is a drift line, and
+goes n/a the moment the Mod Log pins the path. And as an ACTION — a dated
+mod change at the filing's own date, grossed up by achievement — which
+always answers, because the plan-year written mod is affine in (1 + c)
+along the stepped path exactly as W_new is affine in r.
 
 _netcalc geometry: a live-filtered log helper strip, then one 56-row-stride
 block per roster state (21 + 3 spares) plus one band block for the tab's
@@ -28,7 +36,9 @@ from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.worksheet.datavalidation import DataValidation
 
 from .build_workbook import Ctx, Layout as L, SHEETS
-from .sheets_engine import LogRefs, write_cohort_block, write_mod_anchor_cells
+from .sheets_engine import (
+    LogRefs, mod_drift_at_switch, mod_value_formula, write_cohort_block,
+    write_mod_anchor_cells)
 from .xlstyle import (
     ALIGN_C, ALIGN_L, BORDER_THIN, F_LABEL, F_SMALL_IT, FAIL_RED, FILL_GREY,
     FILL_NAVY, FILL_PANEL, FILL_STEEL, FMT_DATE, FMT_IDX, FMT_INT, FMT_MOD,
@@ -52,6 +62,12 @@ NC_STRIDE = 56
 NC_MOD_CNT_COL = 39                     # AM — mod actions logged for this combo
 NC_MOD_BASE_COL = 40                    # AN — M_endPrior, what they compound on
 NC_MOD_COL = 41                         # AO..AS — the five step-index helpers
+# D75 mod-step solve: the mod ask as a dated ACTION rather than a level. Its
+# columns sit past the D70 strip for the same reason that one sits past the
+# rest — one column, one meaning, nothing overloaded.
+NC_MSTEP_HDR_COL = 46                   # AT, AU — mod day-blend, header row only
+NC_MSTEP_COL = 48                       # AV..AZ — M_w(m-12) stepped, A, B, h, diff
+NC_MSTEP_ANCH_COL = 53                  # BA..BK — anchors with steps FORCED on
 
 # ---- Net Delivery sheet geometry ----
 # The deep-dive band leads the tab (D74): its chart is the one exhibit that
@@ -60,8 +76,10 @@ NC_MOD_COL = 41                         # AO..AS — the five step-index helpers
 # state roster — so the summary below it still starts at a constant row and
 # the harness can keep importing ND_FIRST as a plain number.
 ND_BAND_TOP = 8                         # "One combo under the microscope"
-ND_HDR = 26                             # summary table header row
-ND_FIRST = 27
+ND_HDR = 31                             # summary table header row
+ND_FIRST = 32
+# The band is hand-placed, so its height is hand-counted; build() asserts the
+# two never collide rather than letting a longer band overwrite the summary.
 GRID_GAP = 5                            # rows from the IN VIEW row to the first grid
                                         # section (the notes under the table live here)
 ND_PRIOR_COL = 2                        # B  — Jan P-1 on the rate-leg grid (D68)
@@ -229,17 +247,41 @@ def build_netcalc(ctx: Ctx):
         base_ref = f"${col(NC_MOD_BASE_COL)}${t}"
         formula(ws, cnt_ref.replace("$", ""),
                 f'=IF($B{t}="",0,COUNTIF(ml_key,$B{t}))', fmt=FMT_INT)
+        drift_sw = mod_drift_at_switch(f"$H{t}", f"$I{t}", f"$J{t}", f"$K{t}")
         formula(ws, base_ref.replace("$", ""),
-                f"=IF($C{t}=0,$H{t},IF(N(INDEX(lr_mendprior,$C{t}))=0,$H{t},"
+                f"=IF($C{t}=0,$H{t},IF(N(INDEX(lr_mendprior,$C{t}))=0,{drift_sw},"
                 f"INDEX(lr_mendprior,$C{t})))", fmt=FMT_MOD)
-        for cc in list("ABCDEFGHIJKLMNOPQRSTUVWXYZ") + [col(NC_MOD_CNT_COL),
-                                                        col(NC_MOD_BASE_COL)]:
+        # D75: the day-blend for a mod step dated at the FILING's own date —
+        # one filing normally carries both levers, so the tab does not ask for
+        # a second date. The split lands at the earlier of D and the first
+        # logged mod action in D's month, exactly as $T/$U do for the rate leg.
+        mdays_ref = f"${col(NC_MSTEP_HDR_COL)}${t}"
+        pmod_ref = f"${col(NC_MSTEP_HDR_COL + 1)}${t}"
+        formula(ws, mdays_ref.replace("$", ""),
+                f'=IF($B{t}="",0,SUMIFS(ml_daysafter,ml_key,$B{t},ml_effmonth,'
+                f"DATE(YEAR($O{t}),MONTH($O{t}),1),ml_first,1))", fmt=FMT_INT)
+        formula(ws, pmod_ref.replace("$", ""),
+                f"=IF($P{t}=1,MIN(1,MAX($S{t},{mdays_ref})/$R{t}),1)", fmt="0.000")
+        for cc in list("ABCDEFGHIJKLMNOPQRSTUVWXYZ") + [
+                col(NC_MOD_CNT_COL), col(NC_MOD_BASE_COL),
+                col(NC_MSTEP_HDR_COL), col(NC_MSTEP_HDR_COL + 1)]:
             ws[f"{cc}{t}"].font = font(GREY_DARK, size=8)
 
         anchors = write_mod_anchor_cells(
             ws, ctx, t + 1, 1, mind_ref=f"$G${t}", m0_ref=f"$H${t}",
             asof_ref=f"$I${t}", m1_ref=f"$J${t}", mprior_ref=f"$K${t}",
             m2_ref=f"$L${t}", steps_cond=f"{cnt_ref}>0", mend_ref=base_ref)
+        # ... and the same path with steps FORCED on. Asking for a mod step
+        # commits the combo to the stepped regime whether or not it is already
+        # in it, so the D70 re-anchor (history runs to M_endPrior at
+        # 12/31/(P-1), the log owns the plan year) is in force for the solve
+        # even when the log is empty. Solving on the c = 0 member of that same
+        # family is what makes the closed form exact rather than nearly right.
+        anchors_s = write_mod_anchor_cells(
+            ws, ctx, t + 1, NC_MSTEP_ANCH_COL, mind_ref=f"$G${t}",
+            m0_ref=f"$H${t}", asof_ref=f"$I${t}", m1_ref=base_ref,
+            mprior_ref=f"$K${t}", m2_ref=f"$L${t}", steps_cond="TRUE",
+            mend_ref=base_ref)
         refs = LogRefs(key_cond=f"$B${t}", eff="ndl_eff", ln="ndl_ln",
                        effmonth="ndl_effmonth", first="ndl_first",
                        daysafter="ndl_days")
@@ -295,6 +337,41 @@ def build_netcalc(ctx: Ctx):
                     f'=IF(OR($AG{r}="",$F${t}=0),"",(1+$E${t})/(1+$AG{r})-1)', fmt=PCT_S)
             formula(ws, f"AI{r}",
                     f'=IF($AH{r}="","",$O{y}*(1+$E${t})/(1+$AG{r}))', fmt=FMT_MOD)
+        # ---- D75: the mod ask as a dated ACTION, not a level ----------------
+        # Along the stepped path the plan-year written mod is affine in (1 + c),
+        # M_w(m) = A(m) + B(m)*(1 + c), so the required step solves in one sum
+        # the way the filing does. A/B mirror the rate leg's W/X exactly:
+        # months before D carry no step, months after carry it whole, and D's
+        # own month splits on the day-blend.
+        c_pre = f"${col(NC_MOD_COL)}"        # mod index before the month
+        c_eom = f"${col(NC_MOD_COL + 1)}"    # mod index at month end
+        c_bl = f"${col(NC_MOD_COL + 4)}"     # blended step index
+        sc = [col(NC_MSTEP_COL + i) for i in range(5)]   # AV..AZ
+        for j in range(12):
+            y, r = y0 + j, p0 + j
+            formula(ws, f"{sc[0]}{y}", mod_value_formula(f"$F{y}", anchors_s),
+                    fmt=FMT_MOD)
+            formula(ws, f"{sc[4]}{y}",
+                    f"=IF({cnt_ref}=0,0,ABS(${sc[0]}{y}-$O{y}))", fmt="0.0000000000")
+            formula(ws, f"{sc[1]}{r}",
+                    f"=IF($G{r}<$Q${t},{base_ref}*{c_bl}{r},"
+                    f"IF($G{r}>$Q${t},0,{base_ref}*(1-{pmod_ref})*{c_pre}{r}))",
+                    fmt=FMT_MOD)
+            formula(ws, f"{sc[2]}{r}",
+                    f"=IF($G{r}<$Q${t},0,IF($G{r}>$Q${t},{base_ref}*{c_bl}{r},"
+                    f"{base_ref}*{pmod_ref}*{c_eom}{r}))", fmt=FMT_MOD)
+            formula(ws, f"{sc[3]}{r}",
+                    f"=$H{r}*($W{r}+$X{r}*IF(ISNUMBER($F${rr}),$F${rr},0))"
+                    f"/($N{y}*${sc[0]}{y})", fmt=FMT_IDX)
+            # agreement: outside D's own month these columns must reproduce the
+            # block's own mod path whenever the log already drives it. IN D's
+            # month they legitimately differ — a step there moves the two-point
+            # split to the earlier of D and the first logged action, which
+            # changes the blend even at c = 0 (D31).
+            formula(ws, f"{sc[4]}{r}",
+                    f"=IF(OR({cnt_ref}=0,$G{r}=$Q${t}),0,"
+                    f"ABS(${sc[1]}{r}+${sc[2]}{r}-$O{r}))", fmt="0.0000000000")
+
         # program-q column over ALL rows (for the booked-program reconciliation)
         for k in range(48):
             r = t + 3 + k
@@ -312,7 +389,8 @@ def build_netcalc(ctx: Ctx):
         for j in range(12):
             r = t + 15 + j
             formula(ws, f"AG{r}", f'=IF($D${t}=0,"",$N{r}/$N{r - 12}-1)', fmt=PCT_S)
-        for cc in ("W", "X", "Y", "AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI"):
+        for cc in ("W", "X", "Y", "AB", "AC", "AD", "AE", "AF", "AG", "AH",
+                   "AI", *sc):
             for k in range(48):
                 c = ws[f"{cc}{t + 3 + k}"]
                 if c.value is not None:
@@ -352,15 +430,42 @@ def build_netcalc(ctx: Ctx):
         formula(ws, f"L{rr}",
                 f'=IF(NOT(ISNUMBER($F{rr})),"n/a",'
                 f"SUMPRODUCT({hp},$AF${p0}:$AF${p1})/$B{rr})", fmt=FMT_PCT)
-        # flags: implied mod out of bounds / |r| beyond bound / thin share
+        # D75: the same ask as a dated action — required step, what you must
+        # direct to land it, the year-end mod it produces, and the share of
+        # delivery it can still reach. AW/AX carry their own column footers.
+        hsr = f"${sc[3]}${p0}:${sc[3]}${p1}"
+        formula(ws, f"{sc[1]}{rr}",
+                f"=SUMPRODUCT({hsr},${sc[1]}${p0}:${sc[1]}${p1})", fmt=FMT_IDX)
+        formula(ws, f"{sc[2]}{rr}",
+                f"=SUMPRODUCT({hsr},${sc[2]}${p0}:${sc[2]}${p1})", fmt=FMT_IDX)
+        formula(ws, f"S{rr}",
+                f'=IF(OR(NOT(ISNUMBER($F{rr})),$F${t}=0,${sc[2]}{rr}=0),"n/a",'
+                f"((1+$E${t})*$B{rr}-${sc[1]}{rr})/${sc[2]}{rr}-1)", fmt="0.000%")
+        formula(ws, f"T{rr}", f'=IF(OR(NOT(ISNUMBER($S{rr})),nd_Ach=0),"n/a",'
+                              f"$S{rr}/nd_Ach)", fmt="0.000%")
+        formula(ws, f"U{rr}", f'=IF(NOT(ISNUMBER($S{rr})),"n/a",'
+                              f"{base_ref}*(1+$S{rr})*{c_eom}{p1})", fmt=FMT_MOD)
+        formula(ws, f"V{rr}", f'=IF(NOT(ISNUMBER($S{rr})),"n/a",'
+                              f"${sc[2]}{rr}/(${sc[1]}{rr}+${sc[2]}{rr}))", fmt=FMT_PCT)
+        formula(ws, f"{sc[4]}{rr}",
+                f"=MAX(${sc[4]}${y0}:${sc[4]}${y1},${sc[4]}${p0}:${sc[4]}${p1})",
+                fmt="0.0000000000")
+        # Flags: implied mod out of bounds / |r| beyond bound / thin share.
+        # Every numeric test is NESTED inside its own ISNUMBER rather than
+        # ANDed with it — AND does not short-circuit in Excel, so ABS("n/a")
+        # is evaluated and poisons the whole string with #VALUE!. These cells
+        # go "n/a" whenever the mod adjustment is off.
+        num = lambda ref, test, tag: (f'IF(ISNUMBER({ref}),IF({test},"{tag} ",""),"")')
         formula(ws, f"M{rr}",
-                f'=IF($D${t}=0,"",TRIM(IF(AND(ISNUMBER($H{rr}),'
-                f'OR($H{rr}<0.5,$H{rr}>1.5)),"MOD-BOUND ","")'
-                f'&IF(AND(ISNUMBER($F{rr}),ABS($F{rr})>nr_SolvMaxRate),"RATE-BOUND ","")'
-                f'&IF(AND(ISNUMBER($L{rr}),$L{rr}<nr_SolvMinShare),"THIN-SHARE ","")'
-                f'&IF($W${t}>1,"MULTI-PLANNED ","")'
-                f'&IF({cnt_ref}>0,"MOD-STEPS ","")'
-                f'&IF($F${t}=0,"RATE-ONLY","")))')
+                f'=IF($D${t}=0,"",TRIM('
+                + num(f"$H{rr}", f"OR($H{rr}<0.5,$H{rr}>1.5)", "MOD-BOUND")
+                + "&" + num(f"$F{rr}", f"ABS($F{rr})>nr_SolvMaxRate", "RATE-BOUND")
+                + "&" + num(f"$L{rr}", f"$L{rr}<nr_SolvMinShare", "THIN-SHARE")
+                + "&" + num(f"$S{rr}", f"ABS($S{rr})>nr_SolvMaxMod", "MODSTEP-BOUND")
+                + "&" + num(f"$U{rr}", f"OR($U{rr}<0.5,$U{rr}>1.5)", "MODEND-BOUND")
+                + f'&IF($W${t}>1,"MULTI-PLANNED ","")'
+                + f'&IF({cnt_ref}>0,"MOD-STEPS ","")'
+                + f'&IF($F${t}=0,"RATE-ONLY","")))')
         # booked-program plan LR vs the asserted net-mode plan LR
         formula(ws, f"N{rr}",
                 f'=IF(OR($D${t}=0,NOT(ISNUMBER($F{rr}))),"n/a",'
@@ -374,7 +479,8 @@ def build_netcalc(ctx: Ctx):
         formula(ws, f"P{rr}",
                 f"=IF(NOT(ISNUMBER($E{rr})),0,"
                 f"ABS(($C{rr}+$D{rr}*$E{rr})/$B{rr}-(1+$E${t})))", fmt="0.0000000000")
-        for cc in "BCDEFGHIJKLMNOP":
+        for cc in ("B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+                   "N", "O", "P", "S", "T", "U", "V", sc[1], sc[2], sc[4]):
             ws[f"{cc}{rr}"].font = font(GREY_DARK, size=8)
 
     # names for the band block + the residual aggregate
@@ -410,11 +516,21 @@ def build_netcalc(ctx: Ctx):
     formula(ws, "J1", f"=MAX({resid_cells})", fmt="0.0000000000")
     ctx.define("nd_MaxResid", NC, "$J$1",
                "Largest closed-form solve residual across all delivery blocks")
+    # D75: outside D's own month the mod-step columns must reproduce the
+    # block's own mod path on any combo the log already drives. A non-zero
+    # here means the forced-stepped anchors, M_endPrior, or a column offset
+    # is wrong — exactly the failure modes that hide inside a plausible number.
+    step_cells = ",".join(f"${col(NC_MSTEP_COL + 4)}${block_top(i) + 51}"
+                          for i in range(nd + 1))
+    formula(ws, "K1", f"=MAX({step_cells})", fmt="0.0000000000")
+    ctx.define("nd_MaxStepDiff", NC, "$K$1",
+               "Max |stepped mod columns - engine mod path| on already-stepped combos")
     set_widths(ws, {c: 10 for c in
                     ("A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L",
                      "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X",
                      "Y", "Z", "AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI")})
     set_widths(ws, {col(NC_MOD_CNT_COL + j): 10 for j in range(7)})   # AM..AS (D70)
+    set_widths(ws, {col(NC_MSTEP_HDR_COL + j): 10 for j in range(7)})  # AT..AZ (D75)
 
 
 # ---------------------------------------------------------------------------
@@ -479,6 +595,7 @@ def build_net_delivery(ctx: Ctx):
                "Suggested change",
                "Change in force", "Filed equivalent", "Avg YoY rate leg",
                "Avg YoY pricing needed", "Implied yr-end mod", "vs projected M_1 (pts)",
+               "Required mod change at that date", "Yr-end mod it produces",
                "Share written on/after date"]
     header_row(ws, hdr, 1, headers)
     header_row(ws, hdr, ND_FLAG_COL, ["Flags"])
@@ -522,15 +639,19 @@ def build_net_delivery(ctx: Ctx):
                     f"IF('{NC}'!$D${t}=0,\"—\",IF('{NC}'!$W${t}=0,\"none\","
                     f"'{NC}'!${src}${t})))",
                     fmt=fmt, align=ALIGN_C, fill=band_fill, border=BORDER_THIN)
+        # M/N are the LEVEL answer and its gap; O/P are the same ask as an
+        # ACTION (D75), which is the one that survives once the Mod Log drives
+        # the path; Q is the share a change at that date can still reach.
         for cc, src, fmt in (("H", "E", "0.000%"), ("I", "F", "0.000%"),
                              ("J", "G", "0.000%"), ("K", "I", PCT_S),
                              ("L", "J", PCT_S), ("M", "H", FMT_MOD),
-                             ("O", "L", FMT_PCT), (col(ND_FLAG_COL), "M", None)):
+                             ("O", "S", "+0.000%;-0.000%"), ("P", "U", FMT_MOD),
+                             ("Q", "L", FMT_PCT), (col(ND_FLAG_COL), "M", None)):
             formula(ws, f"{cc}{r}",
                     f'=IF(OR($A{r}="",nd_BU="All"),"",'
                     f"IF('{NC}'!$D${t}=0,\"—\",'{NC}'!${src}${rr}))",
                     fmt=fmt or "General", align=ALIGN_C, fill=band_fill,
-                    border=BORDER_THIN, bold=(cc in ("I", "L")))
+                    border=BORDER_THIN, bold=(cc in ("I", "L", "O")))
         formula(ws, f"N{r}",
                 f'=IF(OR($A{r}="",nd_BU="All"),"",IF(\'{NC}\'!$D${t}=0,"—",'
                 f"IF(ISNUMBER('{NC}'!$H${rr}),"
@@ -570,9 +691,10 @@ def build_net_delivery(ctx: Ctx):
     put(ws, f"A{tot + 4}",
         "MOD-STEPS means the combo already has actions in the Mod Log, so its pricing "
         "path is decided rather than open: the projected mod row below follows those "
-        "actions, and the implied year-end mod reads n/a because the log — not this "
-        "tab — now sets it. Read the gap row instead: it is what your logged actions "
-        "still leave for the target to find.", fnt=F_SMALL_IT)
+        "actions, and the implied year-end MOD LEVEL reads n/a because the log — not "
+        "this tab — now sets it. The required mod CHANGE beside it still answers, and "
+        "is the column to read: it is the further action your logged plan still leaves "
+        "for the target to find, dated at the same filing.", fnt=F_SMALL_IT)
 
     # ---- twin state x month grids, the rate leg two years wide (D68) ----
     # Same seam and the same colours as Program Flow — steel for the year now
@@ -699,7 +821,15 @@ def build_net_delivery(ctx: Ctx):
         ws.cell(row=r, column=ND_PLAN_COL + j).font = font(FAIL_RED, size=9)
     r += 2
     recon = [
-        ("Implied year-end written mod (type into tbl_LR to make it concrete)",
+        ("Required mod CHANGE, dated at the filing above (D75)",
+         f"=IF(ISNUMBER('{NC}'!$S${rb}),'{NC}'!$S${rb},\"n/a\")", "+0.000%;-0.000%"),
+        ("...  what you must DIRECT at the achievement above",
+         f"=IF(ISNUMBER('{NC}'!$T${rb}),'{NC}'!$T${rb},\"n/a\")", "+0.000%;-0.000%"),
+        ("...  the written mod at 12/31 it produces",
+         f"=IF(ISNUMBER('{NC}'!$U${rb}),'{NC}'!$U${rb},\"n/a\")", FMT_MOD),
+        ("...  share of delivery a change at that date can still reach",
+         f"=IF(ISNUMBER('{NC}'!$V${rb}),'{NC}'!$V${rb},\"n/a\")", FMT_PCT),
+        ("Implied year-end written mod, LEVEL basis (n/a once the Mod Log drives it)",
          f"=IF(ISNUMBER('{NC}'!$H${rb}),'{NC}'!$H${rb},\"n/a\")", FMT_MOD),
         ("Plan LR if you BOOK this program (live history + filing + mod walk)",
          f"='{NC}'!$N${rb}", FMT_PCT),
@@ -712,12 +842,23 @@ def build_net_delivery(ctx: Ctx):
     for lbl, f, fmt in recon:
         label(ws, f"A{r}", lbl)
         formula(ws, f"C{r}", f, fmt=fmt, align=ALIGN_C, border=BORDER_THIN,
-                bold=("BOOK" in lbl))
+                bold=("BOOK" in lbl or "CHANGE" in lbl))
         r += 1
+    put(ws, f"A{r}",
+        "The mod change is dated at the SAME date as the filing — one filing normally "
+        "carries both levers. It compounds on the year-end mod already projected for "
+        "the prior year, so asking for it puts the combo on the stepped path (D70) "
+        "whether or not the Mod Log already holds actions.", fnt=F_SMALL_IT)
+    r += 1
     put(ws, f"A{r}",
         "The solve matches the WRITTEN-basis average (the literal meaning of the "
         "target); the earned-shape residual above is the honest difference vs the "
         "asserted path. Attribution cannot track delivery under net mode.", fnt=F_SMALL_IT)
+    if r >= ND_HDR:
+        raise AssertionError(
+            f"Net Delivery band now ends at row {r} but the summary header sits at "
+            f"{ND_HDR}: raise ND_HDR / ND_FIRST (the band is fixed height, so the "
+            "shift below it is a constant).")
     r += 2
 
     # ---- chart: log-share stacked delivery + delivered line ----
