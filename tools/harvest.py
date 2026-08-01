@@ -19,9 +19,13 @@ Usage:
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # noqa: E402
+
 import datetime as dt
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import openpyxl
 

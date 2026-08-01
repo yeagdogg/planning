@@ -54,6 +54,7 @@ src/sheets_main.py         Bridge, Portfolio (+ Decision Board), State Summary, 
                            Solver, Attribution builders
 src/sheets_netdelivery.py  Net Delivery tab + hidden _netcalc blocks (D57)
 src/sheets_programflow.py  Program Flow tab: state x month delivered-flow grids (D59)
+src/sheets_book.py         the BOOK: combined roll-up across every LOB (D66)
 src/sheets_walkthrough.py  Walkthrough: the fully worked example, live for the selection
 src/sheets_briefs.py       One-Pager (print-ready brief) and Compare builders
 src/sheets_report.py       Flow Dashboard, _oracle, Checks, Methodology, Read Me builders
@@ -64,7 +65,11 @@ tests/test_layout.py       Layout geometry (incl. the D56 dual-module guard)
 tests/test_style.py        prose row-height calibration (nothing may clip)
 tools/recalc.py            headless recalculation (Excel COM, LibreOffice fallback)
 tools/verify_workbook.py   verification harness: static scans, oracle ties, toggle exercises
+tools/harvest.py           reads the six recalculated workbooks' published per-combo rows
+tools/build_book.py        harvest -> the combined book workbook
+tools/verify_book.py       book harness: harvest ties, aggregation ties, filter exercises
 output/Plan_LR_Workbook_2027_<LOB>.xlsx   one generated workbook per LOB (values cached)
+output/Plan_LR_Book_2027.xlsx             the combined book, harvested from all six
 DECISIONS.md               every judgment call and why
 ```
 
@@ -115,10 +120,27 @@ tied to a per-combo oracle run (9 metrics each); solver round-trip (+5.0% at 4/1
 intact after the Excel resave; scenario, attribution, seasonality, basis, mod-toggle,
 degenerate-input, and plan-year-change exercises each tied to fresh oracle runs. At last run:
 Property **208 checks / 0 failed** (full), the other five LOB files 65 (or 63 for the
-6-month-term Inland Marine) / 0 failed each (phases A–C), pytest 127/127. The business
+6-month-term Inland Marine) / 0 failed each (phases A–C), the combined book **43 / 0**
+(`tools/verify_book.py`), pytest 136/136. The business
 units and states in `config/config.yaml` are addressed positionally, so renaming them to
 your own book keeps every seeded example working (a repeated BU or state is rejected at
 load time).
+
+## The combined book
+
+One workbook per LOB stays the working artifact; the **book** stacks all of them into a
+single filterable roll-up (line / business unit / state), with the same State Summary,
+Portfolio, roll-up and Program Flow exhibits. Its per-combo figures are harvested VALUES —
+the engines are frozen — while every filter and total is live, so it opens in seconds.
+
+```bash
+python tools/build_book.py
+```
+
+The harvest reads the six *recalculated* workbooks and refuses to run against one that was
+never recalculated (or was built by an older generator), so a stale book cannot be produced
+by accident. Rebuild it after regenerating the LOB files, then recalculate it like any
+other generated workbook.
 
 ## Regeneration workflow (new plan year)
 
