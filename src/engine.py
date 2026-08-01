@@ -131,14 +131,23 @@ class RateChange:
 
 @dataclass(frozen=True)
 class ModInputs:
-    """Schedule-mod path anchors. All 'as-of' dates are close-of-day (D2)."""
+    """Schedule-mod path anchors. All 'as-of' dates are close-of-day (D2).
+
+    ``m_end_prior`` (D70) is the projected written mod at 12/31/(P-1) — the
+    "educated guess" at where the CURRENT year lands. It is only consulted
+    when the combo carries stepped mod changes: the drift path then runs from
+    M_0 to that point and hands off to the step log on 1/1/P, so M_1 stops
+    being an input and becomes a derived output (which is what makes the two
+    mechanisms coexist without double-counting the same action).
+    """
 
     m_ind: float  # avg mod assumed in the indication
     m0: float  # current avg written mod
     m0_asof: dt.date  # as-of date for m0
-    m1: float  # projected avg written mod at 12/31/P
+    m1: float  # projected avg written mod at 12/31/P (derived when steps exist)
     m_prior: float | None = None  # optional: avg mod ~12 months before m0
     m2: float | None = None  # optional: projected at 12/31/(P+1); default m1
+    m_end_prior: float | None = None  # D70: projected written mod at 12/31/(P-1)
 
 
 @dataclass(frozen=True)
@@ -168,10 +177,28 @@ class ComboInputs:
     plan_ep: float | None = None  # plan earned premium (portfolio weighting)
     net_sel_p: float | None = None  # optional net rate selection for plan year P
     net_sel_p1: float | None = None  # optional net selection for P+1 (None = carry P's)
+    # D70: stepped schedule-mod actions. Same shape as a rate change — a dated
+    # percent that stays in force until superseded — so taken/planned status and
+    # achievement carry the same meaning. Mod actions are typically NOT fully
+    # achieved, which is exactly why the achievement field matters here.
+    mod_changes: tuple[RateChange, ...] = ()
 
     @property
     def net_mode(self) -> bool:
         return self.net_sel_p is not None
+
+    @property
+    def mod_stepped(self) -> bool:
+        """True when the mod path is driven by a step log rather than drift."""
+        return bool(self.mod_changes)
+
+    @property
+    def mod_program_pct(self) -> float:
+        """Compounded effective mod program: prod(1 + c) - 1 over all steps."""
+        idx = 1.0
+        for mc in self.mod_changes:
+            idx *= 1.0 + mc.effective_pct
+        return idx - 1.0
 
     @property
     def net_x1(self) -> float:
@@ -272,8 +299,51 @@ def validate_inputs(plan_year: int, combo: ComboInputs) -> list[str]:
         w.append(f"M_prior = {m.m_prior:.3f} outside [0.5, 1.5].")
     if m.m2 is not None and not 0.5 <= m.m2 <= 1.5:
         w.append(f"M_2 = {m.m2:.3f} outside [0.5, 1.5].")
+    if m.m_end_prior is not None and not 0.5 <= m.m_end_prior <= 1.5:
+        w.append(f"M_end_prior = {m.m_end_prior:.3f} outside [0.5, 1.5].")
     if not m.m0_asof < dt.date(p, 12, 31):
         raise ValueError("M_0 as-of date must precede 12/31 of the plan year.")
+    # D70: stepped mod actions
+    if combo.mod_changes:
+        early = [mc for mc in combo.mod_changes if mc.effective < dt.date(p, 1, 1)]
+        if early:
+            raise ValueError(
+                f"{len(early)} mod change(s) dated before 1/1/{p} (earliest "
+                f"{min(mc.effective for mc in early)}). Mod history is carried by "
+                f"M_0 and the projected {p - 1} year-end mod; a dated mod action "
+                f"before the plan year would count the same movement twice (D70)."
+            )
+        idx = 1.0
+        by_month: dict[int, int] = {}
+        for mc in combo.mod_changes:
+            if 1.0 + mc.effective_pct <= 0.0:
+                raise ValueError(f"Mod change {mc.effective} implies a non-positive mod.")
+            idx *= 1.0 + mc.effective_pct
+            mi = month_index(mc.effective.year, mc.effective.month)
+            by_month[mi] = by_month.get(mi, 0) + 1
+        for mi, n in sorted(by_month.items()):
+            if n > 1:
+                w.append(
+                    f"{n} mod changes share cohort month {mi_first(mi):%Y-%m}; the "
+                    "intra-month split blends at the first change date (D4/D70)."
+                )
+        if m.m_end_prior is None:
+            w.append(
+                f"Mod steps are logged but no projected {p - 1} year-end mod was "
+                "given; the drift path is extended to 12/31 to supply the base. "
+                "Enter it explicitly so both engines use the same level."
+            )
+        base = m.m_end_prior if m.m_end_prior is not None else m.m0
+        if not 0.5 <= base * idx <= 1.5:
+            w.append(
+                f"Mod steps imply a {p} year-end written mod of {base * idx:.3f}, "
+                "outside [0.5, 1.5]."
+            )
+        if not combo.mod_adjustment_enabled:
+            w.append(
+                "Mod steps are logged but the mod adjustment is OFF for this combo: "
+                "the actions are recorded and deliver nothing (A_mod = 1)."
+            )
     if combo.seasonality is not None:
         if len(combo.seasonality) != 12:
             raise ValueError("Seasonality vector must have 12 monthly weights.")
@@ -328,8 +398,22 @@ class ModPath:
             raise ValueError(f"Mod path anchors must be strictly increasing in time: {anchors}")
         self.anchors = anchors
 
+    @classmethod
+    def from_anchors(cls, anchors: list[tuple[float, float]]) -> "ModPath":
+        """A path over explicit anchors (D70 uses this for the history leg,
+        which ends at 12/31/(P-1) rather than at the plan-year anchor). A
+        single anchor is a constant path."""
+        xs = [a[0] for a in anchors]
+        if any(x1 <= x0 for x0, x1 in zip(xs, xs[1:])):
+            raise ValueError(f"Mod path anchors must be strictly increasing in time: {anchors}")
+        obj = cls.__new__(cls)
+        obj.anchors = list(anchors)
+        return obj
+
     def value(self, x: float) -> float:
         a = self.anchors
+        if len(a) == 1:
+            return a[0][1]
         if x <= a[0][0]:
             i = 0
         elif x >= a[-1][0]:
@@ -338,6 +422,48 @@ class ModPath:
             i = max(j for j in range(len(a) - 1) if a[j][0] <= x)
         (x0, y0), (x1, y1) = a[i], a[i + 1]
         return y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+
+
+# ---------------------------------------------------------------------------
+# Stepped index machinery — shared by the rate leg and the D70 mod leg
+# ---------------------------------------------------------------------------
+
+
+def step_index_at(changes: Sequence[RateChange], d: dt.date) -> float:
+    """Cumulative multiplicative index at start-of-day ``d`` (eff <= d)."""
+    idx = 1.0
+    for rc in changes:
+        if rc.effective <= d:
+            idx *= 1.0 + rc.effective_pct
+    return idx
+
+
+def blended_step_index(changes: Sequence[RateChange], k: int) -> float:
+    """Cohort-month index with the two-point pro-rata blend (D4/D31).
+
+    No change inside the month: the full cumulative index. Otherwise the
+    month's written weight splits at the FIRST in-month change date: weight
+    p = (days on/after that change) / (days in month) at the end-of-month
+    index, (1-p) at the pre-month index.
+
+    Rate steps and mod steps share this function deliberately (D70) — the two
+    legs are the same mechanic on different columns, and one implementation
+    means they cannot drift apart the way two copies would.
+    """
+    som, eom, dim = mi_first(k), mi_last(k), mi_days(k)
+    pre = step_index_at(changes, som - dt.timedelta(days=1))
+    post = step_index_at(changes, eom)
+    in_month = [rc.effective for rc in changes if som <= rc.effective <= eom]
+    if not in_month:
+        return post
+    first = min(in_month)
+    p = ((eom - first).days + 1) / dim
+    return (1.0 - p) * pre + p * post
+
+
+def _cod(d: dt.date) -> float:
+    """Close-of-day ordinal coordinate (D2)."""
+    return float(d.toordinal() + 1)
 
 
 # ---------------------------------------------------------------------------
@@ -358,18 +484,43 @@ class MonthlyEngine:
         combo: ComboInputs,
         changes_override: Sequence[RateChange] | None = None,
         mods_override: ModInputs | None = None,
+        mod_changes_override: Sequence[RateChange] | None = None,
     ):
         self.p = plan_year
         self.combo = combo
         self.changes = tuple(changes_override if changes_override is not None else combo.rate_changes)
         self.mods = mods_override if mods_override is not None else combo.mods
+        self.mod_changes = tuple(sorted(
+            mod_changes_override if mod_changes_override is not None
+            else combo.mod_changes, key=lambda c: c.effective))
         self.t = combo.term_months
         self.c0 = month_index(plan_year - 2, 1)  # first cohort month (D1)
         self.c1 = month_index(plan_year + 1, 12)  # last cohort month
         self.cohorts = list(range(self.c0, self.c1 + 1))  # 48 months
         self.r0 = month_index(plan_year - 1, 1)  # first reported earned month
         self.r1 = self.c1  # last reported earned month
-        self.mod_path = ModPath(plan_year, self.mods, coord=lambda d: float(d.toordinal() + 1))
+        self.mod_path = ModPath(plan_year, self.mods, coord=_cod)
+        # D70: when the combo carries stepped mod actions, DRIFT owns history
+        # through 12/31/(P-1) and the STEP LOG owns the plan year onward. The
+        # two meet at m_end_prior, so the path is continuous and no action is
+        # counted twice. With no mod steps nothing below is consulted and the
+        # engine is bit-identical to the pre-D70 build.
+        self.x_switch = _cod(dt.date(plan_year - 1, 12, 31))
+        self.mod_base = None
+        self.mod_hist = None
+        if self.mod_changes:
+            base = self.mods.m_end_prior
+            if base is None:
+                # no explicit guess: extend the existing drift to 12/31/(P-1)
+                base = self.mod_path.value(self.x_switch)
+            self.mod_base = base
+            anchors: list[tuple[float, float]] = []
+            if self.mods.m_prior is not None:
+                anchors.append((_cod(add_months(self.mods.m0_asof, -12)), self.mods.m_prior))
+            anchors.append((_cod(self.mods.m0_asof), self.mods.m0))
+            if self.x_switch > anchors[-1][0]:
+                anchors.append((self.x_switch, base))
+            self.mod_hist = ModPath.from_anchors(anchors)
         # Seasonality: relative weights by calendar month, normalized to mean 1.
         if combo.seasonality is not None:
             s = combo.seasonality
@@ -387,29 +538,11 @@ class MonthlyEngine:
     # -- written rate index -------------------------------------------------
     def index_at(self, d: dt.date) -> float:
         """Cumulative rate index at start-of-day ``d`` (changes eff <= d)."""
-        idx = 1.0
-        for rc in self.changes:
-            if rc.effective <= d:
-                idx *= 1.0 + rc.effective_pct
-        return idx
+        return step_index_at(self.changes, d)
 
     def written_index(self, k: int) -> float:
-        """Cohort-month written index with the two-point pro-rata blend (D4).
-
-        No change inside the month: the full cumulative index. Otherwise the
-        month's written weight is split at the FIRST in-month change date:
-        weight p = (days on/after first change) / (days in month) at the
-        end-of-month index, (1-p) at the pre-month index.
-        """
-        som, eom, dim = mi_first(k), mi_last(k), mi_days(k)
-        w_pre = self.index_at(som - dt.timedelta(days=1))
-        w_post = self.index_at(eom)
-        in_month = [rc.effective for rc in self.changes if som <= rc.effective <= eom]
-        if not in_month:
-            return w_post
-        first = min(in_month)
-        p = ((eom - first).days + 1) / dim
-        return (1.0 - p) * w_pre + p * w_post
+        """Cohort-month written index with the two-point pro-rata blend (D4)."""
+        return blended_step_index(self.changes, k)
 
     def written_index_exact_daily(self, k: int) -> float:
         """Exact daily-average index for the month (test cross-check only)."""
@@ -442,7 +575,29 @@ class MonthlyEngine:
 
     # -- written mod path ---------------------------------------------------
     def written_mod(self, k: int) -> float:
-        return self.mod_path.value(mi_mid_ordinal(k))
+        """Average written schedule mod for cohort month ``k``.
+
+        Drift-only (no mod steps): the piecewise-linear anchor path, as before.
+        Stepped (D70): the drift path through 12/31/(P-1), then the step log
+        compounding on that level with the same day-blend the rate leg uses —
+        so a mod action earns through the book exactly as a filing does.
+        """
+        if not self.mod_changes:
+            return self.mod_path.value(mi_mid_ordinal(k))
+        if k < month_index(self.p, 1):
+            return self.mod_hist.value(mi_mid_ordinal(k))
+        return self.mod_base * blended_step_index(self.mod_changes, k)
+
+    def derived_m1(self) -> float:
+        """Implied written mod at 12/31/P (D70).
+
+        Under a step log this is an OUTPUT — m_end_prior compounded by every
+        action in force at year end — worth showing against the planner's own
+        estimate. With no steps it is simply the M_1 input.
+        """
+        if not self.mod_changes:
+            return self.mods.m1
+        return self.mod_base * step_index_at(self.mod_changes, dt.date(self.p, 12, 31))
 
     # -- net rate selection (D39) -------------------------------------------
     def combined_hist(self, k: int) -> float:
@@ -553,16 +708,69 @@ def continuous_earned_index(
     return num / den
 
 
+class _SteppedContinuousModPath:
+    """Continuous-time twin of the D70 stepped mod path.
+
+    Drift (linear) through 1/1/P, then piecewise-CONSTANT step levels. Every
+    step date is a breakpoint, so on each open segment the path is either
+    linear or constant and Simpson stays exact — but the value is discontinuous
+    AT a step date, so segments past the switch are evaluated at their midpoint
+    (``segment_value``) rather than at their endpoints.
+    """
+
+    def __init__(self, plan_year: int, mods: ModInputs,
+                 mod_changes: Sequence[RateChange], base: float):
+        self.x_switch = float(month_index(plan_year, 1))
+        self.base = base
+        anchors: list[tuple[float, float]] = []
+        if mods.m_prior is not None:
+            anchors.append((month_coord(add_months(mods.m0_asof, -12), True), mods.m_prior))
+        anchors.append((month_coord(mods.m0_asof, True), mods.m0))
+        if self.x_switch > anchors[-1][0]:
+            anchors.append((self.x_switch, base))
+        self.hist = ModPath.from_anchors(anchors)
+        self.steps = sorted((month_coord(mc.effective), mc.effective_pct)
+                            for mc in mod_changes)
+        # breakpoint carriers: the drift anchors, the switch, and every step
+        self.anchors = list(anchors) + [(self.x_switch, base)] + \
+            [(x, 0.0) for x, _ in self.steps]
+
+    def value(self, x: float) -> float:
+        if x <= self.x_switch:
+            return self.hist.value(x)
+        idx = 1.0
+        for xs, pct in self.steps:
+            if xs <= x:
+                idx *= 1.0 + pct
+        return self.base * idx
+
+    def segment_value(self, a: float, b: float, t: float) -> float:
+        if a >= self.x_switch:
+            return self.value((a + b) / 2.0)     # constant across the segment
+        return self.value(t)
+
+
 def continuous_earned_mod(
-    plan_year: int, mods: ModInputs, year: int, term_months: int = 12
+    plan_year: int, mods: ModInputs, year: int, term_months: int = 12,
+    mod_changes: Sequence[RateChange] = (),
 ) -> float:
-    """Closed-form CY earned mod: exposure-weighted average of the linear path.
+    """Closed-form CY earned mod: exposure-weighted average of the mod path.
 
     Integrand L(t)·M(t) is quadratic between breakpoints -> Simpson is exact.
+    With D70 mod steps the path is constant past 1/1/P, which is exact too.
     """
     tau = float(term_months)
     y0, y1 = float(month_index(year, 1)), float(month_index(year + 1, 1))
-    path = ModPath(plan_year, mods, coord=lambda d: month_coord(d, end_of_day=True))
+    if mod_changes:
+        base = mods.m_end_prior
+        if base is None:
+            base = ModPath(plan_year, mods,
+                           coord=lambda d: month_coord(d, end_of_day=True)
+                           ).value(float(month_index(plan_year, 1)))
+        path = _SteppedContinuousModPath(plan_year, mods, mod_changes, base)
+    else:
+        path = ModPath(plan_year, mods, coord=lambda d: month_coord(d, end_of_day=True))
+    seg = getattr(path, "segment_value", None)
     pts = _breakpoints(y0, y1, tau, (x for x, _ in path.anchors))
 
     num = den = 0.0
@@ -572,8 +780,8 @@ def continuous_earned_mod(
         def f(t: float) -> float:
             return _cy_overlap_weight(t, y0, y1, tau)
 
-        def g(t: float) -> float:
-            return f(t) * path.value(t)
+        def g(t: float, a=a, b=b) -> float:
+            return f(t) * (seg(a, b, t) if seg else path.value(t))
 
         mid = (a + b) / 2.0
         den += h / 6.0 * (f(a) + 4.0 * f(mid) + f(b))
@@ -697,7 +905,8 @@ def run_bridge(plan_year: int, combo: ComboInputs, convention: str = "monthly") 
                 for y in (p - 1, p, p + 1)
             }
         m_earned = {
-            y: continuous_earned_mod(p, combo.mods, y, combo.term_months)
+            y: continuous_earned_mod(p, combo.mods, y, combo.term_months,
+                                     combo.mod_changes)
             for y in (p - 1, p, p + 1)
         }
         series = {}
