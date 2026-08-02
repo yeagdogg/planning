@@ -63,6 +63,14 @@ seasonality_profiles:
 
 # Spare blank input rows kept beyond the seeded dimensions so a new state or
 # late rate filings can be added without regenerating immediately.
+#
+# These also set how wide every log sweep is: the engine scans the whole
+# capacity, not just the populated rows, so halving a capacity roughly halves
+# that leg's scan cost. It is not worth tuning for speed (a full rebuild of the
+# whole workbook is well under a second either way) — but do NOT trim below
+# your real book's needs plus headroom for mid-season filings, because
+# overflowing means regenerating in-season. Carry your inputs across with
+# --carry-forward when you do change these.
 table_capacity:
   spare_lr_rows: 6         # extra blank BU x State rows in tbl_LR
   rate_log_rows: 240       # total tbl_RateLog rows (state x BU x changes)
@@ -86,4 +94,4 @@ theme:
   font: Calibri
 
 # Version stamped on Read Me; bump when regenerating with structural changes.
-version: 3.3.0
+version: 3.3.1

@@ -292,7 +292,12 @@ def build_netcalc(ctx: Ctx):
                                             ln="ml_ln1p", effmonth="ml_effmonth",
                                             first="ml_first", daysafter="ml_daysafter"),
                            mod_col=NC_MOD_COL, mod_base_ref=base_ref,
-                           mod_count_ref=cnt_ref)
+                           mod_count_ref=cnt_ref,
+                           # D84: blank key = a spare state, or ANY state while
+                           # the tab is on the All view. Both are states where
+                           # the sweep provably returns the gate's constants,
+                           # so this is free in the common view too.
+                           idle_cond=f'$B${t}=""')
 
         p0, p1 = t + 3 + 24, t + 3 + 35        # plan-year cohort rows
         y0, y1 = t + 3 + 12, t + 3 + 23        # year-ago cohort rows
@@ -492,17 +497,21 @@ def build_netcalc(ctx: Ctx):
     # (b) the engine's own net path must satisfy T(m)/T(m-12) = 1 + x.
     calc_base = (f"{L.CALC_BLOCK_FIRST}+(MATCH($B${tb},calc_key,0)-1)"
                  f"*{L.CALC_BLOCK_STRIDE}")
+    # D84: bound the INDEX ranges. Whole-column refs ('_calc'!$N:$N) make these
+    # 24 cells depend on all 1,048,576 rows of two columns and re-dirty on any
+    # block change — the exact pattern Program Flow already replaced (D68).
+    cl = L.CALC_BLOCK_FIRST + L.LR_ROWS * L.CALC_BLOCK_STRIDE + 60
     rbb = tb + 51
     for j in range(12):
         r = tb + 3 + 12 + j            # year-ago cohort rows
         formula(ws, f"AK{r}",
                 f"=IF($D${tb}=0,0,ABS($N{r}"
-                f"-INDEX('_calc'!$N:$N,{calc_base}+{15 + j})))", fmt="0.0000000000")
+                f"-INDEX('_calc'!$N$1:$N{cl},{calc_base}+{15 + j})))", fmt="0.0000000000")
         rp = tb + 3 + 24 + j           # plan cohort rows
         formula(ws, f"AL{rp}",
                 f"=IF(OR($D${tb}=0,$F${tb}=0),0,"
-                f"ABS(INDEX('_calc'!$T:$T,{calc_base}+{27 + j})"
-                f"/INDEX('_calc'!$T:$T,{calc_base}+{15 + j})-(1+$E${tb})))",
+                f"ABS(INDEX('_calc'!$T$1:$T{cl},{calc_base}+{27 + j})"
+                f"/INDEX('_calc'!$T$1:$T{cl},{calc_base}+{15 + j})-(1+$E${tb})))",
                 fmt="0.0000000000")
         ws[f"AK{r}"].font = font(GREY_DARK, size=8)
         ws[f"AL{rp}"].font = font(GREY_DARK, size=8)

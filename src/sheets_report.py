@@ -664,7 +664,9 @@ def build_checks(ctx: Ctx):
        "=IF(slv_key<>nr_SelKey,0,SUMPRODUCT(ABS(fd_tkw-slv_widx)))", 1e-9, "FAIL"))
     A(("Structure", "Flow Dashboard avg YoY delivered = _calc block results (selected "
        "combo)", "=0",
-       f"=IF(br_selrow=0,0,ABS(INDEX('_calc'!$J:$J,{L.CALC_BLOCK_FIRST}+(br_selrow-1)"
+       f"=IF(br_selrow=0,0,ABS(INDEX('_calc'!$J$1:$J$"
+       f"{L.CALC_BLOCK_FIRST + L.LR_ROWS * L.CALC_BLOCK_STRIDE + 60},"
+       f"{L.CALC_BLOCK_FIRST}+(br_selrow-1)"
        f"*{L.CALC_BLOCK_STRIDE}+51)-1-fd_avgdel))", 1e-9, "FAIL"))
     A(("Advisory", "Net combo(s) in the Program Flow view deliver 1pt+ off the asserted "
        "net on program basis (see Net Delivery)", "=0",
@@ -751,6 +753,13 @@ def build_checks(ctx: Ctx):
        "=0", '=SUMPRODUCT((rl_bu<>"")*((rl_bu&"|"&rl_state)<>rl_key)*1)', 0, "FAIL"))
     A(("Structure", "Mod Log key helper = BU|State on every populated row (paste overshoot)",
        "=0", '=SUMPRODUCT((ml_bu<>"")*((ml_bu&"|"&ml_state)<>ml_key)*1)', 0, "FAIL"))
+    # A dated log row with no BU/state carries a BLANK key, which is also what a
+    # spare engine block resolves to — so an orphan row would leak into blocks
+    # that should match nothing (D84's idle gate assumes it cannot). It is a
+    # half-finished paste either way, and the engine ignores it entirely.
+    A(("Structure", "No log row carries a date without a BU and state (orphan row)",
+       "=0", '=SUMPRODUCT((rl_eff<>"")*(rl_key="")*1)'
+             '+SUMPRODUCT((ml_eff<>"")*(ml_key="")*1)', 0, "FAIL"))
     # Unit-error tripwire: EP is checked only for sign, so a thousands-vs-dollars
     # slip on one row skews every EP-weighted exhibit at once.
     A(("Advisory", "No single combo carries more than half the book's plan EP (unit check)",

@@ -126,10 +126,18 @@ tied to a per-combo oracle run (9 metrics each); solver round-trip (+5.0% at 4/1
 intact and no legend overlapping its plot after the Excel resave; scenario, attribution,
 seasonality, basis, mod-toggle,
 degenerate-input, stepped-mod, and plan-year-change exercises each tied to fresh oracle runs. At last run:
-Property **294 checks / 0 failed** (full), the other five LOB files 94 (or 92 for the
+Property **277 checks / 0 failed** (full), the other five LOB files 94 (or 92 for the
 6-month-term Inland Marine) / 0 failed each (phases A–C), the combined book **56 / 0**
 (`tools/verify_book.py` — including the source-freshness phase), pytest 274/274. Each verify
 run now works in its own temporary scratch directory, so LOBs can be verified in parallel.
+
+**Recalculation cost, measured** (Excel `CalculateFullRebuild`, whole workbook, median of 3):
+**0.36 s**. Worth stating because the shape of the file invites the opposite assumption — the
+log-scan ranges are shared, so editing one Rate Log cell dirties nearly every one of the
+~171k formulas. It rebuilds in a third of a second anyway. Optimising the formulas further
+buys milliseconds; the thing actually worth waiting on is the verification harness, not the
+workbook.
+
 The business
 units and states in `config/config.yaml` are addressed positionally, so renaming them to
 your own book keeps every seeded example working (a repeated BU or state is rejected at

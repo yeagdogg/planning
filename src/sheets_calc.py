@@ -164,7 +164,11 @@ def build_calc(ctx: Ctx):
             mod_refs=LogRefs(key_cond=f"$A${t}", eff="ml_eff", ln="ml_ln1p",
                              effmonth="ml_effmonth", first="ml_first",
                              daysafter="ml_daysafter"),
-            mod_col=22, mod_base_ref=f"$Q${t}", mod_count_ref=f"$P${t}")
+            mod_col=22, mod_base_ref=f"$Q${t}", mod_count_ref=f"$P${t}",
+            # D84: spare tbl_LR rows resolve to a blank key and can match no log
+            # row, so their scans are pure cost. The gate returns exactly what
+            # the sweep returns for an empty key.
+            idle_cond=f'$A${t}=""')
         # block results row
         rr = t + 51
         label(ws, f"A{rr}", "block results:")
@@ -629,20 +633,26 @@ def build_calc(ctx: Ctx):
     # every mod input resolved for slv_key, NOT the Control selection — the
     # Solver's override can detach the two, and reading nr_M0 here would
     # quietly solve the wrong combo
+    # D85: read the SOLVE combo's own _calc header cells rather than
+    # re-resolving the mod inputs from tbl_LR. This block used to be a fourth
+    # hand-synced copy of that resolution and it had dropped the blank guards
+    # every other copy carries — so a combo with blank mod fields (legal
+    # everywhere else, where it reads as a flat 1.000 path) drove Mode C's mod
+    # leg off M_0 = 0 and an as-of date of serial 0, silently. Pointing at the
+    # guarded cells fixes the divergence and removes the copy in one edit.
     sr = "MATCH(slv_key,lr_key,0)"
+    cl = L.CALC_BLOCK_FIRST + L.LR_ROWS * L.CALC_BLOCK_STRIDE + 60
+    base = f"{L.CALC_BLOCK_FIRST}+({sr}-1)*{L.CALC_BLOCK_STRIDE}"
+
+    def hdr(colL: str, absent: str) -> str:
+        return (f"=IF(COUNTIF(lr_key,slv_key)=0,{absent},"
+                f"INDEX(${colL}$1:${colL}${cl},{base}))")
+
     f_grey(ws, f"V{t}", "=COUNTIF(ml_key,slv_key)+1", FMT_INT)
-    f_grey(ws, f"W{t}",
-           f"=IF(COUNTIF(lr_key,slv_key)=0,1,"
-           f"IF(N(INDEX(lr_mendprior,{sr}))=0,"
-           + mod_drift_at_switch(f"INDEX(lr_m0,{sr})", f"INDEX(lr_m0asof,{sr})",
-                                 f"INDEX(lr_m1,{sr})", f"N(INDEX(lr_mprior,{sr}))")
-           + f",INDEX(lr_mendprior,{sr})))", FMT_MOD)
-    f_grey(ws, f"X{t}", f"=IF(COUNTIF(lr_key,slv_key)=0,1,INDEX(lr_m0,{sr}))", FMT_MOD)
-    f_grey(ws, f"Y{t}",
-           f"=IF(COUNTIF(lr_key,slv_key)=0,DATE(nr_PlanYear-1,10,1),"
-           f"INDEX(lr_m0asof,{sr}))", "mm/dd/yyyy")
-    f_grey(ws, f"Z{t}", f"=IF(COUNTIF(lr_key,slv_key)=0,0,N(INDEX(lr_mprior,{sr})))",
-           FMT_MOD)
+    f_grey(ws, f"W{t}", hdr("Q", "1"), FMT_MOD)          # guarded M_endPrior
+    f_grey(ws, f"X{t}", hdr("G", "1"), FMT_MOD)          # guarded M_0
+    f_grey(ws, f"Y{t}", hdr("H", "DATE(nr_PlanYear-1,10,1)"), "mm/dd/yyyy")
+    f_grey(ws, f"Z{t}", hdr("J", "0"), FMT_MOD)          # M_prior (raw, as _calc)
     anchors_s = write_mod_anchor_cells(
         ws, ctx, t + 1, 1,
         mind_ref="nr_MInd", m0_ref=f"$X${t}", asof_ref=f"$Y${t}",

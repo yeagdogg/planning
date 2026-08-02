@@ -159,7 +159,7 @@ def write_cohort_block(
     anchors: ModAnchors | None, include_rate=True, include_mod=True,
     header=True, header_row_at: int | None = None, net: dict | None = None,
     mod_refs: LogRefs | None = None, mod_col: int | None = None,
-    mod_base_ref: str = "", mod_count_ref: str = "",
+    mod_base_ref: str = "", mod_count_ref: str = "", idle_cond: str = "",
 ):
     """Emit the 48-row cohort block starting at ``first_row``, columns A..R.
 
@@ -169,7 +169,17 @@ def write_cohort_block(
       U  index in force = Q in net mode, W otherwise (aggregates read U)
     Expected keys: mode (boolean condition), x, x1, modeff (condition), mind.
     Requires an M_w column O (written here or linked in by the caller).
+
+    ``idle_cond`` (D84) is an Excel test that is TRUE when the block resolves to
+    nothing — a spare tbl_LR row whose key is blank. The log scans then short to
+    the value they already produce (an empty key matches only blank log rows,
+    whose ln(1+r) is 0, so every index is EXP(0) = 1 and every count is 0), and
+    Excel's lazy IF skips the sweep entirely. Values are unchanged by
+    construction; the point is that six spare blocks stop sweeping the whole log
+    on every keystroke forever.
     """
+    def idle(inert: str, live: str) -> str:
+        return f"=IF({idle_cond},{inert},{live})" if idle_cond else f"={live}"
     if header:
         hr = header_row_at if header_row_at is not None else first_row - 1
         header_row(ws, hr, 1, COH_HEADERS,
@@ -198,18 +208,25 @@ def write_cohort_block(
                     f"12*INDEX(se_block,{srow_ref},$E{r})/{ssum_ref})", fmt="0.00")
         if include_rate:
             k = refs.key_cond
-            formula(ws, f"I{r}",
-                    f"=EXP(SUMPRODUCT(({refs.eff}<$B{r})*(rl_key={k}){refs.sp_status}*{refs.ln}))",
-                    fmt=FMT_IDX)
-            formula(ws, f"J{r}",
-                    f"=EXP(SUMPRODUCT(({refs.eff}<=$C{r})*(rl_key={k}){refs.sp_status}*{refs.ln}))",
-                    fmt=FMT_IDX)
-            formula(ws, f"K{r}",
-                    f'=COUNTIFS(rl_key,{k},{refs.eff},">="&$B{r},{refs.eff},"<="&$C{r}{refs.ifs_status})',
-                    fmt=FMT_INT)
-            formula(ws, f"L{r}",
-                    f"=SUMIFS({refs.daysafter},rl_key,{k},{refs.effmonth},$B{r},{refs.first},1{refs.ifs_status})",
-                    fmt=FMT_INT)
+            # D84: "index before this month" IS "index at the end of last month".
+            # B(r) = EOMONTH(B(r-1),0) + 1, so eff < B(r) and eff <= C(r-1)
+            # select the identical rows — the scan was being run twice per pair.
+            # Only the block's first row still needs the real scan.
+            if i == 0:
+                formula(ws, f"I{r}", idle("1",
+                        f"EXP(SUMPRODUCT(({refs.eff}<$B{r})*(rl_key={k})"
+                        f"{refs.sp_status}*{refs.ln}))"), fmt=FMT_IDX)
+            else:
+                formula(ws, f"I{r}", f"=$J{r - 1}", fmt=FMT_IDX)
+            formula(ws, f"J{r}", idle("1",
+                    f"EXP(SUMPRODUCT(({refs.eff}<=$C{r})*(rl_key={k})"
+                    f"{refs.sp_status}*{refs.ln}))"), fmt=FMT_IDX)
+            formula(ws, f"K{r}", idle("0",
+                    f'COUNTIFS(rl_key,{k},{refs.eff},">="&$B{r},{refs.eff},'
+                    f'"<="&$C{r}{refs.ifs_status})'), fmt=FMT_INT)
+            formula(ws, f"L{r}", idle("0",
+                    f"SUMIFS({refs.daysafter},rl_key,{k},{refs.effmonth},$B{r},"
+                    f"{refs.first},1{refs.ifs_status})"), fmt=FMT_INT)
             formula(ws, f"M{r}", f"=IF($K{r}=0,0,MIN(1,$L{r}/$D{r}))", fmt="0.000")
             formula(ws, f"N{r}", f"=IF($K{r}=0,$J{r},(1-$M{r})*$I{r}+$M{r}*$J{r})", fmt=FMT_IDX)
         if include_mod and anchors is not None:
@@ -221,26 +238,29 @@ def write_cohort_block(
                 # same blend. Drift owns cohorts before 1/1/P; the step log
                 # owns the rest, compounding on the current-year-end mod.
                 mk = mod_refs.key_cond
-                c = [col(mod_col + i) for i in range(5)]
-                formula(ws, f"{c[0]}{r}",
-                        f"=EXP(SUMPRODUCT(({mod_refs.eff}<$B{r})*(ml_key={mk})"
-                        f"{mod_refs.sp_status}*{mod_refs.ln}))", fmt=FMT_IDX)
-                formula(ws, f"{c[1]}{r}",
-                        f"=EXP(SUMPRODUCT(({mod_refs.eff}<=$C{r})*(ml_key={mk})"
-                        f"{mod_refs.sp_status}*{mod_refs.ln}))", fmt=FMT_IDX)
-                formula(ws, f"{c[2]}{r}",
-                        f"=COUNTIFS(ml_key,{mk},{mod_refs.eff},\">=\"&$B{r},"
-                        f"{mod_refs.eff},\"<=\"&$C{r}{mod_refs.ifs_status})", fmt=FMT_INT)
-                formula(ws, f"{c[3]}{r}",
-                        f"=SUMIFS({mod_refs.daysafter},ml_key,{mk},"
+                c = [col(mod_col + j) for j in range(5)]
+                if i == 0:                                   # D84, mod leg
+                    formula(ws, f"{c[0]}{r}", idle("1",
+                            f"EXP(SUMPRODUCT(({mod_refs.eff}<$B{r})*(ml_key={mk})"
+                            f"{mod_refs.sp_status}*{mod_refs.ln}))"), fmt=FMT_IDX)
+                else:
+                    formula(ws, f"{c[0]}{r}", f"=${c[1]}{r - 1}", fmt=FMT_IDX)
+                formula(ws, f"{c[1]}{r}", idle("1",
+                        f"EXP(SUMPRODUCT(({mod_refs.eff}<=$C{r})*(ml_key={mk})"
+                        f"{mod_refs.sp_status}*{mod_refs.ln}))"), fmt=FMT_IDX)
+                formula(ws, f"{c[2]}{r}", idle("0",
+                        f'COUNTIFS(ml_key,{mk},{mod_refs.eff},">="&$B{r},'
+                        f'{mod_refs.eff},"<="&$C{r}{mod_refs.ifs_status})'), fmt=FMT_INT)
+                formula(ws, f"{c[3]}{r}", idle("0",
+                        f"SUMIFS({mod_refs.daysafter},ml_key,{mk},"
                         f"{mod_refs.effmonth},$B{r},{mod_refs.first},1"
-                        f"{mod_refs.ifs_status})", fmt=FMT_INT)
+                        f"{mod_refs.ifs_status})"), fmt=FMT_INT)
                 formula(ws, f"{c[4]}{r}",
                         f"=IF(${c[2]}{r}=0,${c[1]}{r},"
                         f"(1-MIN(1,${c[3]}{r}/$D{r}))*${c[0]}{r}"
                         f"+MIN(1,${c[3]}{r}/$D{r})*${c[1]}{r})", fmt=FMT_IDX)
-                for i in range(5):
-                    ws[f"{c[i]}{r}"].font = font(GREY_DARK, size=9)
+                for j in range(5):      # not `i` — that is the cohort index,
+                    ws[f"{c[j]}{r}"].font = font(GREY_DARK, size=9)
                 formula(ws, f"O{r}",
                         f"=IF(AND({mod_count_ref}>0,$G{r}>=nr_MStartP),"
                         f"{mod_base_ref}*${c[4]}{r},{drift})", fmt=FMT_MOD)
@@ -757,8 +777,12 @@ def build_mod_engine(ctx: Ctx):
         link(ws, f"C{r}", f"={re}!$F{r}", fmt="0.0")
         link(ws, f"D{r}", f"={re}!$H{r}", fmt="0.00")
         formula(ws, f"T{r}", f"=EOMONTH($B{r},0)", fmt=FMT_DATE)
-        formula(ws, f"U{r}",
-                f"=EXP(SUMPRODUCT((ml_eff<$B{r})*(ml_key=nr_SelKey)*ml_ln1p))", fmt=FMT_IDX)
+        if i == 0:                                    # D84: see write_cohort_block
+            formula(ws, f"U{r}",
+                    f"=EXP(SUMPRODUCT((ml_eff<$B{r})*(ml_key=nr_SelKey)*ml_ln1p))",
+                    fmt=FMT_IDX)
+        else:
+            formula(ws, f"U{r}", f"=$V{r - 1}", fmt=FMT_IDX)
         formula(ws, f"V{r}",
                 f"=EXP(SUMPRODUCT((ml_eff<=$T{r})*(ml_key=nr_SelKey)*ml_ln1p))", fmt=FMT_IDX)
         formula(ws, f"W{r}",
