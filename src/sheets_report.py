@@ -813,6 +813,23 @@ def build_checks(ctx: Ctx):
        f'+SUMPRODUCT((ISNUMBER(fd_eidx))*((fd_eidx<axw_idx_lo)+(fd_eidx>axw_idx_hi)))'
        f'+SUMPRODUCT((ISNUMBER(fd_wmod))*((fd_wmod<axw_mod_lo)+(fd_wmod>axw_mod_hi)))',
        0, "WARN"))
+    # ---- appended v3.5 checks: the LR flow walk (D93) ----------------------
+    # The exhibit shows a residual instead of forcing a tie, which is only
+    # honest if the residual is ACCOUNTED FOR. This is that account closing.
+    A(("Structure", "LR Flow: the residual decomposition reproduces the walk's own "
+       "weighted mean exactly (covariance x tilt x convexity)", "=0",
+       "=ABS(lrf_ident)", 1e-6, "FAIL"))
+    # The trend anchor is the exhibit's one real modelling choice, and a
+    # half-month slip is invisible in the output — it just moves every month a
+    # little. These two sums are what pin 7/1: zero over the plan year (the
+    # headline carries no trend) and twelve over the next (it carries one step).
+    A(("Structure", "LR Flow: trend is anchored at 7/1 of the plan year — the monthly "
+       "exponents sum to 0 over P and to 12 over P+1", "=0",
+       f"=ABS(SUM(lrf_delta_p))+ABS(SUM(lrf_delta_p1)-12)", 1e-9, "FAIL"))
+    A(("Advisory", "LR Flow: the monthly walk and the CY headline differ by more than "
+       "25 bp — a short term with lumpy writings moves the exposure centre of gravity "
+       "off 7/1 (see the tilt line on that tab)", "=0",
+       "=IF(ABS(lrf_resid_p)>25,1,0)", 0, "WARN"))
 
     header_row(ws, L.CK_HDR, 1,
                ["#", "Category", "Check", "Expected", "Actual", "Tolerance", "Status",
@@ -1241,6 +1258,38 @@ def build_methodology(ctx: Ctx):
          "by construction — a Checks row asserts exactly that on every non-net row, "
          "which is what keeps the feature honest.",
          ]),
+        ("6e. LR Flow — the plan loss ratio month by month (D93)", [
+         "The plan loss ratio is an average, and averages hide the thing you manage. "
+         "January renews against a rate level that has barely earned in, so it opens high; "
+         "December closes low. Trend pushes the other way the whole time. This tab runs "
+         "that race by evaluating the SAME bridge at each month rather than over the year: "
+         "LR(m) = LR_current x T^((m - 6.5)/12) x (CRL/E_m) x (M_ind/Mbar_m) x A_other. "
+         "Trend is NET (loss over premium) because it is separate from rate and mod "
+         "earning — the other two factors already carry the price side.",
+         "The 7/1 anchor is not a preference. It is the unique anchor at which the "
+         "plan-year exponents average to exactly zero — so the walk averages to a headline "
+         "that carries no trend — AND the following year's average to exactly one, so that "
+         "walk averages to a headline carrying exactly one trend step. A Checks row asserts "
+         "both sums, because getting it wrong produces no error, only every month being "
+         "slightly and invisibly off.",
+         "The walk's premium-weighted mean does NOT equal the CY headline, and the tab "
+         "shows the gap rather than forcing a tie. About 0.6 bp on an annual term, and it "
+         "decomposes exactly into three terms the reconciliation strip names: the rate x "
+         "price COVARIANCE (the headline divides by two separate averages, the walk divides "
+         "month by month by their product), Jensen CONVEXITY (the average of a curve exceeds "
+         "the curve of the average), and a centre-of-gravity TILT that is zero for an annual "
+         "term at any seasonality and non-zero for a short term with lumpy writings — which "
+         "is the exhibit telling you the fixed 7/1 anchor no longer sits at your exposure "
+         "centre. A Checks row requires the three to reproduce the mean, because a residual "
+         "nobody can account for is an error wearing an explanation's clothes.",
+         "The headline number is the BREAKEVEN TREND: the net trend at which January and "
+         "December land together, solved in closed form from the two months' earn-in "
+         "factors. Above it the year deteriorates as it runs; below it, it improves. A "
+         "combo on a net rate selection breaks even at its own target, which is what you "
+         "would expect and a useful sign the pricing leg is not being counted twice. "
+         "Weights are premium (earned exposure x the price in force), not exposure alone. "
+         "Months that earn nothing report a dash and carry no weight.",
+         ]),
         ("7. Solver (E1)", [
          "The CY earned index is linear in a single unknown change r, so the required rate "
          "solves in closed form: E(r) = (C_pre + (1+r) C_post) / D. The base index W0 uses "
@@ -1477,6 +1526,9 @@ READ_ME_GUIDE = [
                      "change that satisfies the target — the filing to make and the mod "
                      "change to file with it, both dated."),
     ("Bridge", "The selected combo's answer: projected LR -> CY plan LR, factor by factor."),
+    ("LR Flow", "The same bridge evaluated at each MONTH instead of averaged over the "
+                "year — rate and price earning in against trend pushing the other way. "
+                "The breakeven trend says which one wins."),
     ("Walkthrough", "The fully worked example — every calculation for the selected combo, "
                     "start to finish."),
     ("One-Pager", "A print-ready brief of the selected combo — the page you hand a VP."),

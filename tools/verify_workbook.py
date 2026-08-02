@@ -108,6 +108,30 @@ def _ss_chain(ss, r):
             * ss[f"{ss_l('amod')}{r}"].value * ss[f"{ss_l('aother')}{r}"].value)
 
 
+def lrflow_ties(wb, tag: str, p: int, cmb) -> None:
+    """Re-tie the LR Flow walk under a mutated state (D93).
+
+    Folded into exercises that already exist rather than given its own, because
+    the states that matter to it — trend moved, mod leg pinned, net path in
+    force — are states other exercises already build (D86's collapse).
+    """
+    from src.sheets_lrflow import LF_FIRST
+    f = engine.lr_flow_by_month(p, cmb)
+    lf = wb[SHEETS.LR_FLOW]
+    bad = sum(0 if (lf[f"E{LF_FIRST + i}"].value == "—" if r["lr"] is None
+                    else approx(lf[f"E{LF_FIRST + i}"].value, r["lr"], 1e-9))
+              else 1 for i, r in enumerate(f.rows))
+    check(f"[{tag}] LR Flow: all 24 months tie a fresh oracle run",
+          bad == 0, f"{bad} mismatched months")
+    check(f"[{tag}] LR Flow: weighted mean and residual tie",
+          approx(nval(wb, "lrf_mean_p"), f.mean_p, 1e-9)
+          and approx(nval(wb, "lrf_resid_p"), f.resid_p * 1e4, 1e-6),
+          f"mean wb={nval(wb, 'lrf_mean_p')} oracle={f.mean_p}")
+    check(f"[{tag}] LR Flow: the decomposition still closes",
+          approx(nval(wb, "lrf_ident"), 0.0, 1e-6),
+          f"lrf_ident={nval(wb, 'lrf_ident')} bp")
+
+
 def checks_pass(wb, name: str = "ck_overall") -> bool:
     """True while the status banner reports no FAILing check (D80).
 
@@ -566,6 +590,45 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
             bad += 1
     check("[program flow] dashboard cols M..U tie oracle for all 24 YoY months",
           bad == 0, f"{bad} mismatched months")
+
+    # LR Flow (D93): every month of the walk, the two weighted means, the
+    # breakeven, and the residual decomposition — against a fresh oracle run.
+    from src.sheets_lrflow import LF_FIRST, LF_MONTHS
+    lf = wb[SHEETS.LR_FLOW]
+    flow_lr = engine.lr_flow_by_month(p, combo)
+    bad = 0
+    for i, row in enumerate(flow_lr.rows):
+        got = lf[f"E{LF_FIRST + i}"].value
+        if row["lr"] is None:
+            if got != "—":
+                bad += 1
+        elif not approx(got, row["lr"], 1e-9):
+            bad += 1
+    check(f"[lr flow] all {LF_MONTHS} monthly loss ratios tie a fresh oracle run",
+          bad == 0, f"{bad} mismatched months")
+    check("[lr flow] months that earn nothing are dashes, never zeros",
+          all(lf[f"E{LF_FIRST + m - 1}"].value == "—" for m in flow_lr.dead_months),
+          f"dead months {flow_lr.dead_months}")
+    for name, want, tol in (("lrf_mean_p", flow_lr.mean_p, 1e-9),
+                            ("lrf_mean_p1", flow_lr.mean_p1, 1e-9),
+                            ("lrf_resid_p", flow_lr.resid_p * 1e4, 1e-6),
+                            ("lrf_cov", flow_lr.cov_rate_price * 1e4, 1e-6),
+                            ("lrf_tilt", flow_lr.cog_tilt_p * 1e4, 1e-6),
+                            ("lrf_convex", flow_lr.convexity_p * 1e4, 1e-6)):
+        check(f"[lr flow] {name} ties the oracle",
+              approx(nval(wb, name), want, tol),
+              f"wb={nval(wb, name)} oracle={want}")
+    if flow_lr.breakeven_trend is not None:
+        check("[lr flow] the breakeven trend ties the oracle's closed form",
+              approx(nval(wb, "lrf_tstar"), flow_lr.breakeven_trend, 1e-9),
+              f"wb={nval(wb, 'lrf_tstar')} oracle={flow_lr.breakeven_trend}")
+    # the anchor, and the identity that makes the residual an explanation
+    check("[lr flow] trend anchored at 7/1: exponents sum to 0 over P, 12 over P+1",
+          approx(sum(r["delta"] for r in flow_lr.rows[:12]), 0.0, 1e-12)
+          and approx(sum(r["delta"] for r in flow_lr.rows[12:]), 12.0, 1e-12))
+    check("[lr flow] the decomposition reproduces the walk's own weighted mean",
+          approx(nval(wb, "lrf_ident"), 0.0, 1e-6),
+          f"lrf_ident={nval(wb, 'lrf_ident')} bp")
     check("[program flow] delta-vs-net column blank for the non-net WE combo",
           fd["V93"].value in (None, ""), f"V93={fd['V93'].value!r}")
     check("[program flow] D77 delivered = locked x planned residual",
@@ -877,6 +940,11 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
     def a2(wb):
         check("[combo mod OFF] CY LR ties oracle", approx(nval(wb, "nr_CYLR_P"),
               off_m.cy_lr_p, 1e-9))
+        lrflow_ties(wb, "combo mod OFF", p,
+                    replace(base_combo, mod_adjustment_enabled=False))
+        check("[combo mod OFF] LR Flow: mod leg pinned, so no covariance",
+              approx(nval(wb, "lrf_cov"), 0.0, 1e-9),
+              f"lrf_cov={nval(wb, 'lrf_cov')} bp")
     run("combo mod OFF", {("Inputs", f"{lr_letter('lr_modadj')}{we_row_xl}"): "OFF"}, a2)
 
     # 3. basis proposed on the worked-example combo
@@ -1150,6 +1218,9 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
         got = wb["_calc"][f"O{ovr_calc_row}"].value
         check("[trend default 2%] explicit per-state trend still wins",
               approx(got, ovr_m.cy_lr_p1, 1e-9), f"wb={got} oracle={ovr_m.cy_lr_p1}")
+        # the walk now carries a real trend, so convexity is non-zero and the
+        # decomposition has something to explain
+        lrflow_ties(wb, "trend default 2%", p, replace(base_combo, net_trend=0.02))
     run("trend default 2%", {("Control", "C15"): 0.02}, a9c)
 
     # 9d. net rate selection on the worked-example combo (D39)
@@ -1163,6 +1234,10 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
               approx(nval(wb, "nr_CYLR_P1"), net_m.cy_lr_p1, 1e-9))
         check("[net 8%] A_mod collapses to 1", approx(nval(wb, "nr_Amod_P"), 1.0, 1e-12))
         check("[net 8%] net mode flag TRUE", nval(wb, "nr_NetMode") is True)
+        lrflow_ties(wb, "net 8%", p, replace(base_combo, net_sel_p=0.08))
+        check("[net 8%] LR Flow: no separate price leg, so no covariance",
+              approx(nval(wb, "lrf_cov"), 0.0, 1e-9),
+              f"lrf_cov={nval(wb, 'lrf_cov')} bp")
     run("net selection 8%", {("Inputs", f"{lr_letter('lr_netp')}{we_row_xl}"): 0.08}, a9d)
 
     # 9e. scenario D-net lever on top of a net selection

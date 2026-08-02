@@ -37,7 +37,7 @@ from . import engine
 from .engine import ComboInputs, ModInputs, RateChange
 from .xlstyle import quote_sheet
 
-GENERATOR_VERSION = "3.4.3"
+GENERATOR_VERSION = "3.5.0"
 
 # Leads every seeded Mod Log comment so the Checks tripwire can spot a sample
 # action left in a real book (D80). Kept short and unmistakable — a real
@@ -76,6 +76,7 @@ class SHEETS:
     RATE_ENGINE = "Rate Engine"
     MOD_ENGINE = "Mod Engine"
     BRIDGE = "Bridge"
+    LR_FLOW = "LR Flow"          # D93 monthly plan-LR walk
     WALKTHROUGH = "Walkthrough"
     ONE_PAGER = "One-Pager"
     COMPARE = "Compare"
@@ -647,7 +648,7 @@ SHEET_ORDER = [
     SHEETS.README, SHEETS.CONTROL, SHEETS.INPUTS, SHEETS.RATE_LOG,
     SHEETS.MOD_LOG,
     SHEETS.PORTFOLIO, SHEETS.STATE_SUMMARY, SHEETS.PROGRAM_FLOW,
-    SHEETS.NET_DELIVERY, SHEETS.BRIDGE,
+    SHEETS.NET_DELIVERY, SHEETS.BRIDGE, SHEETS.LR_FLOW,
     SHEETS.WALKTHROUGH, SHEETS.ONE_PAGER, SHEETS.FLOW, SHEETS.SCENARIOS,
     SHEETS.COMPARE, SHEETS.SOLVER, SHEETS.ATTRIBUTION, SHEETS.RATE_ENGINE,
     SHEETS.MOD_ENGINE, SHEETS.CHECKS, SHEETS.METHODOLOGY,
@@ -672,9 +673,9 @@ def build(cfg: Config, lob_name: str, carried=None) -> Workbook:
     apply to a real book instead of reporting N/A forever.
     """
     from . import (sheets_briefs, sheets_calc, sheets_engine, sheets_inputs,
-                   sheets_main, sheets_netdelivery, sheets_programflow,
-                   sheets_modlog, sheets_ratelog, sheets_report,
-                   sheets_walkthrough)
+                   sheets_lrflow, sheets_main, sheets_netdelivery,
+                   sheets_programflow, sheets_modlog, sheets_ratelog,
+                   sheets_report, sheets_walkthrough)
 
     Layout.configure(cfg)
     lob = cfg.lob(lob_name)
@@ -765,6 +766,7 @@ def build(cfg: Config, lob_name: str, carried=None) -> Workbook:
     sheets_main.build_solver(ctx)
     sheets_main.build_attribution(ctx)
     sheets_report.build_flow_dashboard(ctx)
+    sheets_lrflow.build_lr_flow(ctx)
     sheets_walkthrough.build_walkthrough(ctx)
     sheets_briefs.build_one_pager(ctx)
     sheets_briefs.build_compare(ctx)

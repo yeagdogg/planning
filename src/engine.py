@@ -2124,6 +2124,167 @@ def attribution(
 
 
 # ---------------------------------------------------------------------------
+# LR flow: the race between trend and earn-in, month by month (D93)
+# ---------------------------------------------------------------------------
+
+# The trend anchor, in month-number units counted from Jan P = 1. 6.5 is the
+# boundary between June and July — 7/1/P — and it is not a taste: it is the
+# ONLY anchor at which the unweighted mean exponent is exactly 0 over Jan..Dec P
+# (so the plan-year walk averages to the headline, which carries no trend) AND
+# exactly 1 over Jan..Dec P+1 (so next year's walk averages to the headline's
+# single trend step). Half a month either way costs ~19 bp of factor in P and
+# ~480 bp in P+1, and the half-month slip is easy: month CENTRES average to 6.0,
+# month NUMBERS average to 6.5, and only the second is the 7/1 boundary.
+LR_FLOW_ANCHOR = 6.5
+
+
+@dataclass(frozen=True)
+class LrFlowResult:
+    plan_year: int
+    mod_on: bool                  # a separate mod leg is in force
+    rows: list                    # 24 dicts, Jan P .. Dec P+1
+    mean_p: float                 # premium-weighted mean monthly LR over P
+    mean_p1: float
+    head_p: float                 # the CY headline each is measured against
+    head_p1: float
+    resid_p: float                # mean_p / head_p - 1, in factor terms
+    resid_p1: float
+    trend_mean_p: float           # E_den[T^delta] over P
+    cov_rate_price: float         # c_EM: the rate x price covariance over P
+    cog_tilt_p: float             # T^E_den[delta] - 1
+    convexity_p: float            # E_den[T^delta] / T^E_den[delta] - 1
+    breakeven_trend: float | None  # net trend at which Jan P LR == Dec P LR
+    dead_months: list             # 1-based month numbers that earn nothing
+
+
+def _lr_flow_den(eng, m: int) -> float:
+    """Earned exposure in month ``m`` — the denominator E_CY is built from."""
+    return sum(eng.w(k) * eng.e(k, m)
+               for k in range(max(eng.c0, m - eng.t), min(eng.c1, m) + 1))
+
+
+def lr_flow_by_month(plan_year: int, combo: ComboInputs) -> LrFlowResult:
+    """The monthly plan loss ratio, Jan P .. Dec P+1 — trend against earn-in.
+
+    Each month's loss ratio is the same bridge the CY headline uses, evaluated
+    at that month instead of averaged over the year::
+
+        LR(m) = LR_current x T^((mm - 6.5)/12) x (CRL/E_m) x (M_ind/Mbar_m) x A_other
+
+    Rate and price earn IN (the factors fall as the year runs); trend pushes the
+    other way. Which one wins is the whole question, and it is a DATE: the month
+    the two lines cross. ``breakeven_trend`` states it as one number — the net
+    trend at which January and December land on the same loss ratio.
+
+    Weights are PREMIUM, not exposure: ``den_m x E_m x (Mbar_m / M_ind)``, the
+    earned exposure times the price actually in force. Weighting by exposure
+    alone misses by about 3.4 bp on the worked example against 0.6 bp here,
+    because a month that earns more premium should count for more.
+
+    The weighted mean does NOT equal the CY headline, and this deliberately does
+    not force it to (the D46 convention: disclose the residual, never normalise
+    it away). The gap is real and decomposes exactly::
+
+        mean / head = E_den[T^delta] / (1 + c_EM)
+
+    with ``c_EM`` the covariance between the earned rate index and the earned
+    price level — the headline divides by two SEPARATE averages, this divides
+    month by month by their PRODUCT — and ``E_den[T^delta]`` splitting further
+    into a centre-of-gravity tilt (zero for an annual term, non-zero when a
+    short term makes earned exposure lumpy) and Jensen convexity. On the worked
+    example: +1.60 bp of covariance, +0.99 bp of convexity, 0.00 bp of tilt.
+    The identity is exact to floating point, in every mode.
+
+    A month that earns nothing — a short term with concentrated writings — has
+    no loss ratio to report. Those months come back as ``None`` and are listed
+    in ``dead_months``; they are gaps in the walk, never zeros.
+    """
+    eng = MonthlyEngine(plan_year, combo)
+    res = run_bridge(plan_year, combo, "monthly")
+    lr_cur = res.lr_current
+    crl = res.crl_ind
+    m_ind = combo.mods.m_ind or 1.0
+    a_oth = combo.a_other
+    trend = 1.0 + combo.net_trend
+    # A separate mod leg exists only when the mod adjustment is on AND the combo
+    # is not on a net selection — a net path already combines rate and price, so
+    # applying a mod leg on top would count the pricing twice (D39).
+    mod_on = bool(combo.mod_adjustment_enabled and not combo.net_mode)
+
+    jan_p = month_index(plan_year, 1)
+    rows, dead = [], []
+    for i in range(24):
+        m = jan_p + i
+        mm = i + 1                                  # month NUMBER, Jan P = 1
+        delta = (mm - LR_FLOW_ANCHOR) / 12.0
+        tf = trend ** delta
+        e_m = eng.earned_index_month(m)
+        mbar = eng.earned_mod_month(m)
+        den = _lr_flow_den(eng, m)
+        row = dict(mi=m, month=mm, delta=delta, trend_factor=tf,
+                   den=den, e=e_m, mbar=mbar)
+        if e_m != e_m or e_m == 0.0 or den <= 0.0:   # NaN or nothing earned
+            dead.append(mm)
+            row.update(a_rate=None, a_mod=None, lr=None, weight=0.0, price=None)
+        else:
+            a_rate = crl / e_m
+            a_mod = (m_ind / mbar) if mod_on else 1.0
+            # the price level actually in force this month, in index terms
+            price = (mbar / m_ind) if mod_on else 1.0
+            row.update(a_rate=a_rate, a_mod=a_mod, price=price,
+                       lr=lr_cur * tf * a_rate * a_mod * a_oth,
+                       weight=den * e_m * price)
+        rows.append(row)
+
+    def _mean(sl):
+        num = sum(r["weight"] * r["lr"] for r in rows[sl] if r["lr"] is not None)
+        den = sum(r["weight"] for r in rows[sl] if r["lr"] is not None)
+        return (num / den) if den else float("nan")
+
+    mean_p, mean_p1 = _mean(slice(0, 12)), _mean(slice(12, 24))
+
+    # decomposition over the plan year, on EXPOSURE weights (den), which is the
+    # measure E_CY and Mbar_CY are themselves built on
+    live = [r for r in rows[:12] if r["lr"] is not None]
+    dtot = sum(r["den"] for r in live) or 1.0
+
+    def _e(f):
+        return sum(r["den"] * f(r) for r in live) / dtot
+
+    e_bar, p_bar = _e(lambda r: r["e"]), _e(lambda r: r["price"])
+    e_p_bar = _e(lambda r: r["e"] * r["price"])
+    cov = (e_p_bar / (e_bar * p_bar) - 1.0) if (e_bar and p_bar) else 0.0
+    t_bar = _e(lambda r: r["trend_factor"])
+    d_bar = _e(lambda r: r["delta"])
+    tilt = trend ** d_bar
+    convex = (t_bar / tilt) if tilt else 1.0
+
+    # the breakeven net trend: T such that LR(Jan P) == LR(Dec P). The trend
+    # factors are T^(-5.5/12) and T^(+5.5/12), so the whole thing collapses to
+    # a ratio of the two months' earn-in factors. None when either month is
+    # dead, or when the factors do not move at all (nothing to race against).
+    jan, dec = rows[0], rows[11]
+    breakeven = None
+    if jan["lr"] is not None and dec["lr"] is not None:
+        a_jan = jan["a_rate"] * jan["a_mod"]
+        a_dec = dec["a_rate"] * dec["a_mod"]
+        span = (dec["delta"] - jan["delta"])
+        if a_dec > 0 and span > 0 and abs(a_jan / a_dec - 1.0) > 1e-15:
+            breakeven = (a_jan / a_dec) ** (1.0 / span) - 1.0
+
+    return LrFlowResult(
+        plan_year=plan_year, mod_on=mod_on, rows=rows,
+        mean_p=mean_p, mean_p1=mean_p1,
+        head_p=res.cy_lr_p, head_p1=res.cy_lr_p1,
+        resid_p=(mean_p / res.cy_lr_p - 1.0) if res.cy_lr_p else float("nan"),
+        resid_p1=(mean_p1 / res.cy_lr_p1 - 1.0) if res.cy_lr_p1 else float("nan"),
+        trend_mean_p=t_bar, cov_rate_price=cov,
+        cog_tilt_p=tilt - 1.0, convexity_p=convex - 1.0,
+        breakeven_trend=breakeven, dead_months=dead,
+    )
+
+
+# ---------------------------------------------------------------------------
 # The §9 worked example
 # ---------------------------------------------------------------------------
 

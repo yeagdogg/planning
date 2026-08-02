@@ -7,3 +7,4 @@ output/verify_*/
 ~$*.xlsx
 *.bak.xlsx
 .claude/*.lock
+output/release-state.json

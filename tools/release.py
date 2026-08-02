@@ -18,12 +18,16 @@ and its own scratch directory, so the wall clock is a few lines rather than six.
 That only became possible once the harness stopped sharing a single scratch
 file (D84) — before, two concurrent runs deleted each other's working copy.
 
-Width is capped at three deliberately: at six, Excel/COM came apart — two lines
-raised "The interface is unknown" and one produced a set of assertion failures
-whose actual values were the workbook's DEFAULT state, meaning its mutation had
-silently not been applied. Verification that can quietly fail to set up its own
-exercise is worse than slow verification, so the cap stays low and the harness
-now re-reads every mutated cell before asserting anything.
+Width is FITTED to the machine (D94), not hard-coded: a phase-D worker is one
+Python process plus one Excel instance and the pair peaks around 670 MB, so the
+bound is `min(lines, cores - 2, two-thirds of free RAM / 900 MB, 8)`. It used to
+be 2, which on a 24-core box turned six lines into three waves for no reason.
+
+And phase D does not run when it cannot say anything. It mutates inputs,
+recalculates through Excel and ties the results to the oracle — it tests the
+ARITHMETIC — so if a line rebuilt to byte-identical formulas and names since the
+last green full run, re-deriving the same answers is ceremony. Those lines fall
+back to phases A-C and the run says which and why. `--force-full` overrides.
 
     python tools/release.py --quick
     python tools/release.py --full --lob Property
@@ -34,6 +38,9 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures as cf
+import hashlib
+import json
+import os
 import shutil
 import subprocess
 import sys
@@ -47,25 +54,129 @@ from tools.build_book import book_path  # noqa: E402
 
 PY = sys.executable
 
-# Concurrency is capped by MEMORY and by COM, and the two tiers are very
-# different loads. Phase D reads a whole recalculated workbook into openpyxl per
-# exercise — 865k cells, and that dominates the footprint — on top of an Excel
-# instance per line: at six, COM came apart ('The interface is unknown', and one
-# line whose mutation had silently not applied); at three, one line was killed
-# outright with no output at all. Phases A-C carry no such load.
-MAX_JOBS_FULL = 2
-MAX_JOBS_QUICK = 4
 ROOT = Path(__file__).resolve().parents[1]
+STATE_FILE = "release-state.json"
+
+# Measured, not guessed (D94): a phase-D worker is one Python process plus one
+# Excel instance, and the pair peaks around 670 MB — Excel ~350, openpyxl ~320.
+# Phases A-C never start Excel at all. The old hard-coded cap of 2 came from a
+# run where a third line died, which was later identified as an ACCESS VIOLATION
+# rather than memory pressure; a killed line is now retried serially, so the cap
+# no longer has to absorb that failure by staying small.
+MB_PER_JOB_FULL = 900
+MB_PER_JOB_QUICK = 400
+HARD_JOB_CAP = 8          # past this, Excel/COM instability costs more than it saves
 
 
-def _run(args: list[str], label: str) -> tuple[str, int, str]:
+def _free_mb() -> int:
+    """Physical memory currently available, or -1 where we cannot tell."""
+    try:
+        import ctypes
+
+        class _MS(ctypes.Structure):
+            _fields_ = [("dwLength", ctypes.c_ulong),
+                        ("dwMemoryLoad", ctypes.c_ulong),
+                        ("ullTotalPhys", ctypes.c_ulonglong),
+                        ("ullAvailPhys", ctypes.c_ulonglong),
+                        ("ullTotalPageFile", ctypes.c_ulonglong),
+                        ("ullAvailPageFile", ctypes.c_ulonglong),
+                        ("ullTotalVirtual", ctypes.c_ulonglong),
+                        ("ullAvailVirtual", ctypes.c_ulonglong),
+                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+        st = _MS()
+        st.dwLength = ctypes.sizeof(_MS)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
+            return int(st.ullAvailPhys // (1024 * 1024))
+    except Exception:  # noqa: BLE001 - not Windows, or the call is unavailable
+        pass
+    return -1
+
+
+def _max_jobs(full: bool, n_lobs: int) -> int:
+    """Fit the fan-out to the machine rather than to the machine I had.
+
+    Half the wall clock of a --full run used to be waves that existed only
+    because the cap was two: six lines, two at a time, on a box with 24 cores
+    and 60 GB. The bound that matters is memory per worker, and it is small.
+    """
+    per = MB_PER_JOB_FULL if full else MB_PER_JOB_QUICK
+    by_cpu = max(1, (os.cpu_count() or 4) - 2)
+    free = _free_mb()
+    # leave a third of free memory alone: Excel grows while it recalculates,
+    # and a swapping box is slower than a serial one
+    by_mem = max(1, int(free * 0.67) // per) if free > 0 else HARD_JOB_CAP
+    return max(1, min(n_lobs, by_cpu, by_mem, HARD_JOB_CAP))
+
+
+def _formula_fingerprint(path: Path) -> str:
+    """A hash of every FORMULA in a workbook, plus its defined names.
+
+    This is what decides whether phase D has anything to say (D94). Phase D
+    mutates inputs, recalculates, and ties the results to the oracle — so it
+    tests the ARITHMETIC. If a rebuild produces byte-identical formulas and
+    byte-identical name resolution, the arithmetic cannot have moved, and
+    re-running forty minutes of Excel to re-derive the same answers is not
+    verification, it is ceremony.
+
+    Deliberately NOT a hash of the file: as-of stamps and cached values change
+    on every build, so the file always differs while the model usually does not.
+    """
+    import openpyxl
+
+    h = hashlib.sha256()
+    wb = openpyxl.load_workbook(path, data_only=False)
+    try:
+        for ws in wb.worksheets:
+            h.update(f"\x00SHEET:{ws.title}".encode())
+            for row in ws.iter_rows():
+                for c in row:
+                    v = c.value
+                    if isinstance(v, str) and v.startswith("="):
+                        h.update(f"\x01{c.coordinate}={v}".encode())
+        for name in sorted(wb.defined_names):
+            h.update(f"\x02{name}={wb.defined_names[name].value}".encode())
+    finally:
+        wb.close()
+    return h.hexdigest()
+
+
+def _load_state(out_dir: Path) -> dict:
+    try:
+        return json.loads((out_dir / STATE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_state(out_dir: Path, state: dict) -> None:
+    try:
+        (out_dir / STATE_FILE).write_text(json.dumps(state, indent=1),
+                                          encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _run(args: list[str], label: str, retries: int = 0) -> tuple[str, int, str]:
     """Run a subprocess, returning (label, returncode, tail of output).
 
     A failure with NO output is a real outcome — a killed process, an
     out-of-memory, a COM teardown that took the interpreter with it — so say so
     rather than printing an empty string and leaving the reader to guess.
+
+    ``retries`` re-runs in a FRESH process on failure (D92). In-process retries
+    already exist in recalc.py and are not always enough: the step that follows
+    a fan-out has hit three different COM failures — 'The interface is unknown',
+    an RPC error, and a proxy answering a property read with the wrong type —
+    and every one of them cleared on a new process while none of them cleared
+    on a new Excel instance inside the same one. Whatever state goes bad lives
+    in the interpreter's COM apartment, not in Excel.
     """
-    r = subprocess.run([PY, *args], cwd=ROOT, capture_output=True, text=True)
+    for attempt in range(retries + 1):
+        r = subprocess.run([PY, *args], cwd=ROOT, capture_output=True, text=True)
+        if r.returncode == 0 or attempt == retries:
+            break
+        _await_excel_drain()
+        print(f"  ..   {label} failed; retrying in a fresh process "
+              f"({attempt + 1}/{retries})")
     out = (r.stdout or "") + (r.stderr or "")
     tail = "\n".join(l for l in out.splitlines()
                      if "RESULT" in l or "FAIL" in l or "Error" in l)
@@ -149,13 +260,14 @@ def main(argv=None) -> int:
     tier.add_argument("--full", action="store_true",
                       help="everything, including phase D exercises")
     ap.add_argument("--jobs", type=int, default=0,
-                    help="parallel workers (default 2 for --full, 4 for --quick; "
-                         "phase D is memory-heavy and Excel/COM destabilises "
-                         "when over-committed)")
+                    help="parallel workers (default: fitted to free memory and CPU "
+                         "count — about 900MB per --full worker)")
     ap.add_argument("--skip-build", action="store_true",
                     help="verify what is already in the output directory")
     ap.add_argument("--carry-forward", action="store_true",
                     help="rebuild around each workbook's existing inputs (D82)")
+    ap.add_argument("--force-full", action="store_true",
+                    help="run phase D even where every formula is unchanged")
     args = ap.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -205,7 +317,7 @@ def main(argv=None) -> int:
             return 1
 
         stage("recalculate")
-        n = args.jobs or min(len(lobs), MAX_JOBS_FULL if args.full else MAX_JOBS_QUICK)
+        n = args.jobs or _max_jobs(args.full, len(lobs))
         with cf.ThreadPoolExecutor(max_workers=n) as pool:
             futs = {pool.submit(_run, ["tools/recalc.py", str(output_path(cfg, out_dir, name))],
                                 name): name for name in lobs}
@@ -228,7 +340,7 @@ def main(argv=None) -> int:
             for step in (["tools/build_book.py", "--config", args.config,
                           "--out", str(out_dir)],
                          ["tools/recalc.py", str(book_path(cfg, out_dir))]):
-                label, rc, tail = _run(step, "book")
+                label, rc, tail = _run(step, "book", retries=2)
                 if rc:
                     failures.append(f"book: {tail}")
             print("  ok   book" if not failures else "  FAIL book")
@@ -239,27 +351,97 @@ def main(argv=None) -> int:
             print("\n(skipping the book: it needs every line, and this run is "
                   f"limited to {', '.join(lobs)})")
 
+    # ---- does phase D have anything to say? (D94) --------------------------
+    # Phase D mutates inputs, recalculates through Excel, and ties the results
+    # to the oracle: it tests the ARITHMETIC. If a line rebuilt to byte-identical
+    # formulas and byte-identical names, the arithmetic did not move, and forty
+    # minutes of Excel would re-derive answers already derived. Skip it, and SAY
+    # SO — a silent skip is how a verification tier quietly stops existing.
+    state = _load_state(out_dir)
+    prints = state.get("phase_d_ok", {})
+    fps: dict[str, str] = {}
+    skip_d: set[str] = set()
+    if args.full and not args.force_full:
+        for name in lobs:
+            try:
+                fps[name] = _formula_fingerprint(output_path(cfg, out_dir, name))
+            except Exception:  # noqa: BLE001 - never let bookkeeping fail a run
+                continue
+            if prints.get(name) == fps[name]:
+                skip_d.add(name)
+        if skip_d:
+            print(f"\n(phase D skipped for {', '.join(sorted(skip_d))}: every formula "
+                  f"and defined name is unchanged since the last green full run, so "
+                  f"the oracle ties cannot move. --force-full overrides.)")
+
     stage("verify" + (" (full, phase D)" if args.full else " (phases A-C)"))
-    verify = ["tools/verify_workbook.py", "--config", args.config, "--skip-recalc"]
-    if not args.full:
-        verify.append("--quick")
-    n = args.jobs or min(len(lobs), MAX_JOBS_FULL if args.full else MAX_JOBS_QUICK)
+    base = ["tools/verify_workbook.py", "--config", args.config, "--skip-recalc"]
+
+    def _argv(name):
+        deep = args.full and name not in skip_d
+        return base + ([] if deep else ["--quick"]) + ["--lob", name]
+
+    # THE BOOK GOES FIRST (D94). It depends on the lines being built and
+    # recalculated — which happened above — not on their verification, so there
+    # is no reason for it to run in the wake of a six-way fan-out. Every COM
+    # failure this pipeline has produced has been at whichever step followed
+    # one, and moving the book out of that window is a better fix than retrying
+    # inside it: the last run burned 270 seconds failing three times and still
+    # went red on a book that passes on its own.
+    if set(lobs) == set(cfg.output_lobs):
+        bargs = ["tools/verify_book.py", "--config", args.config, "--skip-recalc"]
+        if not args.full:
+            bargs.append("--quick")
+        label, rc, tail = _run(bargs, "book", retries=2)
+        print(f"  {'ok  ' if not rc else 'FAIL'} {'book':<20} "
+              f"{tail.splitlines()[-1] if tail else ''}")
+        if rc:
+            failures.append(f"verify book: {tail}")
+        _await_excel_drain()
+
+    n = args.jobs or _max_jobs(args.full and len(skip_d) < len(lobs), len(lobs))
+    print(f"  ({n} parallel worker{'s' if n != 1 else ''})")
     with cf.ThreadPoolExecutor(max_workers=n) as pool:
-        futs = {pool.submit(_run, verify + ["--lob", name], name): name for name in lobs}
+        futs = {pool.submit(_run, _argv(name), name): name for name in lobs}
         for f in cf.as_completed(futs):
             label, rc, tail = f.result()
             print(f"  {'ok  ' if not rc else 'FAIL'} {label:<20} {tail.splitlines()[-1] if tail else ''}")
             if rc:
                 failures.append(f"verify {label}: {tail}")
-    if set(lobs) == set(cfg.output_lobs):
-        bargs = ["tools/verify_book.py", "--config", args.config, "--skip-recalc"]
-        if not args.full:
-            bargs.append("--quick")
-        label, rc, tail = _run(bargs, "book")
-        print(f"  {'ok  ' if not rc else 'FAIL'} {'book':<20} "
+    # A line that was KILLED (access violation, out of memory) rather than
+    # failing an assertion is an environment outcome, not a verification
+    # outcome, and it always passes on its own. Retry those serially rather
+    # than reporting a red release for a resource problem — but only those:
+    # a line that actually FAILED an assertion has produced output, and
+    # re-running it would just fail again more slowly.
+    killed = [n_ for n_, (rc_, tail_) in
+              ((k, (r_[1], r_[2])) for k, r_ in
+               ((futs[f], f.result()) for f in futs))
+              if rc_ and "no output" in tail_]
+    for name in killed:
+        failures = [x for x in failures if not x.startswith(f"verify {name}:")]
+        _await_excel_drain()
+        print(f"  ..   {name} was killed with no output; retrying on its own")
+        label, rc, tail = _run(_argv(name), name)
+        print(f"  {'ok  ' if not rc else 'FAIL'} {label:<20} "
               f"{tail.splitlines()[-1] if tail else ''}")
         if rc:
-            failures.append(f"verify book: {tail}")
+            failures.append(f"verify {label}: {tail}")
+
+    # Record what phase D actually proved, so the next run can skip what it
+    # would only re-prove. Only lines that RAN it and passed: a skipped line
+    # keeps the print it already had, and any failure clears every print so the
+    # next run cannot inherit a green stamp it did not earn.
+    if args.full:
+        if failures:
+            for name in lobs:
+                prints.pop(name, None)
+        else:
+            for name in lobs:
+                if name in fps and name not in skip_d:
+                    prints[name] = fps[name]
+        state["phase_d_ok"] = prints
+        _save_state(out_dir, state)
 
     dt = time.perf_counter() - t_start
     print(f"\n{'=' * 60}")

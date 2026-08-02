@@ -18,6 +18,15 @@ Marine ships as the 6-month-term example).
   the chronological rate-change history, the P+1 view and the net-selection block follow. A BU
   filter whose "All" view combines business units on **adjusted-plan-EP weights** (the EP column
   is the weight behind every aggregate in the book — enter adjusted EP there).
+- **LR Flow** — the plan loss ratio month by month: the same bridge the headline uses,
+  evaluated at each month instead of averaged over the year. Rate and price earn IN while
+  trend pushes the other way, and the exhibit's headline is the **breakeven trend** — the net
+  trend at which January and December land on the same loss ratio (9.9% on the shipped
+  sample). Trend is anchored at 7/1 of the plan year, the unique anchor at which the
+  plan-year walk averages to the headline *and* next year's averages to the headline's single
+  trend step. The walk's weighted mean sits a few basis points from the CY headline and the
+  tab **discloses that gap rather than forcing a tie**, decomposed into rate×price covariance,
+  Jensen convexity, and a centre-of-gravity tilt that is zero for an annual term (D93).
 - **Default net trend for P+1** on Control, inherited wherever a combo's trend cell is blank;
   per-state entries override.
 - **Optional net rate selection** per BU × state (DECISIONS.md D39): declare the year-over-year
@@ -60,6 +69,7 @@ src/carry.py               Reads a built workbook's inputs back out, by defined
 src/sheets_netdelivery.py  Net Delivery tab + hidden _netcalc blocks (D57/D75)
 src/sheets_programflow.py  Program Flow tab: state x month delivered-flow grids (D59/D68)
 src/sheets_book.py         the BOOK: combined roll-up across every LOB (D66)
+src/sheets_lrflow.py       LR Flow: the monthly plan-LR walk, trend vs earn-in (D93)
 src/sheets_walkthrough.py  Walkthrough: the fully worked example, live for the selection
 src/sheets_briefs.py       One-Pager (print-ready brief) and Compare builders
 src/sheets_report.py       Flow Dashboard, _oracle, Checks, Methodology, Read Me builders
@@ -71,6 +81,7 @@ tests/test_mod_solve.py    inverting the mod step for a target plan LR (D73)
 tests/test_harvest.py      harvester refusals and provenance parsing (D66)
 tests/test_layout.py       Layout geometry (incl. the D56 dual-module guard)
 tests/test_style.py        prose row-height calibration (nothing may clip)
+tests/test_lr_flow.py      the monthly walk: anchor, decomposition, breakeven (D93)
 tests/test_carry.py        carry-forward round trip + the sample-data detector (D82)
 tests/test_recalc.py       date serials and the calc-settings patch (D86/D88)
 tools/recalc.py            headless recalculation (Excel COM, LibreOffice fallback)
@@ -156,13 +167,25 @@ under every exercised state; no volatile / dynamic-array / prohibited functions;
 cells; no external links; the §9 worked example reproduced exactly (Bridge = oracle monthly
 convention to 1e-9, and 63.36% at 4 decimals on annual-term books); **every BU×state combo**
 tied to a per-combo oracle run (9 metrics each); solver round-trip (+5.0% at 4/1); chart axes
-intact and no legend overlapping its plot after the Excel resave; scenario, attribution,
-seasonality, basis, mod-toggle,
+intact and no legend overlapping its plot after the Excel resave; every month of the LR Flow
+walk tied to a fresh oracle run, with its residual decomposition required to reproduce its
+own weighted mean; scenario, attribution, seasonality, basis, mod-toggle,
 degenerate-input, stepped-mod, and plan-year-change exercises each tied to fresh oracle runs. At last run:
 **every line at full phase D**: Property, General Liability, Commercial Auto, Workers Comp
-and Umbrella **286 checks / 0 failed** each, the 6-month-term Inland Marine **284 / 0**, and
+and Umbrella **308 checks / 0 failed** each, the 6-month-term Inland Marine **306 / 0**, and
 the combined book **56 / 0** (`tools/verify_book.py`, including the source-freshness phase).
-pytest 284/284. Each verify run works in its own temporary scratch directory, so lines can be
+pytest 304/304. Excel's COM layer is intermittently flaky under this load and no in-process
+retry clears it, so the driver retries the book steps in FRESH processes and re-runs serially
+any line that was killed outright rather than failing an assertion (D92); the book is also
+verified BEFORE the fan-out rather than in its exhaust (D94).
+
+**Phase D does not run every time, and it is not capped at two.** It tests the arithmetic, so
+a line that rebuilt to byte-identical formulas and defined names since the last green full run
+cannot produce a different answer — those lines fall back to phases A–C and the run says which
+and why (`--force-full` overrides). Parallel width is fitted to the machine rather than
+hard-coded: `min(lines, cores - 2, ⅔ free RAM / 900 MB, 8)`. On a 24-core box that turned
+three waves into one, taking a full run from **37 minutes to 26**; a presentation-only change
+now finishes in about two (D94). Each verify run works in its own temporary scratch directory, so lines can be
 verified in parallel — see the release driver above for the concurrency caps and why they are
 where they are.
 
@@ -284,9 +307,10 @@ a timestamped `.bak.xlsx` is written before anything is overwritten.
    block (`tbl_LR` columns A:S, `tbl_RateLog` A:H, `tbl_ModLog` A:G; keys and engine helpers
    sit to the right, behind a blank spacer column, and recalculate on their own — so
    Ctrl+Shift+Right stops at the edge of what you may edit and a paste one column too wide
-   lands in dead space rather than on the key formulas). Default capacities per workbook: 69
-   `tbl_LR` rows (63 BU×state + 6 spare), 240 rate-log rows, 120 mod-log rows, 24
-   seasonality rows (fixed; do not insert or delete rows).
+   lands in dead space rather than on the key formulas). Default capacities per workbook:
+   **100 `tbl_LR` rows** (63 BU×state + 37 spare), **400 rate-log rows**, **200 mod-log
+   rows**, 24 seasonality rows (fixed; do not insert or delete rows). The spare rows sit on
+   top of whatever you configure, so a fourth business unit gives 84 + 37 = 121.
 4. **Clear the seeded SAMPLE mod actions** if you started from a fresh build rather than a
    carry-forward. They attach positionally, so on a real roster they land on real combos and
    move real plan loss ratios. A Checks advisory flags them.
