@@ -397,6 +397,45 @@ def unoverlay_titles(wb):
     return n
 
 
+def zoom_axis(chart, lo, hi, step=0.05, pad_frac=0.10, min_pad=0.01, floor=None):
+    """Frame a value axis on its DATA rather than on zero (D91).
+
+    Excel's automatic minimum for a value axis is zero. That is right for
+    quantities and wrong for LEVELS. A loss-ratio bridge walking 65% -> 63%
+    draws as five columns of visually identical height with the entire story
+    inside the top 2% of the plot; a rate index running 1.00 -> 1.11 does the
+    same thing. Starting at zero is not neutral — it spends the whole plot area
+    proving that loss ratios are positive.
+
+    The window is padded by ``pad_frac`` of the span (never less than
+    ``min_pad``) and rounded OUTWARD to ``step``, so the labels stay round.
+
+    An Excel axis bound is a static number, not a formula: it cannot follow the
+    data. So the window is baked at build time from the oracle, over every combo
+    the exhibit can be switched to — and the Checks panel carries a row that
+    says plainly when a paste has moved the plot outside it, because a silently
+    clipped chart is exactly the failure this project refuses everywhere else.
+    """
+    lo_w, hi_w = axis_window(lo, hi, step, pad_frac, min_pad, floor)
+    chart.y_axis.scaling.min = lo_w
+    chart.y_axis.scaling.max = hi_w
+    return lo_w, hi_w
+
+
+def axis_window(lo, hi, step=0.05, pad_frac=0.10, min_pad=0.01, floor=None):
+    """The padded, outward-rounded window ``zoom_axis`` applies — as a pure
+    function, so the Checks panel can bake the same two numbers it charts."""
+    pad = max(max(hi - lo, 0.0) * pad_frac, min_pad)
+    lo_w = math.floor((lo - pad) / step) * step
+    hi_w = math.ceil((hi + pad) / step) * step
+    if floor is not None:
+        lo_w = max(lo_w, floor)
+    # rounding at a coarse step can collapse the window on a flat series
+    if hi_w - lo_w < step:
+        hi_w = lo_w + step
+    return round(lo_w, 10), round(hi_w, 10)
+
+
 def assert_formulas_balanced(wb):
     """Fail the BUILD on a formula whose parentheses don't close (D89).
 

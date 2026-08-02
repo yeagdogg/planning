@@ -130,7 +130,9 @@ def recalc_with_excel(path: Path, attempts: int = 3) -> None:
             except Exception:  # noqa: BLE001
                 pass
             shutdown_excel()          # never retry into a suspect instance
-        time.sleep(2.0 * (attempt + 1))
+        # Excel's teardown outlasts its Quit() call, so the backoff has to be
+        # longer than the drain, not just longer than a busy moment (D92).
+        time.sleep(3.0 * (attempt + 1) ** 2)
     raise last_exc  # type: ignore[misc]
 
 
@@ -264,7 +266,9 @@ def mutate_and_recalc(path: Path, mutations, attempts: int = 3) -> None:
             shutdown_excel()
         finally:
             pythoncom.CoUninitialize()
-        time.sleep(2.0 * (attempt + 1))
+        # Excel's teardown outlasts its Quit() call, so the backoff has to be
+        # longer than the drain, not just longer than a busy moment (D92).
+        time.sleep(3.0 * (attempt + 1) ** 2)
     raise last_exc  # type: ignore[misc]
 
 

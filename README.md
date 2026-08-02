@@ -337,6 +337,12 @@ is honest and shows you what a warning looks like.
   nothing downstream contradicts it. Date bounds follow `nr_PlanYear` rather than the year
   the file was generated in, so rolling the plan year forward does not leave a validation
   rejecting dates the engine accepts.
+- **Charts are framed on their data, not on zero** (D91). Excel's automatic axis minimum is
+  zero, which is right for premium and wrong for levels: a bridge walking 65% to 63% drew five
+  columns of identical height with the whole story in the top 2% of the plot. An Excel axis
+  bound is a static number, so the window is computed at build time across **every combo the
+  exhibit can be switched to** — and two Checks advisories say so when a paste moves the book
+  outside it, because an off-the-edge chart looks broken rather than stale.
 - **The build refuses to emit a malformed formula** (D89). One unbalanced parenthesis makes
   the entire file unopenable, and Excel reports it only from the recalculation step, minutes
   later, as `Open method of Workbooks class failed` — naming no sheet and no cell.

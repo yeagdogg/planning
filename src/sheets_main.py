@@ -18,7 +18,7 @@ from .xlstyle import (ALIGN_C, ALIGN_WRAP, BORDER_THIN, DOWN_BAR, FAIL_RED, FILL
     F_HEADER, F_LABEL, F_SMALL_IT, GREY_DARK, NAVY, STEEL, STEEL_LIGHT, TOTAL_BAR,
     UP_BAR, WARN_AMBER, add_dv, chart_legend, col, dv_decimal, dv_plan_year_date,
     font, formula, header_row, input_cell, jump, label, link, nav_bar, note,
-    presentation_setup, print_setup, prose, put, section, set_widths, title,
+    presentation_setup, print_setup, prose, put, section, set_widths, title, zoom_axis,
 )
 
 PTS_Z = '+0.00 "pts";-0.00 "pts";""'
@@ -354,6 +354,12 @@ def build_bridge(ctx: Ctx):
     chart.series[3].graphicalProperties.solidFill = TOTAL_BAR
     chart.legend = None
     chart.y_axis.number_format = "0%"
+    # A waterfall stacks on an invisible base, so Excel's automatic zero floor
+    # draws five columns of near-identical height with the whole walk inside the
+    # top 2% of the plot. The window covers every combo the selector can reach,
+    # because this chart is live (D91).
+    lo, hi = ctx.lay_dyn["axis"]["lr"]
+    zoom_axis(chart, lo, hi, step=0.05)
     _style_chart(chart, "Projected LR -> CY plan loss ratio (stacked-column waterfall)",
                  y_title="Loss ratio", height=9, width=15)
     ws.add_chart(chart, "J5")

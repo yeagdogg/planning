@@ -79,6 +79,36 @@ def _run(args: list[str], label: str) -> tuple[str, int, str]:
     return label, r.returncode, tail
 
 
+def _await_excel_drain(timeout_s: float = 60.0) -> int:
+    """Wait for the parallel recalc instances to finish dying (D92).
+
+    Excel's teardown is asynchronous: the subprocess returns as soon as it has
+    called Quit, while the process itself lingers for a second or two releasing
+    its RPC endpoints. Starting the next instance inside that window fails in a
+    different way each time — 'The interface is unknown', an RPC error, or a
+    proxy that answers property reads with the wrong type ("'bool' object is
+    not callable"). All three were observed at the BOOK step, which is the one
+    that always follows a fan-out, and all three survived recalc.py's own
+    retries because its backoff is shorter than the drain.
+
+    Returns the number of Excel processes still up when we stopped waiting.
+    """
+    deadline = time.monotonic() + timeout_s
+    n = -1
+    while time.monotonic() < deadline:
+        try:
+            out = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq EXCEL.EXE", "/NH"],
+                capture_output=True, text=True, timeout=20).stdout
+        except (OSError, subprocess.SubprocessError):
+            return -1                      # not Windows, or tasklist missing
+        n = sum(1 for l in out.splitlines() if "EXCEL.EXE" in l.upper())
+        if n == 0:
+            return 0
+        time.sleep(1.0)
+    return n
+
+
 def _locked(out_dir: Path) -> list[str]:
     """Excel lock files. Recalculating a workbook that is open in Excel either
     fails or silently binds to the open copy, so refuse rather than guess."""
@@ -190,6 +220,10 @@ def main(argv=None) -> int:
 
         # The book must follow every line, or it silently reports last month.
         if set(lobs) == set(cfg.output_lobs):
+            left = _await_excel_drain()
+            if left > 0:
+                print(f"  (note: {left} Excel process(es) still shutting down; "
+                      f"continuing anyway)")
             stage("book")
             for step in (["tools/build_book.py", "--config", args.config,
                           "--out", str(out_dir)],
