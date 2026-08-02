@@ -22,13 +22,19 @@ from .xlstyle import (
     FILL_GREEN, FMT_DATE, FMT_EP, FMT_GEN, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT,
     FMT_PTS_SIGNED, GREY_DARK, NAVY, PASS_GREEN, STEEL, WARN_AMBER,
     font, formula, header_row, input_cell, jump, label, link, nav_bar, note,
-    presentation_setup, print_setup, put, rng, section, set_widths, title,
+    presentation_setup, print_setup, put, rng, section, set_widths,
+    status_banner_cf, title,
 )
 
 TABLE_STYLE = TableStyleInfo(
     name="TableStyleMedium2", showFirstColumn=False, showLastColumn=False,
     showRowStripes=True, showColumnStripes=False,
 )
+
+
+def _carried(ctx, attr):
+    """A carried-forward setting, or None on a seeded build (D82)."""
+    return getattr(ctx.carried, attr, None) if ctx.carried is not None else None
 
 
 def _dv(ws, kind, ranges, blocking=True, **kw):
@@ -265,11 +271,17 @@ def build_inputs(ctx: Ctx):
           "Loss-ratio and mod inputs (one row per BU x state), seasonality, and the policy "
           "term — blue font = enter values; yellow fill = required. Rate changes live on "
           "the Rate Log sheet. Structure is fixed; do not insert or delete rows.")
-    nav_bar(ws, 3, 1, ["Control", "Rate Log", "Bridge", "State Summary", "Checks",
+    nav_bar(ws, 3, 1, ["Control", "Rate Log", "Mod Log", "State Summary", "Checks",
                        "Read Me"], step=2)
+    # A carried build holds the user's real book, so the SAMPLE banner would be
+    # a lie — and a banner that lies is how a real row gets deleted (D82).
     put(ws, "A4",
-        "SAMPLE DATA: every populated row below is illustrative and should be replaced with "
-        f"your book. {ctx.we_key} carries the documented worked example used by the Checks sheet.",
+        (f"CARRIED FORWARD from {ctx.carried.source.name}: these are YOUR inputs, "
+         f"re-laid into a freshly built workbook. Oracle-tie rows on Checks are baked "
+         f"for {ctx.we_key}." if ctx.carried is not None else
+         "SAMPLE DATA: every populated row below is illustrative and should be replaced "
+         f"with your book. {ctx.we_key} carries the documented worked example used by "
+         "the Checks sheet."),
         fnt=font(FAIL_RED, bold=True, italic=True))
     put(ws, "T4",
         f"tbl_LR A:{LR_LAST_COL} is one contiguous paste block — keys, helpers, and live "
@@ -418,7 +430,7 @@ def build_control(ctx: Ctx):
     # One-click navigation back to the analysis sheets (D45): change the
     # selection below, then jump straight to the sheet you came from.
     label(ws, "B4", "Jump to:", bold=True)
-    for i, sheet in enumerate(["Inputs", "Rate Log", "Portfolio", "State Summary",
+    for i, sheet in enumerate(["Inputs", "Rate Log", "Mod Log", "Portfolio", "State Summary",
                                "Program Flow", "Net Delivery", "Bridge", "Walkthrough",
                                "One-Pager", "Flow Dashboard", "Scenarios", "Compare",
                                "Solver", "Attribution", "Rate Engine", "Mod Engine",
@@ -431,9 +443,9 @@ def build_control(ctx: Ctx):
     label(ws, "B6", "Plan year (P)")
     input_cell(ws, "C6", p, fmt="0")
     label(ws, "B7", "Business unit")
-    input_cell(ws, "C7", ctx.we_row["bu"])
+    input_cell(ws, "C7", _carried(ctx, "sel_bu") or ctx.we_row["bu"])
     label(ws, "B8", "State")
-    input_cell(ws, "C8", ctx.we_row["state"])
+    input_cell(ws, "C8", _carried(ctx, "sel_state") or ctx.we_row["state"])
     label(ws, "B9", "Scenario in focus")
     input_cell(ws, "C9", "Base", required=False)
     label(ws, "E6", "Selected key")
@@ -464,10 +476,10 @@ def build_control(ctx: Ctx):
     # Toggles
     section(ws, 11, "B", "Global toggles")
     label(ws, "B12", "Seasonality (written weights)")
-    input_cell(ws, "C12", "OFF")
+    input_cell(ws, "C12", _carried(ctx, "season_on") or "OFF")
     note(ws, "D12", "ON applies tbl_Seasonality weights for the selected STATE; OFF = uniform writings (classic parallelogram).")
     label(ws, "B13", "Mod adjustment (master)")
-    input_cell(ws, "C13", "ON")
+    input_cell(ws, "C13", _carried(ctx, "mod_master") or "ON")
     put(ws, "D13",
         "Set OFF if the indication's premium trend already reflects schedule mod drift — "
         "otherwise the drift is double-counted.",
@@ -475,7 +487,8 @@ def build_control(ctx: Ctx):
     label(ws, "B14", "Projected-LR KPI shows")
     input_cell(ws, "C14", "As input", required=False)
     label(ws, "B15", f"Default net trend for CY {p + 1}")
-    input_cell(ws, "C15", 0.0, fmt=FMT_PCT)
+    _td = _carried(ctx, "trend_default")
+    input_cell(ws, "C15", 0.0 if _td is None else _td, fmt=FMT_PCT)
     note(ws, "D15",
          f"Annual net loss-over-premium trend applied once for the CY {p + 1} view wherever a "
          "combo's tbl_LR trend cell is blank; a per-state entry overrides this default.")
@@ -534,14 +547,7 @@ def build_control(ctx: Ctx):
             put(ws, ws.cell(row=19, column=c1 + 1).coordinate, None, fill=FILL_PANEL)
         put(ws, ws.cell(row=20, column=c1).coordinate, sub, fnt=F_SMALL_IT, fill=FILL_PANEL)
         put(ws, ws.cell(row=20, column=c1 + 1).coordinate, None, fill=FILL_PANEL)
-    ws.conditional_formatting.add(
-        "L19",
-        CellIsRule(operator="equal", formula=['"ALL CHECKS PASS"'], fill=FILL_GREEN,
-                   font=font(PASS_GREEN, bold=True, size=14)))
-    ws.conditional_formatting.add(
-        "L19",
-        CellIsRule(operator="notEqual", formula=['"ALL CHECKS PASS"'], fill=FILL_RED,
-                   font=font(FAIL_RED, bold=True, size=14)))
+    status_banner_cf(ws, "L19", size=14)
 
     # Summary table P vs P+1
     section(ws, 22, "B", "Rate and price flow summary")

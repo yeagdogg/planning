@@ -72,6 +72,11 @@ class Source:
     modified: str          # source file mtime, "YYYY-MM-DD HH:MM"
     version: str           # the generator version stamped on its Read Me
     combos: int
+    checks: str = ""       # the source's own Checks banner at harvest time (D83)
+
+    @property
+    def checks_ok(self) -> bool:
+        return self.checks.startswith("ALL CHECKS PASS") or self.checks.startswith("PASS WITH ")
 
 
 @dataclass
@@ -113,7 +118,16 @@ def _version_of(wb) -> str:
     return "?"
 
 
-def read_lob(path: Path, lob: str) -> tuple[list, Source]:
+def _checks_banner(wb) -> str:
+    """The source's own Checks!C3 status string, "" when unreadable (D83)."""
+    try:
+        v = wb["Checks"]["C3"].value
+    except KeyError:
+        return ""
+    return v if isinstance(v, str) else ""
+
+
+def read_lob(path: Path, lob: str, require_checks: bool = True) -> tuple[list, Source]:
     """Read one workbook's published results rows. Raises HarvestError."""
     if not path.exists():
         raise HarvestError(
@@ -154,14 +168,25 @@ def read_lob(path: Path, lob: str) -> tuple[list, Source]:
         raise HarvestError(
             f"{lob}: duplicate combo key(s) {', '.join(dupes)} — BU x state "
             f"must be unique within a workbook")
+    # D83: a source whose own trust panel is red must not roll up green. The
+    # gate comes AFTER the cached-value gate so a never-recalculated file keeps
+    # the more specific message (its banner would be blank either way).
+    banner = _checks_banner(wb)
     mtime = dt.datetime.fromtimestamp(path.stat().st_mtime)
-    return rows, Source(lob=lob, path=path.name,
-                        modified=mtime.strftime("%Y-%m-%d %H:%M"),
-                        version=_version_of(wb), combos=len(rows))
+    src = Source(lob=lob, path=path.name, modified=mtime.strftime("%Y-%m-%d %H:%M"),
+                 version=_version_of(wb), combos=len(rows), checks=banner)
+    if require_checks and not src.checks_ok:
+        raise HarvestError(
+            f"{lob}: {path.name} reports {banner or 'no Checks status'} — a workbook "
+            f"whose own Checks panel is failing must not roll into the book. Fix it "
+            f"(open the file, read the FAILing row), or harvest with --allow-failing-"
+            f"sources to build anyway; the book will show which sources were bad.")
+    return rows, src
 
 
 def harvest(cfg, out_dir: str | Path | None = None,
-            now: dt.datetime | None = None) -> BookData:
+            now: dt.datetime | None = None,
+            allow_failing_sources: bool = False) -> BookData:
     """Stack every configured LOB workbook into one BookData."""
     book = BookData(plan_year=cfg.plan_year,
                     as_of=(now or dt.datetime.now()).strftime("%Y-%m-%d %H:%M"))
@@ -171,7 +196,8 @@ def harvest(cfg, out_dir: str | Path | None = None,
             raise HarvestError(f"LOB {lob_name!r} configured twice")
         seen.add(lob_name)
         path = output_path(cfg, Path(out_dir or cfg.output_dir), lob_name)
-        rows, src = read_lob(path, lob_name)
+        rows, src = read_lob(path, lob_name,
+                             require_checks=not allow_failing_sources)
         book.rows.extend(rows)
         book.sources.append(src)
     if not book.sources:

@@ -31,10 +31,13 @@ def build_rate_log(ctx: Ctx):
           "One row per rate change per BU x state. Columns A:H are one contiguous paste "
           "block; planned rows earn filed % x achievement %. The live columns on the right "
           "show the impact of every edit on the same row.")
-    nav_bar(ws, 3, 1, ["Control", "Inputs", "Bridge", "Walkthrough", "Checks"], step=2)
+    nav_bar(ws, 3, 1, ["Control", "Inputs", "Mod Log", "Bridge", "Checks"], step=2)
     put(ws, "A4",
-        "SAMPLE DATA: replace the populated rows with your own log. Do not insert or "
-        "delete rows — spare capacity is provided below the sample.",
+        ("CARRIED FORWARD: this is your own rate log. Do not insert or delete rows — "
+         "spare capacity is provided below."
+         if ctx.carried is not None else
+         "SAMPLE DATA: replace the populated rows with your own log. Do not insert or "
+         "delete rows — spare capacity is provided below the sample."),
         fnt=font(FAIL_RED, bold=True, italic=True))
 
     header_row(ws, L.RL_HDR, 1, rl_headers(), widths=[9, 8, 11, 9, 12, 12, 13, 34])
@@ -144,6 +147,7 @@ def build_rate_log(ctx: Ctx):
         "rl_status": ("E", "taken | planned"),
         "rl_cons": ("F", "Considered in the indication? (Y/N)"),
         "rl_ach": ("G", "Achievement % (planned rows; blank = 100%)"),
+        "rl_comment": ("H", "Free-text comment (carry-forward reads it)"),
         "rl_key": ("J", "Helper: BU|State key (right of the paste block, D40)"),
         "rl_reff": ("K", "Helper: effective change = filed x achievement (planned only)"),
         "rl_ln1p": ("L", "Helper: ln(1 + effective change); 0 for blank rows"),

@@ -31,15 +31,22 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Build the combined book workbook.")
     ap.add_argument("--config", default="config/config.yaml")
     ap.add_argument("--out", default=None, help="output directory (default: from config)")
+    ap.add_argument("--allow-failing-sources", action="store_true",
+                    help="build even when a source workbook's own Checks panel is "
+                         "failing (the book records which ones on Control)")
     args = ap.parse_args(argv)
 
     cfg = load_config(args.config)
     out_dir = Path(args.out or cfg.output_dir)
     try:
-        data = harvest(cfg, out_dir)
+        data = harvest(cfg, out_dir,
+                       allow_failing_sources=args.allow_failing_sources)
     except HarvestError as e:
         print(f"cannot build the book: {e}")
         return 2
+    for s in data.sources:
+        if not s.checks_ok:
+            print(f"  WARNING {s.lob}: source reports {s.checks or 'no Checks status'}")
     wb = build_book(data)
     out_dir.mkdir(parents=True, exist_ok=True)
     path = book_path(cfg, out_dir)

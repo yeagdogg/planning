@@ -27,6 +27,7 @@ import datetime as dt
 import math
 import re
 import shutil
+import tempfile
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -96,6 +97,20 @@ def nval(wb, name: str):
     return name_cell(wb, name).value
 
 
+def checks_pass(wb, name: str = "ck_overall") -> bool:
+    """True while the status banner reports no FAILing check (D80).
+
+    The banner has three states since warnings started reaching the front tab:
+    "ALL CHECKS PASS", "PASS WITH n WARNING(S)", and "CHECKS FAILING: n". The
+    harness gates on FAIL only — a WARN is information for the reader, not a
+    broken workbook, and the shipped sample deliberately carries one.
+    """
+    v = nval(wb, name)
+    if not isinstance(v, str):
+        return False
+    return v == "ALL CHECKS PASS" or v.startswith("PASS WITH ")
+
+
 def scan_errors(wb) -> list[str]:
     out = []
     for ws in wb.worksheets:
@@ -158,7 +173,7 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
     errs = scan_errors(wb)
     check("zero formula-error cells in every sheet (incl. hidden)", not errs,
           "; ".join(errs[:8]))
-    check("Checks sheet: ALL CHECKS PASS", nval(wb, "ck_overall") == "ALL CHECKS PASS",
+    check("Checks sheet: no FAILing check", checks_pass(wb),
           str(nval(wb, "ck_overall")))
 
     # Chart axes must stay visible after the Excel resave (D36), and every
@@ -1190,7 +1205,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
                 check("[net delivery: All view] suggestions blank, never fabricated",
                       nd_ws[f"H{row_si8}"].value in (None, ""))
                 check("[net delivery: All view] Checks still ALL PASS",
-                      nval(wb, "ck_overall") == "ALL CHECKS PASS")
+                      checks_pass(wb))
             run("net delivery: All view", {("Net Delivery", "B5"): "All"}, a9g5)
 
             # (vi) D63: the default filing tracks the RATE LOG. Move the
@@ -1317,7 +1332,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
                   approx(ncs[f"S{ms_rr}"].value, deg_step.required_step, 1e-9),
                   f"wb={ncs[f'S{ms_rr}'].value} oracle={deg_step.required_step}")
             check("[net delivery: as-of 12/31 prior year] Checks still ALL PASS",
-                  nval(wb, "ck_overall") == "ALL CHECKS PASS",
+                  checks_pass(wb),
                   repr(nval(wb, "ck_overall")))
         run("net delivery: mod as-of on the D70 switch date",
             {("Inputs", f"{lr_letter('lr_netp')}{ms_xl}"): 0.09,
@@ -1409,7 +1424,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
         check("[program basis] Bridge surfaces the counterfactual under net mode",
               note is not None, "counterfactual sentence absent")
         check("[program basis] switching a combo to net keeps every check passing",
-              nval(wb, "ck_overall") == "ALL CHECKS PASS",
+              checks_pass(wb),
               str(nval(wb, "ck_overall")))
     run("program basis: worked example switched to net",
         {("Inputs", f"{lr_letter('lr_netp')}{we_row_xl}"): 0.08}, a9i)
@@ -1561,7 +1576,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
         check("[program flow: All view] D68 IN VIEW prior-year row = the whole book",
               bad_y == 0, f"{bad_y} mismatches")
         check("[program flow: All view] Checks still ALL PASS",
-              nval(wb, "ck_overall") == "ALL CHECKS PASS")
+              checks_pass(wb))
     run("program flow: All view", {("Program Flow", "B5"): "All"}, a9h4)
 
     # (v) net combo in view: delta columns populate on program basis
@@ -1590,7 +1605,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
                 check("[program flow: net combo] summary delta ties oracle",
                       approx(gv, ov, 1e-9), f"wb={gv} oracle={ov}")
                 check("[program flow: net combo] zero FAILs (WARN advisories allowed)",
-                      nval(wb, "ck_overall") == "ALL CHECKS PASS")
+                      checks_pass(wb))
             run("program flow: net combo in view",
                 {("Control", "C7"): _bu(cfg, 2), ("Control", "C8"): net_state5,
                  ("Program Flow", "B5"): _bu(cfg, 2)}, a9h5)
@@ -1605,7 +1620,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
               f"wb={nval(wb, 'nr_CYLR_P')} oracle={m_p2.cy_lr_p}")
         check("[plan year P+1] fingerprint FALSE", nval(wb, "orc_fp") is False)
         check("[plan year P+1] Checks still ALL PASS (oracle rows N/A)",
-              nval(wb, "ck_overall") == "ALL CHECKS PASS",
+              checks_pass(wb),
               str(nval(wb, "ck_overall")))
     run("plan year change", {("Control", "C6"): p2}, a10)
 
@@ -1630,7 +1645,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
         check(f"[plan year {pm1}] Control stale-year banner appears",
               isinstance(banner, str) and banner.startswith("NOTE"), str(banner)[:60])
         check(f"[plan year {pm1}] Checks still ALL PASS",
-              nval(wb, "ck_overall") == "ALL CHECKS PASS")
+              checks_pass(wb))
     run(f"plan year back to {pm1}", {("Control", "C6"): pm1}, a10b)
 
 
@@ -1653,14 +1668,22 @@ def main(argv=None) -> int:
     lob = cfg.lob(args.lob)
     path = Path(args.workbook) if args.workbook else output_path(cfg, Path(cfg.output_dir), args.lob)
     print(f"Verifying {path} (LOB: {lob.name}, term {lob.term_months} months)")
-    scratch_dir = path.parent / "_verify_scratch"
-    scratch_dir.mkdir(exist_ok=True)
-
-    phase_a(path)
-    tie_default_state(path, cfg, lob, do_recalc=not args.skip_recalc)
-    if not args.quick:
-        phase_d(path, cfg, lob, scratch_dir)
-    shutil.rmtree(scratch_dir, ignore_errors=True)
+    # Per-RUN scratch directory. It used to be a fixed "_verify_scratch" beside
+    # the workbook — shared by every LOB, holding a fixed "exercise.xlsx", and
+    # rmtree'd wholesale at exit — so two verifies running at once clobbered
+    # each other's working file and the first to finish deleted the other's.
+    # (Observed: a --quick sweep of five LOBs killed a concurrent Property
+    # phase D mid-run with FileNotFoundError.) mkdtemp makes runs independent,
+    # which is what lets a release verify the seven artifacts in parallel.
+    scratch_dir = Path(tempfile.mkdtemp(prefix=f"verify_{args.lob.replace(' ', '_')}_",
+                                        dir=path.parent))
+    try:
+        phase_a(path)
+        tie_default_state(path, cfg, lob, do_recalc=not args.skip_recalc)
+        if not args.quick:
+            phase_d(path, cfg, lob, scratch_dir)
+    finally:
+        shutil.rmtree(scratch_dir, ignore_errors=True)
 
     print(f"\n{'=' * 60}\nRESULT: {PASS} passed, {FAIL} failed")
     for f in FAILURES:

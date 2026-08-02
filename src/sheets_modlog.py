@@ -30,7 +30,7 @@ from .build_workbook import Ctx, Layout as L, SHEETS
 from .sheets_inputs import TABLE_STYLE, _dv
 from .xlstyle import (
     ALIGN_C, ALIGN_L, BORDER_THIN, F_SMALL_IT, FAIL_RED, FILL_GREY, FMT_DATE,
-    FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT, GREY_DARK, STEEL, font, formula,
+    FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT, GREY_DARK, WARN_AMBER, font, formula,
     header_row,
     input_cell, nav_bar, presentation_setup, print_setup, put, quote_sheet,
     set_widths, title,
@@ -62,10 +62,14 @@ def build_mod_log(ctx: Ctx):
           "expect the current year's earned mod to move a little the first time.")
     nav_bar(ws, 3, 1, ["Control", "Inputs", "Rate Log", "Net Delivery", "Checks"], step=2)
     put(ws, "A4",
-        "SAMPLE DATA: replace the populated rows with your own actions. Do not insert or "
-        "delete rows — spare capacity is provided below the sample. Leave this sheet EMPTY "
-        "to keep the pre-D70 behaviour exactly: with no actions the mod follows the drift "
-        "path (M_0 -> M_1 -> M_2) and every number is unchanged.",
+        ("CARRIED FORWARD: these are your own logged actions. Do not insert or delete "
+         "rows — spare capacity is provided below."
+         if ctx.carried is not None else
+         "SAMPLE DATA: replace the populated rows with your own actions — these seeded "
+         "rows attach to real combos and MOVE REAL PLAN LOSS RATIOS until you do. Do not "
+         "insert or delete rows — spare capacity is provided below the sample. Leave this "
+         "sheet EMPTY to keep the pre-D70 behaviour exactly: with no actions the mod "
+         "follows the drift path (M_0 -> M_1 -> M_2) and every number is unchanged."),
         fnt=font(FAIL_RED, bold=True, italic=True))
 
     header_row(ws, L.ML_HDR, 1, ml_headers(), widths=[9, 8, 11, 11, 12, 13, 34],
@@ -184,6 +188,7 @@ def build_mod_log(ctx: Ctx):
         "ml_chg": ("D", "Directed mod change (decimal fraction)"),
         "ml_status": ("E", "taken | planned"),
         "ml_ach": ("F", "Achievement % (planned rows; blank = 100%)"),
+        "ml_comment": ("G", "Free-text comment (the sample-data tripwire reads it)"),
         "ml_key": ("I", "Helper: BU|State key"),
         "ml_meff": ("J", "Helper: effective change = directed x achievement (planned only)"),
         "ml_ln1p": ("K", "Helper: ln(1 + effective mod change); 0 for blank rows"),
@@ -226,5 +231,8 @@ def build_mod_log(ctx: Ctx):
     set_widths(ws, {"T": 16, "U": 30, "V": 11, "W": 12})
     for cL in ("V", "W"):
         ws.column_dimensions[cL].outlineLevel = 1
-    presentation_setup(ws, gridlines_off=False, freeze=f"C{L.ML_FIRST}", tab_color=STEEL)
+    # amber marks an ENTRY sheet, like Inputs and Rate Log — this is the third
+    # paste target, and steel (the engine/read-only colour) hid that (D80)
+    presentation_setup(ws, gridlines_off=False, freeze=f"C{L.ML_FIRST}",
+                       tab_color=WARN_AMBER)
     print_setup(ws)

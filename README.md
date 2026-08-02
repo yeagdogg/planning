@@ -53,6 +53,8 @@ src/sheets_calc.py         hidden _calc engine blocks (portfolio/scenario/attrib
 src/sheets_main.py         Bridge, Portfolio (+ Decision Board), State Summary, Scenarios,
                            Solver, Attribution builders
 src/sheets_modlog.py       Mod Log sheet: dated schedule-mod actions (D70)
+src/carry.py               Reads a built workbook's inputs back out, by defined
+                           name, so a rebuild keeps your book (D82)
 src/sheets_netdelivery.py  Net Delivery tab + hidden _netcalc blocks (D57/D75)
 src/sheets_programflow.py  Program Flow tab: state x month delivered-flow grids (D59/D68)
 src/sheets_book.py         the BOOK: combined roll-up across every LOB (D66)
@@ -124,9 +126,11 @@ tied to a per-combo oracle run (9 metrics each); solver round-trip (+5.0% at 4/1
 intact and no legend overlapping its plot after the Excel resave; scenario, attribution,
 seasonality, basis, mod-toggle,
 degenerate-input, stepped-mod, and plan-year-change exercises each tied to fresh oracle runs. At last run:
-Property **277 checks / 0 failed** (full), the other five LOB files 94 (or 92 for the
-6-month-term Inland Marine) / 0 failed each (phases A–C), the combined book **43 / 0**
-(`tools/verify_book.py`), pytest 256/256. The business
+Property **294 checks / 0 failed** (full), the other five LOB files 94 (or 92 for the
+6-month-term Inland Marine) / 0 failed each (phases A–C), the combined book **56 / 0**
+(`tools/verify_book.py` — including the source-freshness phase), pytest 274/274. Each verify
+run now works in its own temporary scratch directory, so LOBs can be verified in parallel.
+The business
 units and states in `config/config.yaml` are addressed positionally, so renaming them to
 your own book keeps every seeded example working (a repeated BU or state is rejected at
 load time).
@@ -194,36 +198,86 @@ the engines are frozen — while every filter and total is live, so it opens in 
 python tools/build_book.py
 ```
 
-The harvest reads the six *recalculated* workbooks and refuses to run against one that was
-never recalculated (or was built by an older generator), so a stale book cannot be produced
-by accident. Rebuild it after regenerating the LOB files, then recalculate it like any
-other generated workbook.
+The harvest reads the six *recalculated* workbooks and refuses two ways: a workbook that was
+never recalculated (or was built by an older generator), and one whose **own Checks panel is
+failing** — a red line of business must not roll up into a green book (D83). What each
+source reported when it was read is stamped in the `Source checks` column on the book's
+`Control` sheet and counted in a hard Book Checks row; `--allow-failing-sources` is the
+escape hatch, and it still marks the bad sources.
 
-## Regeneration workflow (new plan year)
+The weekly loop is short: **save the LOB workbook in Excel, then rerun `build_book.py`.**
+Regeneration is not part of it — that is for structural changes only, and it needs
+`--carry-forward` (see below). `tools/verify_book.py` compares each source's file time
+against the harvest stamp and fails if one moved on, since external links are banned and
+nothing inside the book can notice on its own.
+
+## Regenerating without losing your book
+
+**Regeneration replaces a workbook.** It builds a fresh copy from the sample seeds and
+writes it over the file — it does not read, merge, or preserve anything you pasted. That
+used to happen silently; now the generator refuses (D82):
+
+```bash
+python -m src.build_workbook --lob "Property" --carry-forward
+```
+
+`--carry-forward` reads `tbl_LR`, the Rate Log, the Mod Log, seasonality and the Control
+scalars out of the existing workbook and rebuilds around **your** inputs, so a structural
+change (new state, larger log, new generator version) costs nothing. It reads by defined
+name, not cell address, so it also works on files built by an older generator, and it needs
+no recalculation first — a file saved from Excel seconds ago carries forward fine.
+
+Without it, a workbook holding real inputs is refused unless you pass `--force`. Either way
+a timestamped `.bak.xlsx` is written before anything is overwritten.
+
+### New plan year, step by step
 
 1. Edit `config/config.yaml` (bump `plan_year`; adjust BUs, states, LOBs/terms, or
    `table_capacity` if needed — capacities scale from the dimensions automatically).
-2. Rerun the generator and the recalc tool.
-3. Paste your team's inputs into the new workbooks' tables — each dataset is one contiguous
-   paste block (`tbl_LR` columns A:R, `tbl_RateLog` columns A:H; keys and engine helpers sit
-   to the right and recalculate on their own), and schemas are stable across regenerations.
-   Default capacities per workbook: 69 `tbl_LR` rows (63 BU×state + 6 spare), 240 rate-log
-   rows, 24 seasonality rows (fixed; do not insert or delete rows).
-4. Confirm each `Checks` sheet shows **ALL CHECKS PASS**.
+2. Rebuild, carrying last year's inputs forward: `python -m src.build_workbook
+   --carry-forward` (bare, so each LOB carries from its own file), then run the recalc tool.
+3. Update what actually changed for the new year — projected LRs, the rate program, mod
+   actions — rather than re-keying the whole book. Each dataset is one contiguous paste
+   block (`tbl_LR` columns A:S, `tbl_RateLog` A:H, `tbl_ModLog` A:G; keys and engine helpers
+   sit to the right and recalculate on their own). Default capacities per workbook: 69
+   `tbl_LR` rows (63 BU×state + 6 spare), 240 rate-log rows, 120 mod-log rows, 24
+   seasonality rows (fixed; do not insert or delete rows).
+4. **Clear the seeded SAMPLE mod actions** if you started from a fresh build rather than a
+   carry-forward. They attach positionally, so on a real roster they land on real combos and
+   move real plan loss ratios. A Checks advisory flags them.
+5. Confirm each `Checks` sheet reports no FAILing row, then rebuild the book
+   (`python tools/build_book.py`).
 
-Note: oracle-tie rows on `Checks` compare against constants baked for the *seeded sample*; they
-report `N/A — INPUTS CHANGED` once you replace the sample data. Structural, identity, and
-sanity checks stay live forever. Regenerating re-bakes the constants.
+Note: oracle-tie rows on `Checks` compare against constants baked at build time. A seeded
+build bakes them for the sample and they report `N/A — INPUTS CHANGED` once you paste over
+it; a `--carry-forward` build bakes them for **your own** first combo, so they stay live.
+Structural, identity, and sanity checks stay live either way.
+
+### What the status banner says
+
+`Checks!C3` (mirrored on `Control`) has three states (D80):
+
+| Banner | Meaning |
+|---|---|
+| `ALL CHECKS PASS` | green — nothing failing, nothing advisory |
+| `PASS WITH n WARNING(S)` | amber — nothing failing, but read the advisories |
+| `CHECKS FAILING: n` | red — do not use the results |
+
+A freshly generated sample workbook reads amber: it ships with one standing advisory, which
+is honest and shows you what a warning looks like.
 
 ## First-open checklist
 
 1. Open a generated workbook (e.g., `output/Plan_LR_Workbook_2027_Property.xlsx`) and let
    Excel calculate (automatic).
-2. `Control` must show **ALL CHECKS PASS** in the Checks KPI card.
-3. With sample data intact, the `Bridge` shows **63.36%** for `BU-A | AZ` in annual-term
-   workbooks (the §9 worked example; each workbook's Read Me states its own expected value),
-   and the `Solver` returns **+5.0%** at 4/1/2027 for its seeded target.
-4. Replace the SAMPLE rows on `Inputs` with your book.
+2. The Checks KPI card on `Control` must not be red — a fresh sample workbook reads
+   `PASS WITH 1 WARNING(S)` in amber.
+3. With sample data intact, the `Bridge` shows **63.4%** for `BU-A | AZ` in annual-term
+   workbooks (the §9 worked example at the precision the Bridge actually displays; each
+   workbook's Read Me states its own expected value), and the `Solver` returns **+5.0%** at
+   4/1/2027 for its seeded target.
+4. Replace the SAMPLE rows on **`Inputs`, `Rate Log` AND `Mod Log`** with your book. The Mod
+   Log is easy to miss and ships with live sample actions.
 
 ## Design notes and limitations
 

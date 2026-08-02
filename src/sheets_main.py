@@ -9,7 +9,7 @@ from openpyxl.chart.marker import Marker
 from openpyxl.formatting.rule import ColorScaleRule, DataBarRule, FormulaRule
 from openpyxl.styles import Alignment, Border, Font, Side
 
-from .build_workbook import Ctx, Layout as L, SHEETS
+from .build_workbook import Ctx, Layout as L, SHEETS, mod_adj_on
 from .xlstyle import (
     ALIGN_C, ALIGN_WRAP, BORDER_THIN, DOWN_BAR, F_HEADER, F_LABEL, F_SMALL_IT, FAIL_RED,
     FILL_GREY, FILL_NAVY, FILL_PANEL, FMT_DATE, FMT_EP_Z, FMT_GEN, FMT_IDX, FMT_IDX_Z,
@@ -1253,8 +1253,8 @@ def build_solver(ctx: Ctx):
         "last month it still works.", fnt=F_SMALL_IT)
     lc_ = [
         ("Mod adjustment in force for this combo?",
-         '=IF(COUNTIF(lr_key,slv_key)=0,0,IF(AND(nr_ModAdjMaster="ON",'
-         'INDEX(lr_modadj,MATCH(slv_key,lr_key,0))="ON"),1,0))', FMT_INT, "slv_modon"),
+         "=IF(COUNTIF(lr_key,slv_key)=0,0,IF("
+         + mod_adj_on("MATCH(slv_key,lr_key,0)") + ",1,0))", FMT_INT, "slv_modon"),
         ("Mod assumed in indication (M_ind)",
          "=IF(slv_row=0,1,INDEX(lr_mind,slv_row))", FMT_MOD, "slv_mind"),
         ("Rate earn-in in force (A_rate)",

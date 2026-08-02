@@ -12,6 +12,7 @@ state, and that the file is structurally sound.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import shutil
 import sys
 from pathlib import Path
@@ -33,6 +34,12 @@ from tools.verify_workbook import (BANNED_RE, approx, scan_errors)  # noqa: E402
 PASS = 0
 FAIL = 0
 FAILURES: list[str] = []
+
+
+def _banner_ok(v) -> bool:
+    """The status banner reports no FAILing check (D80 three-state banner)."""
+    return isinstance(v, str) and (v == "ALL CHECKS PASS"
+                                   or v.startswith("PASS WITH "))
 
 
 def check(desc: str, ok: bool, detail: str = ""):
@@ -86,13 +93,35 @@ def phase_bc(path: Path, cfg, do_recalc=True):
     wb = openpyxl.load_workbook(path, data_only=True)
     errs = scan_errors(wb)
     check("zero formula errors in every sheet", not errs, "; ".join(errs[:5]))
-    check("book Checks panel reads ALL CHECKS PASS",
-          wb["Checks"]["C3"].value == "ALL CHECKS PASS",
+    check("book Checks panel reports no FAILing check",
+          _banner_ok(wb["Checks"]["C3"].value),
           str(wb["Checks"]["C3"].value))
 
-    print("Phase C: every harvested row vs the oracle")
     p = cfg.plan_year
     book = harvest(cfg)
+
+    # D83: the book is a snapshot, and external links are banned, so nothing in
+    # the file itself can notice a source that moved on after the harvest. The
+    # data for the comparison is already on both sides — the book stamps each
+    # source's mtime on Control — so the harness does what the workbook cannot.
+    print("Phase B2: source freshness")
+    ctl = wb["Control"]
+    stale = []
+    for i, s in enumerate(book.sources):
+        stamped = ctl[f"C{18 + i}"].value
+        src_path = Path(cfg.output_dir) / s.path
+        live = (dt.datetime.fromtimestamp(src_path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+                if src_path.exists() else None)
+        check(f"[{s.lob}] source file still present", live is not None, str(src_path))
+        if live is not None and stamped != live:
+            stale.append(f"{s.lob}: harvested {stamped}, file now {live}")
+        banner = ctl[f"F{18 + i}"].value
+        check(f"[{s.lob}] source reported a passing Checks panel at harvest",
+              _banner_ok(banner), str(banner))
+    check("no source changed since the harvest (rebuild the book if it did)",
+          not stale, "; ".join(stale))
+
+    print("Phase C: every harvested row vs the oracle")
     bk = wb["_book"]
     # index the oracle by (lob, bu, state) so row order never matters
     oracle = {}
@@ -199,8 +228,8 @@ def phase_d(path: Path, cfg, book, scratch_dir: Path):
               f"wb={got['Control']['C13'].value} py={ep3}")
         check(f"[{label_}] combos in view", got["Control"]["A13"].value == len(sub3),
               f"wb={got['Control']['A13'].value} py={len(sub3)}")
-        check(f"[{label_}] book Checks still pass",
-              got["Checks"]["C3"].value == "ALL CHECKS PASS")
+        check(f"[{label_}] book Checks still report no FAIL",
+              _banner_ok(got["Checks"]["C3"].value))
 
     run("all", "All", "All", "All")
     run(f"line={book.lobs[0]}", book.lobs[0], "All", "All")

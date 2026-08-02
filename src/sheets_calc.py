@@ -22,7 +22,7 @@ ctx.lay_dyn for the visible sheets (Scenarios / Solver / Attribution) to link.
 
 from __future__ import annotations
 
-from .build_workbook import Ctx, Layout as L, SHEETS
+from .build_workbook import Ctx, Layout as L, SHEETS, mod_adj_on
 from .sheets_engine import (
     LogRefs, mod_drift_at_switch, write_cohort_block, write_mod_anchor_cells)
 from .xlstyle import (FMT_IDX, FMT_INT, FMT_MOD, GREY_DARK, col, font, formula, label,
@@ -142,8 +142,7 @@ def build_calc(ctx: Ctx):
         f_grey(ws, f"M{t}", f"=N(INDEX(lr_netp,{n}))", "0.0%")
         f_grey(ws, f"N{t}",
                f"=IF(ISBLANK(INDEX(lr_netp1,{n})),$M${t},N(INDEX(lr_netp1,{n})))", "0.0%")
-        f_grey(ws, f"O{t}",
-               f'=IF(AND(nr_ModAdjMaster="ON",INDEX(lr_modadj,{n})="ON"),1,0)', FMT_INT)
+        f_grey(ws, f"O{t}", f"=IF({mod_adj_on(n)},1,0)", FMT_INT)
         # D70 stepped-mod cells: how many actions this combo has logged, and
         # the level they compound on (blank M_endPrior falls back to M_0)
         f_grey(ws, f"P{t}", f"=COUNTIF(ml_key,$A${t})", FMT_INT)
@@ -234,11 +233,9 @@ def build_calc(ctx: Ctx):
         f_grey(ws, f"I{r}", f"=$C{r}/$E{r}", FMT_IDX)
         f_grey(ws, f"J{r}", f"=$C{r}/$F{r}", FMT_IDX)
         f_grey(ws, f"K{r}",
-               f'=IF($L${t},1,IF(AND(nr_ModAdjMaster="ON",INDEX(lr_modadj,{n})="ON"),'
-               f"$F${t}/$G{r},1))", FMT_IDX)
+               f"=IF($L${t},1,IF({mod_adj_on(n)},$F${t}/$G{r},1))", FMT_IDX)
         f_grey(ws, f"L{r}",
-               f'=IF($L${t},1,IF(AND(nr_ModAdjMaster="ON",INDEX(lr_modadj,{n})="ON"),'
-               f"$F${t}/$H{r},1))", FMT_IDX)
+               f"=IF($L${t},1,IF({mod_adj_on(n)},$F${t}/$H{r},1))", FMT_IDX)
         f_grey(ws, f"M{r}",
                f'=IF(INDEX(lr_basis,{n})="proposed",N(INDEX(lr_lrproj,{n}))*(1+N(INDEX(lr_s,{n}))),'
                f"N(INDEX(lr_lrproj,{n})))", "0.0%")

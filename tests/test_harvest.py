@@ -24,12 +24,14 @@ CFG = load_config("config/config.yaml")
 
 
 def _stub_workbook(path: Path, keys, *, calculated=True, version="9.9.9",
-                   n_cols=LAST_COL):
+                   n_cols=LAST_COL, checks="ALL CHECKS PASS"):
     """A minimal stand-in for a generated workbook's published surface."""
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
     rm = wb.create_sheet("Read Me")
     rm["B3"] = f"Plan year 2027  |  x  |  version {version}  |  built today"
+    if checks is not None:
+        wb.create_sheet("Checks")["C3"] = checks
     ws = wb.create_sheet("_calc")
     for i, key in enumerate(keys):
         r = L.CALC_RES_FIRST + i
@@ -101,6 +103,45 @@ def test_refuses_empty_publication(tmp_path):
     p = _stub_workbook(tmp_path / "empty.xlsx", [])
     with pytest.raises(HarvestError):
         read_lob(p, "Property")
+
+
+def test_refuses_a_source_whose_own_checks_are_failing(tmp_path):
+    """A red LOB must not roll up into a green book (D83)."""
+    p = _stub_workbook(tmp_path / "bad.xlsx", ["A|AZ"], checks="CHECKS FAILING: 2")
+    with pytest.raises(HarvestError) as e:
+        read_lob(p, "Property")
+    assert "CHECKS FAILING" in str(e.value)
+
+
+def test_allows_a_failing_source_when_asked_but_records_it(tmp_path):
+    p = _stub_workbook(tmp_path / "bad.xlsx", ["A|AZ"], checks="CHECKS FAILING: 2")
+    rows, src = read_lob(p, "Property", require_checks=False)
+    assert rows and src.checks == "CHECKS FAILING: 2"
+    assert not src.checks_ok, "the escape hatch must still mark the source bad"
+
+
+def test_warnings_on_a_source_do_not_block_the_harvest(tmp_path):
+    """Advisories are information, not breakage — the banner says PASS."""
+    p = _stub_workbook(tmp_path / "warn.xlsx", ["A|AZ"],
+                       checks="PASS WITH 3 WARNING(S)")
+    rows, src = read_lob(p, "Property")
+    assert rows and src.checks_ok
+
+
+def test_refuses_a_source_with_no_checks_panel(tmp_path):
+    p = _stub_workbook(tmp_path / "nopanel.xlsx", ["A|AZ"], checks=None)
+    with pytest.raises(HarvestError) as e:
+        read_lob(p, "Property")
+    assert "no Checks status" in str(e.value)
+
+
+def test_uncalculated_beats_checks_in_the_error_message(tmp_path):
+    """Both gates fire; the more specific one must win (ordering contract)."""
+    p = _stub_workbook(tmp_path / "both.xlsx", ["A|AZ"], calculated=False,
+                       checks="CHECKS FAILING: 1")
+    with pytest.raises(HarvestError) as e:
+        read_lob(p, "Property")
+    assert "never" in str(e.value)
 
 
 def test_book_rosters_preserve_first_appearance_order():

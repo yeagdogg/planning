@@ -24,8 +24,9 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import shutil
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import yaml
@@ -36,7 +37,29 @@ from . import engine
 from .engine import ComboInputs, ModInputs, RateChange
 from .xlstyle import quote_sheet
 
-GENERATOR_VERSION = "3.2.1"
+GENERATOR_VERSION = "3.3.0"
+
+# Leads every seeded Mod Log comment so the Checks tripwire can spot a sample
+# action left in a real book (D80). Kept short and unmistakable — a real
+# comment will not start with it by accident.
+SAMPLE_MOD_TAG = "SAMPLE:"
+
+
+def mod_adj_on(row_expr: str) -> str:
+    """Excel test: is the mod adjustment in force for this tbl_LR row? (D81)
+
+    ONE definition, because there used to be two. The visible Bridge read a
+    blank or misspelled token as ON (only a literal "OFF" turned it off) while
+    _calc, the Solver and _netcalc read it as OFF (only a literal "ON" turned
+    it on) — so a token cleared by a paste left Portfolio and State Summary
+    quietly dropping mod drift for combos the Bridge still adjusted, and only
+    the SELECTED combo tripped an existing check.
+
+    ON-default wins: it matches engine.ComboInputs.mod_adjustment_enabled
+    (True) and the visible chain, and the Checks token-validity row now makes a
+    malformed token loud rather than letting either default paper over it.
+    """
+    return f'AND(nr_ModAdjMaster="ON",INDEX(lr_modadj,{row_expr})<>"OFF")'
 
 
 class SHEETS:
@@ -352,13 +375,19 @@ def sample_mod_rows(cfg: Config, lob: LobCfg) -> list[dict]:
     still reproduces engine.worked_example() exactly, and a mod action would
     move it. The seeds demonstrate the three things the mechanic adds — a
     dated action, partial achievement, and two actions compounding.
+
+    Every comment leads with SAMPLE_MOD_TAG so the Checks tripwire can see a
+    seeded action that outlived its welcome. These rows attach POSITIONALLY
+    (2nd BU x 3rd state, 3rd BU x 7th state), so on a real roster they land on
+    real combos and move real plan LRs — the failure the tag exists to catch.
     """
     p = cfg.plan_year
     st = cfg.states
 
     def row(bu, state, m, d, chg, status, ach=None, comment=""):
         return dict(bu=bu, state=state, eff=dt.date(p, m, d), chg=chg,
-                    status=status, achievement=ach, comment=comment)
+                    status=status, achievement=ach,
+                    comment=f"{SAMPLE_MOD_TAG} {comment}")
 
     rows: list[dict] = []
     if len(st) > 2:
@@ -426,7 +455,10 @@ def sample_to_combo(
         net_trend=trend_default if lr_row["trend"] is None else lr_row["trend"],
         a_other=lr_row["a_other"],
         a_other_label=lr_row["a_other_label"],
-        mod_adjustment_enabled=(lr_row["modadj"] == "ON"),
+        # D81: ON-default, matching the workbook's single mod_adj_on() test and
+        # ComboInputs' own default — a blank or misspelled token no longer means
+        # OFF here and ON on the Bridge.
+        mod_adjustment_enabled=(lr_row["modadj"] != "OFF"),
         term_months=lob.term_months,
         seasonality=season,
         plan_ep=lr_row["ep"],
@@ -562,6 +594,7 @@ class Ctx:
     oracle_solver_r: float
     we_key: str                        # worked-example combo key "BU-A|<state>"
     we_row: dict
+    carried: object | None = None      # carry.CarriedInputs when rebuilt from a file (D82)
     names: dict = field(default_factory=dict)   # name -> (ref, description)
     lay_dyn: dict = field(default_factory=dict)  # dynamic anchors shared between builders
 
@@ -610,7 +643,16 @@ HIDDEN_SHEETS = {SHEETS.LISTS, SHEETS.CALC, SHEETS.NETCALC, SHEETS.ORACLE}
 # ---------------------------------------------------------------------------
 
 
-def build(cfg: Config, lob_name: str) -> Workbook:
+def build(cfg: Config, lob_name: str, carried=None) -> Workbook:
+    """Assemble one LOB workbook.
+
+    ``carried`` (a carry.CarriedInputs) replaces the sample seeds with inputs
+    read out of an existing workbook, so a rebuild keeps the user's book (D82).
+    Everything downstream is unchanged: the seeds were only ever one source of
+    the same row dicts, and the oracle constants are baked from whichever data
+    is actually present — which is what finally makes the Checks oracle ties
+    apply to a real book instead of reporting N/A forever.
+    """
     from . import (sheets_briefs, sheets_calc, sheets_engine, sheets_inputs,
                    sheets_main, sheets_netdelivery, sheets_programflow,
                    sheets_modlog, sheets_ratelog, sheets_report,
@@ -618,16 +660,42 @@ def build(cfg: Config, lob_name: str) -> Workbook:
 
     Layout.configure(cfg)
     lob = cfg.lob(lob_name)
-    lr_rows = sample_lr_rows(cfg, lob)
-    rate_rows = sample_rate_rows(cfg, lob)
-    mod_rows = sample_mod_rows(cfg, lob)
-    season_rows = sample_seasonality_rows(cfg)
+    if carried is not None:
+        lr_rows = [dict(r) for r in carried.lr_rows]
+        rate_rows = [dict(r) for r in carried.rate_rows]
+        mod_rows = [dict(r) for r in carried.mod_rows]
+        season_rows = [dict(r) for r in carried.season_rows]
+        if not lr_rows:
+            raise ValueError(
+                f"carry-forward source has no populated tbl_LR rows: {carried.source}")
+        for cap, rows, what in ((Layout.LR_ROWS, lr_rows, "tbl_LR"),
+                                (Layout.RL_ROWS, rate_rows, "rate-log"),
+                                (Layout.ML_ROWS, mod_rows, "mod-log"),
+                                (Layout.SE_ROWS, season_rows, "seasonality")):
+            if len(rows) > cap:
+                raise ValueError(
+                    f"carry-forward has {len(rows)} {what} rows but the configured "
+                    f"capacity is {cap}; raise it in config/config.yaml and retry")
+        if carried.term_months:
+            lob = replace(lob, term_months=carried.term_months)
+    else:
+        lr_rows = sample_lr_rows(cfg, lob)
+        rate_rows = sample_rate_rows(cfg, lob)
+        mod_rows = sample_mod_rows(cfg, lob)
+        season_rows = sample_seasonality_rows(cfg)
 
-    # ---- oracle bake for the worked-example combo (BU-A | first state) -----
-    we_row = next(r for r in lr_rows if r["bu"] == _bu(cfg, 0) and r["state"] == cfg.states[0])
+    # ---- oracle bake for the worked-example combo --------------------------
+    # Seeded builds pin the documented §9 combo; a carried build takes the
+    # first real row, so the baked constants describe the user's own book.
+    we_row = None
+    if carried is None:
+        we_row = next((r for r in lr_rows
+                       if r["bu"] == _bu(cfg, 0) and r["state"] == cfg.states[0]), None)
+    if we_row is None:
+        we_row = lr_rows[0]
     we_key = f"{we_row['bu']}|{we_row['state']}"
     combo = sample_to_combo(cfg, lob, we_row, rate_rows, mod_rows)
-    if cfg.plan_year == 2027 and lob.term_months == 12:
+    if carried is None and cfg.plan_year == 2027 and lob.term_months == 12:
         # The seeded sample must reproduce §9 exactly for annual-term books
         # (comments/EP/s may differ, so compare results, not input dataclasses).
         p_ref, combo_ref = engine.worked_example()
@@ -656,6 +724,7 @@ def build(cfg: Config, lob_name: str) -> Workbook:
         cfg=cfg, lob=lob, wb=wb, lr_rows=lr_rows, rate_rows=rate_rows,
         mod_rows=mod_rows, season_rows=season_rows, oracle_m=oracle_m, oracle_c=oracle_c,
         oracle_solver_r=solver_res.required_change, we_key=we_key, we_row=we_row,
+        carried=carried,
     )
 
     # Build order: reference data first, then engines, then presentation.
@@ -700,12 +769,36 @@ def output_path(cfg: Config, out_dir: Path, lob_name: str) -> Path:
     return out_dir / f"{cfg.filename.format(plan_year=cfg.plan_year, lob=safe)}.xlsx"
 
 
+def backup_path(path: Path) -> Path:
+    """Timestamped sibling of ``path`` that does not already exist."""
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    cand = path.with_suffix(f".{stamp}.bak.xlsx")
+    n = 1
+    while cand.exists():
+        cand = path.with_suffix(f".{stamp}-{n}.bak.xlsx")
+        n += 1
+    return cand
+
+
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Generate the CY Plan LR workbooks (one per LOB).")
+    ap = argparse.ArgumentParser(
+        description="Generate the CY Plan LR workbooks (one per LOB).",
+        epilog="Regeneration REPLACES a workbook with a freshly built copy. It refuses to "
+               "overwrite a file holding real (non-sample) inputs unless you pass --force "
+               "or --carry-forward; either way a timestamped .bak.xlsx is written first.")
     ap.add_argument("--config", default="config/config.yaml")
     ap.add_argument("--out", default=None, help="output directory (default: from config)")
     ap.add_argument("--lob", default=None,
                     help="generate a single LOB workbook (default: all configured)")
+    ap.add_argument("--carry-forward", nargs="?", const="auto", default=None,
+                    metavar="SOURCE",
+                    help="rebuild around the inputs already in SOURCE instead of the "
+                         "sample seeds; with no value, carries each LOB forward from its "
+                         "own existing file in the output directory")
+    ap.add_argument("--force", action="store_true",
+                    help="overwrite a workbook holding real inputs (a .bak is still kept)")
+    ap.add_argument("--no-backup", action="store_true",
+                    help="skip the .bak copy (not recommended)")
     args = ap.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -715,10 +808,47 @@ def main(argv=None) -> int:
     for name in lob_names:
         if name not in {l.name for l in cfg.lobs}:
             raise SystemExit(f"unknown LOB {name!r}; configured: {[l.name for l in cfg.lobs]}")
+    if args.carry_forward and args.carry_forward != "auto" and len(lob_names) > 1:
+        raise SystemExit("--carry-forward SOURCE names one file; pass --lob too, or use "
+                         "bare --carry-forward to carry each LOB from its own workbook.")
+
+    from .carry import CarryError, holds_sample_data, read_inputs
 
     for name in lob_names:
-        wb = build(cfg, name)
         path = output_path(cfg, out_dir, name)
+        carried = None
+        if args.carry_forward:
+            src = (path if args.carry_forward == "auto" else Path(args.carry_forward))
+            if args.carry_forward == "auto" and not src.exists():
+                print(f"  {name}: no existing workbook to carry forward — seeding samples")
+            else:
+                try:
+                    carried = read_inputs(src)
+                except CarryError as e:
+                    raise SystemExit(f"carry-forward failed for {name}: {e}")
+                if carried.missing:
+                    print(f"  {name}: NOTE source lacks {', '.join(carried.missing)} "
+                          "(older generator?) — those columns come up blank")
+                print(f"  {name}: carrying forward {carried.summary()} from {src.name}")
+
+        # The guard, and the reason this whole feature exists: a rebuild used to
+        # silently replace a book somebody had been pasting into for months.
+        # A file still holding the seeded sample has nothing to lose, so it is
+        # overwritten quietly and without a .bak — backups mark real data.
+        if path.exists() and not holds_sample_data(path, cfg, name):
+            if carried is None and not args.force:
+                raise SystemExit(
+                    f"REFUSING to overwrite {path.name}: it holds real inputs, not the "
+                    f"seeded sample.\n"
+                    f"  Keep them:  python -m src.build_workbook --lob \"{name}\" "
+                    f"--carry-forward\n"
+                    f"  Discard:    add --force (a .bak copy is written either way)")
+            if not args.no_backup:
+                bak = backup_path(path)
+                shutil.copy2(path, bak)
+                print(f"  {name}: backed up existing workbook -> {bak.name}")
+
+        wb = build(cfg, name, carried=carried)
         wb.save(path)
         print(f"wrote {path}")
     print(

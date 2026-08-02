@@ -23,7 +23,7 @@ from .xlstyle import (
     FILL_GREY, FILL_PANEL, FILL_RED, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT, GREY_DARK,
     NAVY, PASS_GREEN, STEEL, TOTAL_BAR, UP_BAR, col, font, formula, header_row,
     input_cell, jump, label, link, nav_bar, presentation_setup, print_setup, put,
-    quote_sheet, section, set_widths, title,
+    quote_sheet, section, set_widths, status_banner_cf, title,
 )
 
 PCT_S = "+0.0%;-0.0%;0.0%"
@@ -103,13 +103,7 @@ def build_one_pager(ctx: Ctx):
             label(ws, f"B{r}", lbl)
         link(ws, f"D{r}", f, fmt=fmt or "General", align=ALIGN_C)
         r += 1
-    for value, fill_, fcol in ((' "ALL CHECKS PASS"', FILL_GREEN, PASS_GREEN),):
-        ws.conditional_formatting.add(
-            "D20", CellIsRule(operator="equal", formula=['"ALL CHECKS PASS"'],
-                              fill=FILL_GREEN, font=font(PASS_GREEN, bold=True)))
-    ws.conditional_formatting.add(
-        "D20", CellIsRule(operator="notEqual", formula=['"ALL CHECKS PASS"'],
-                          fill=FILL_RED, font=font(FAIL_RED, bold=True)))
+    status_banner_cf(ws, "D20")
 
     # ---- planned actions ----
     section(ws, 22, "B", "Rate actions on the books (chronological)")

@@ -9,14 +9,14 @@ from openpyxl.chart.marker import Marker
 from openpyxl.chart.series import SeriesLabel
 from openpyxl.formatting.rule import CellIsRule
 
-from .build_workbook import GENERATOR_VERSION, Ctx, Layout as L
+from .build_workbook import GENERATOR_VERSION, SAMPLE_MOD_TAG, Ctx, Layout as L
 from .xlstyle import (
     ALIGN_C, ALIGN_WRAP, BAND_FILL, BORDER_THIN, F_HEADER, F_INPUT, F_LABEL, F_LINK,
     F_SMALL_IT, FAIL_RED, FILL_AMBER, FILL_GREEN, FILL_GREY, FILL_NAVY, FILL_PANEL,
     FILL_RED, FILL_REQ, FMT_DATE, FMT_GEN, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT,
     GREY_DARK, LINK_GREEN, NAVY, PASS_GREEN, STEEL, col, chart_legend, font, formula, header_row,
     jump, label, link, nav_bar, note, presentation_setup, print_setup, prose, put,
-    quote_sheet as _q, section, set_widths, text_height, title,
+    quote_sheet as _q, section, set_widths, status_banner_cf, text_height, title,
 )
 
 RE = "'Rate Engine'"
@@ -607,8 +607,12 @@ def build_checks(ctx: Ctx):
        '=SUMPRODUCT((se_state<>"")*(N(se_sum)=0)*1)', 0, "WARN"))
     A(("Advisory", "Considered? column is Y/N (blank counts as N)", "=0",
        '=SUMPRODUCT((rl_key<>"")*(rl_cons<>"Y")*(rl_cons<>"N")*(rl_cons<>"")*1)', 0, "WARN"))
-    A(("Advisory", "No duplicate BU x state combos in tbl_LR (roster integrity)", "=0",
-       '=SUMPRODUCT((lr_key<>"")*(COUNTIF(lr_key,lr_key)>1)*1)', 0, "WARN"))
+    # D80: escalated from advisory. A duplicated roster row is not a style
+    # question — SUMPRODUCT aggregates BOTH rows into every EP-weighted total
+    # while INDEX/MATCH views show only the first, so the book silently
+    # double-counts a combo while each per-combo screen looks right.
+    A(("Input sanity", "No duplicate BU x state combos in tbl_LR (roster integrity)", "=0",
+       '=SUMPRODUCT((lr_key<>"")*(COUNTIF(lr_key,lr_key)>1)*1)', 0, "FAIL"))
     A(("Advisory", "Net selections pair with an active mod adjustment (else rate-only)", "=0",
        '=SUMPRODUCT((lr_key<>"")*(1-ISBLANK(lr_netp))*(lr_modadj="OFF")*1)', 0, "WARN"))
     A(("Advisory", "No planned rows on/after 1/1/P are superseded by a net selection", "=0",
@@ -680,6 +684,82 @@ def build_checks(ctx: Ctx):
     A(("Advisory", "Net combo(s) whose logged program lands 1pt+ from the asserted plan "
        "LR (see Net Delivery / Program Flow)", "=0",
        '=SUMPRODUCT((ABS(calc_proggap)>1)*1)', 0, "WARN"))
+    # ---- appended v3.3 checks: paste-proofing (D80) ----------------------
+    # Excel PASTE replaces the target's data validation with the source's, so
+    # DV guards only the first typed entry. These rows are the backstop that
+    # actually survives the workflow the Read Me prescribes.
+    #
+    # Text-typed numbers are the silent case: the engines guard blanks with
+    # N(...)=0, and N("0.95") is also 0, so a CSV-origin paste substitutes a
+    # NEUTRAL value and every numeric check stays green. ISTEXT is the only
+    # thing that can see it. (ISTEXT is classic Excel and array-capable inside
+    # SUMPRODUCT; truly empty cells are not text, so blanks cost nothing.)
+    def _istext(*names):
+        return "=" + "+".join(f"SUMPRODUCT(ISTEXT({n})*1)" for n in names)
+
+    A(("Input sanity", "Inputs numerics are numbers, not text (paste hygiene)", "=0",
+       _istext("lr_lrproj", "lr_s", "lr_mind", "lr_mprior", "lr_m0", "lr_m0asof",
+               "lr_mendprior", "lr_m1", "lr_m2", "lr_ep", "lr_trend", "lr_aother",
+               "lr_netp", "lr_netp1"), 0, "FAIL"))
+    A(("Input sanity", "Rate Log numerics are numbers, not text (paste hygiene)", "=0",
+       _istext("rl_eff", "rl_filed", "rl_ach"), 0, "FAIL"))
+    A(("Input sanity", "Mod Log numerics are numbers, not text (paste hygiene)", "=0",
+       _istext("ml_eff", "ml_chg", "ml_ach"), 0, "FAIL"))
+    # The two most consequential columns had no live backstop at all: a
+    # projected LR pasted as 65 (meaning 65%) or EP in dollars instead of
+    # thousands reshapes every weighted exhibit while each per-combo view
+    # still looks plausible.
+    A(("Input sanity", "Projected loss ratio within (0%, 300%] on every populated row",
+       "=0", '=SUMPRODUCT((lr_key<>"")*((lr_lrproj<=0)+(lr_lrproj>3))*1)', 0, "FAIL"))
+    A(("Input sanity", "Indication selected change (s) within [-50%, +100%]", "=0",
+       '=SUMPRODUCT((lr_s<>"")*((lr_s<-0.5)+(lr_s>1))*1)', 0, "FAIL"))
+    A(("Input sanity", "Net trend within [-50%, +100%]", "=0",
+       '=SUMPRODUCT((lr_trend<>"")*((lr_trend<-0.5)+(lr_trend>1))*1)', 0, "FAIL"))
+    A(("Input sanity", "A_other within [0.5, 2.0] where entered", "=0",
+       '=SUMPRODUCT((lr_aother<>"")*((lr_aother<0.5)+(lr_aother>2))*1)', 0, "FAIL"))
+    A(("Input sanity", "Seasonality weights are non-negative", "=0",
+       "=SUMPRODUCT((se_block<0)*1)", 0, "FAIL"))
+    A(("Input sanity", "Policy term is 1-12 months", "=0",
+       "=IF(OR(nr_TermMonths<1,nr_TermMonths>12),1,0)", 0, "FAIL"))
+    # The mod leg's input integrity, mirroring the rate leg's two rows: a
+    # misspelled status is read as "taken", which silently skips the
+    # achievement haircut the whole D70 mechanism turns on.
+    A(("Input sanity", "Mod-log status is taken/planned on every populated row", "=0",
+       '=SUMPRODUCT((ml_key<>"")*(ml_status<>"taken")*(ml_status<>"planned")*1)',
+       0, "FAIL"))
+    A(("Input sanity", "Mod-log achievement % within [0%, 150%]", "=0",
+       '=COUNTIF(ml_ach,">1.5")+COUNTIF(ml_ach,"<0")', 0, "FAIL"))
+    # D81: the token is ON-default everywhere now (it used to be ON in the
+    # visible chain and OFF in the hidden one), but a blank still means the
+    # reader never made the call — so say so rather than defaulting silently.
+    A(("Input sanity", "'Apply mod adjustment?' is ON/OFF on every populated row", "=0",
+       '=SUMPRODUCT((lr_key<>"")*(lr_modadj<>"ON")*(lr_modadj<>"OFF")*1)', 0, "FAIL"))
+    # A change dated past the engine window's far end is a typo (a 2072-for-2027
+    # year slip clears the 1990-2100 date validation) and never earns anywhere,
+    # yet it still enters CRL_ind when flagged in-indication. The near end stays
+    # advisory: an old filing kept as history is legitimate.
+    A(("Input sanity", "No rate/mod change dated after 12/31 of plan year + 1 (typo guard)",
+       "=0", '=COUNTIF(rl_eff,">"&DATE(nr_PlanYear+1,12,31))'
+             '+COUNTIF(ml_eff,">"&DATE(nr_PlanYear+1,12,31))', 0, "FAIL"))
+    # Key helpers sit immediately right of each paste block. A one-column
+    # overshoot lands on the cell every engine block resolves through, and the
+    # combo silently unhooks with plausible numbers. Classic mode has no
+    # ISFORMULA, so compare the value instead: a live formula always agrees.
+    A(("Structure", "tbl_LR key helper = BU|State on every populated row (paste overshoot)",
+       "=0", '=SUMPRODUCT((lr_bu<>"")*((lr_bu&"|"&lr_state)<>lr_key)*1)', 0, "FAIL"))
+    A(("Structure", "Rate Log key helper = BU|State on every populated row (paste overshoot)",
+       "=0", '=SUMPRODUCT((rl_bu<>"")*((rl_bu&"|"&rl_state)<>rl_key)*1)', 0, "FAIL"))
+    A(("Structure", "Mod Log key helper = BU|State on every populated row (paste overshoot)",
+       "=0", '=SUMPRODUCT((ml_bu<>"")*((ml_bu&"|"&ml_state)<>ml_key)*1)', 0, "FAIL"))
+    # Unit-error tripwire: EP is checked only for sign, so a thousands-vs-dollars
+    # slip on one row skews every EP-weighted exhibit at once.
+    A(("Advisory", "No single combo carries more than half the book's plan EP (unit check)",
+       "=0", "=IF(SUM(lr_ep)<=0,0,SUMPRODUCT((lr_ep>0.5*SUM(lr_ep))*1))", 0, "WARN"))
+    # Sample-data tripwire: the seeded mod actions attach POSITIONALLY, so after
+    # a roster rename they land on real combos and move real plan LRs. Scoped by
+    # orc_fp so a pristine sample book (where the seeds belong) stays quiet.
+    A(("Advisory", "Seeded SAMPLE mod actions still present (clear them before planning)",
+       "=0", f'=IF(orc_fp,0,COUNTIF(ml_comment,"{SAMPLE_MOD_TAG}*"))', 0, "WARN"))
 
     header_row(ws, L.CK_HDR, 1,
                ["#", "Category", "Check", "Expected", "Actual", "Tolerance", "Status",
@@ -772,9 +852,14 @@ def build_checks(ctx: Ctx):
                         align=ALIGN_C, bold=True)
     last = L.CK_FIRST + len(rows) - 1
     g_rng = f"$G${L.CK_FIRST}:$G${last}"
+    # D80: warnings used to be invisible here — the banner counted FAIL only, so
+    # a corrupted roster or an out-of-window filing left the front tab green and
+    # trained the reader never to open this sheet. Three states now, and the
+    # amber one carries its own count.
     formula(ws, "C3",
-            f'=IF(COUNTIF({g_rng},"FAIL")=0,"ALL CHECKS PASS",'
-            f'"CHECKS FAILING: "&COUNTIF({g_rng},"FAIL"))', bold=True, fill=FILL_PANEL)
+            f'=IF(COUNTIF({g_rng},"FAIL")>0,"CHECKS FAILING: "&COUNTIF({g_rng},"FAIL"),'
+            f'IF(COUNTIF({g_rng},"WARN")>0,"PASS WITH "&COUNTIF({g_rng},"WARN")'
+            f'&" WARNING(S)","ALL CHECKS PASS"))', bold=True, fill=FILL_PANEL)
     formula(ws, "E3", f'=COUNTIF({g_rng},"WARN")&" warning(s), "'
                       f'&COUNTIF({g_rng},"N/A")&" not applicable"', fmt=FMT_GEN)
     ws["E3"].font = font(GREY_DARK, size=9)
@@ -812,12 +897,7 @@ def build_checks(ctx: Ctx):
             f"G{L.CK_FIRST}:G{last}",
             CellIsRule(operator="equal", formula=[value], fill=fill,
                        font=font(fcolor, bold=True)))
-    ws.conditional_formatting.add(
-        "C3", CellIsRule(operator="equal", formula=['"ALL CHECKS PASS"'], fill=FILL_GREEN,
-                         font=font(PASS_GREEN, bold=True)))
-    ws.conditional_formatting.add(
-        "C3", CellIsRule(operator="notEqual", formula=['"ALL CHECKS PASS"'], fill=FILL_RED,
-                         font=font(FAIL_RED, bold=True)))
+    status_banner_cf(ws, "C3")
     put(ws, f"A{last + 2}",
         "Oracle ties compare live formulas to constants baked from src/engine.py for the "
         "seeded sample; N/A after you paste real data is EXPECTED, not breakage.",
@@ -1161,12 +1241,59 @@ def build_methodology(ctx: Ctx):
          "index, changes after it never earn and affect only CRL_ind if flagged considered.",
          ]),
     ]
+    # Rendered after the 9b column dictionary so the sheet reads 9, 9b, 10, 11.
+    INTEGRITY = ("10. Input integrity, and what a rebuild keeps", [
+         "Data validation guards TYPING, not PASTING: Excel replaces a target range's "
+         "validation with the source's, so the first paste over an input block removes it "
+         "permanently. The Checks panel is therefore the real integrity mechanism, and it "
+         "mirrors every validation bound rather than a subset (D80).",
+         "Text-typed numbers are the case worth naming. The engines guard blank inputs with "
+         "N(x)=0 — and N(\"0.95\") is also 0 — so a value pasted as text is not rejected but "
+         "SUBSTITUTED with a neutral one: paste the current mod as text and the plan LR "
+         "quietly loses the mod adjustment while every numeric check still passes. ISTEXT "
+         "rows over each paste block are the only thing that can see this, so there is one "
+         "per table.",
+         "Key helpers sit immediately right of each paste block, and a one-column overshoot "
+         "lands on the cell every engine block resolves through — the combo then unhooks "
+         "silently, with plausible numbers. Classic mode has no ISFORMULA, so the check "
+         "compares the helper's VALUE with BU|State: a live formula always agrees, an "
+         "overwritten one does not.",
+         "The status banner has three states (D80): ALL CHECKS PASS, PASS WITH n WARNING(S) "
+         "in amber, and CHECKS FAILING: n. Warnings previously counted for nothing at the "
+         "one place a reader looks, which meant a duplicated roster row — double-counted in "
+         "every EP-weighted total while INDEX/MATCH views show only the first — sat behind a "
+         "green banner. That row is now a FAIL; genuinely advisory rows stay amber.",
+         "The mod-adjustment toggle has ONE default. A blank or misspelled token used to "
+         "read ON in the visible chain and OFF in the hidden one, so a token cleared by a "
+         "paste made Portfolio and State Summary drop mod drift for combos the Bridge still "
+         "adjusted. It is ON-default everywhere now, matching the oracle, and a malformed "
+         "token is a FAILing row rather than a silent default (D81).",
+         "REGENERATION REPLACES A WORKBOOK. It builds a fresh copy from sample seeds and "
+         "writes it over the file; it does not read or merge what you pasted. The generator "
+         "refuses to overwrite a workbook holding real inputs unless told to, always writes "
+         "a timestamped .bak first, and --carry-forward reads tbl_LR, both logs, seasonality "
+         "and the Control scalars back out and rebuilds around them (D82). A carried build "
+         "also bakes its oracle constants from your own first combo, which is what finally "
+         "lets the oracle-tie rows stay live on a real book instead of reporting N/A.",
+         "The combined book refuses a source workbook whose own Checks panel is failing, and "
+         "records what each source reported when it was read (D83). A red line of business "
+         "cannot roll up into a green book.",
+         ])
     # widths set up-front so prose() reads the real host-column width
     set_widths(ws, {"A": 2, "B": 30, "C": 30, "D": 90})
 
-    # ---- sections (rows 4..17 are reserved for the Contents block) ----
+    # ---- sections -----------------------------------------------------
+    # The Contents block is written LAST (its row numbers are discovered here)
+    # but occupies rows 5..5+len(toc)-1. It used to be given a fixed reservation
+    # of rows 4..17; the TOC outgrew it and its final entry landed on the body's
+    # first heading, so section 1 shipped with no heading at all and the
+    # Contents link for it jumped to a cell reading "10. Technical appendix".
+    # Derive the body's start from the TOC's real length instead: +2 for the
+    # trailing appendix entries appended below, +2 blank rows of air.
+    TOC_EXTRA = 3                     # 9b, 10 and 11, appended after the loop
+    TOC_FIRST = 5
     toc: list[tuple[str, int]] = []
-    r = 19
+    r = TOC_FIRST + len(blocks) + TOC_EXTRA + 2
     for heading, paras in blocks:
         toc.append((heading, r))
         section(ws, r, "B", heading)
@@ -1231,9 +1358,18 @@ def build_methodology(ctx: Ctx):
         r += 1
     r += 1
 
-    # ---- 10. named ranges, demoted behind a technical-appendix divider ----
-    toc.append(("10. Technical appendix — named ranges", r))
-    section(ws, r, "B", "10. Technical appendix — named-range dictionary (auto-generated)")
+    # ---- 10. input integrity (D80-D83) ----
+    toc.append((INTEGRITY[0], r))
+    section(ws, r, "B", INTEGRITY[0])
+    r += 1
+    for t in INTEGRITY[1]:
+        prose(ws, f"D{r}", t, size=10)
+        r += 1
+    r += 1
+
+    # ---- 11. named ranges, demoted behind a technical-appendix divider ----
+    toc.append(("11. Technical appendix — named ranges", r))
+    section(ws, r, "B", "11. Technical appendix — named-range dictionary (auto-generated)")
     r += 1
     prose(ws, f"D{r}",
           "Every defined name in the workbook, for auditors and formula readers. Nothing "
@@ -1249,10 +1385,14 @@ def build_methodology(ctx: Ctx):
         put(ws, f"D{r}", desc or "", fnt=font(GREY_DARK, size=9))
         r += 1
 
-    # ---- Contents (written last, into the reserved rows) ----
+    # ---- Contents (written last, now that every section row is known) ----
     section(ws, 4, "B", "Contents")
+    first_body = toc[0][1]
+    assert TOC_FIRST + len(toc) <= first_body, (
+        f"Contents ({len(toc)} entries from row {TOC_FIRST}) would overwrite the first "
+        f"section heading at row {first_body} — raise TOC_EXTRA")
     for i, (heading, row_) in enumerate(toc):
-        jump(ws, f"B{5 + i}", f"Methodology!B{row_}", heading, size=10)
+        jump(ws, f"B{TOC_FIRST + i}", f"Methodology!B{row_}", heading, size=10)
     presentation_setup(ws, gridlines_off=True, tab_color="D9D9D9")
     print_setup(ws)
 
@@ -1268,6 +1408,9 @@ READ_ME_GUIDE = [
                "the policy term."),
     ("Rate Log", "Enter or paste rate changes — every row shows its combo's plan LR "
                  "moving as you type."),
+    ("Mod Log", "The pricing twin of the Rate Log: dated schedule-mod actions, taken or "
+                "planned with an achievement %. THIS IS A PASTE TARGET — the sample rows "
+                "ship populated and move real plan LRs until you replace them."),
     ("Portfolio", "Every BU x state combo at once, plus the Decision Board: top movers, "
                   "contribution to the book, the portfolio bridge."),
     ("State Summary", "One row per state with a BU filter ('All' = EP-weighted) — the "
@@ -1298,7 +1441,8 @@ READ_ME_GUIDE = [
     ("Mod Engine", "Audit trail: the written schedule-mod path and the earned mod — and "
                    "at the foot, what the current endpoint-average process would have "
                    "said, with the difference priced leg by leg."),
-    ("Checks", "The trust panel — must show ALL CHECKS PASS."),
+    ("Checks", "The trust panel — must show no FAILing check. Warnings are surfaced too, "
+               "with their count, on Control."),
     ("Methodology", "The full writeup: formulas as implemented, conventions, named ranges."),
 ]
 
@@ -1412,10 +1556,13 @@ def build_readme(ctx: Ctx):
     section(ws, r, "B", "Quick start")
     r += 1
     steps = [
-        "Replace the SAMPLE rows with your book: tbl_LR, seasonality, and the policy term "
-        "on Inputs; the rate change log (one row per change) on the Rate Log sheet. Do not "
-        "insert or delete rows — spare rows are provided. Rename BUs and states directly "
-        "in tbl_LR: every dropdown and exhibit follows the live roster automatically.",
+        "Replace the SAMPLE rows with your book, on THREE sheets: tbl_LR, seasonality and "
+        "the policy term on Inputs; the rate change log on the Rate Log sheet; the dated "
+        "schedule-mod actions on the Mod Log sheet. The Mod Log ships with sample actions "
+        "that move real plan LRs — clear or replace them even if you log no mod actions of "
+        "your own. Do not insert or delete rows — spare rows are provided. Rename BUs and "
+        "states directly in tbl_LR: every dropdown and exhibit follows the live roster "
+        "automatically.",
         "On Control, pick the plan year, BU, and state, and set the global toggles "
         "(seasonality, the mod-adjustment master switch, the default net trend).",
         "Read the KPI row on Control; audit any figure through Rate Engine -> Mod Engine "
@@ -1429,13 +1576,17 @@ def build_readme(ctx: Ctx):
         "what it supersedes.",
         "Solver: Mode A returns the single change needed for a target CY LR at a chosen "
         "date (it replaces the whole planned program — see the note there); Mode B shows "
-        "the full-year LR under each possible start month.",
+        "the full-year LR under each possible start month; Mode C solves the same target "
+        "on the PRICING lever, and its chart times one directed mod action month by month.",
         "Attribution (after the year closes): enter achieved changes, actual dates, the "
         "actual mod path, and the actual CY LR for a plan-vs-actual waterfall.",
-        "Checks must show ALL CHECKS PASS (also surfaced on Control). Oracle-tie rows apply "
-        "only while the seeded sample is intact and report N/A afterward — regenerate the "
-        "workbook to re-bake them for your data. For a new plan year, regenerate from "
-        "config/config.yaml and paste inputs into the fresh copy (table schemas are stable).",
+        "Checks must show no FAILing row (the status is surfaced on Control). The banner "
+        "reads ALL CHECKS PASS, or PASS WITH n WARNING(S) in amber when advisory rows fire "
+        "— warnings are worth reading, not ignoring. Oracle-tie rows apply only while the "
+        "seeded sample is intact and report N/A afterward — regenerate the workbook to "
+        "re-bake them for your data. WARNING: regenerating REPLACES the file and everything "
+        "pasted into it; carry your inputs forward with "
+        "'python -m src.build_workbook --carry-forward <existing.xlsx>' instead.",
     ]
     for i, s in enumerate(steps):
         put(ws, f"B{r}", f"{i + 1}.", fnt=font(NAVY, bold=True, size=10))
@@ -1475,10 +1626,19 @@ def build_readme(ctx: Ctx):
         "functions, so the file recalculates in LibreOffice and any corporate Excel build.",
         "Sheets are NOT protected (an intentional choice — the Checks panel is the integrity "
         "mechanism; protection without passwords would add friction without security).",
+        # (3) quotes the figure at the precision the Bridge actually DISPLAYS
+        # (0.0%): a checklist step the reader cannot literally perform teaches
+        # them to skip the checklist.
         "First-open checklist: (1) open the file and let it calculate; (2) confirm Control "
-        f"shows ALL CHECKS PASS; (3) confirm the Bridge shows {ctx.oracle_m.cy_lr_p:.2%} "
-        f"for {ctx.we_key} while sample data is intact; (4) replace sample inputs with "
-        "your book.",
+        f"shows ALL CHECKS PASS or PASS WITH n WARNING(S); (3) confirm the Bridge shows "
+        f"{ctx.oracle_m.cy_lr_p:.1%} for {ctx.we_key} while sample data is intact; "
+        "(4) replace sample inputs with your book — Inputs, Rate Log AND Mod Log.",
+        "Regeneration REPLACES a workbook with a fresh sample-seeded copy; it does not "
+        "read or merge what you pasted. Use --carry-forward to move your inputs into a "
+        "rebuilt file, and keep output/ under version control.",
+        "This is one line of business. The combined Book (output/Plan_LR_Book_<year>.xlsx, "
+        "built by tools/build_book.py) rolls every LOB workbook into one filterable view; "
+        "rebuild it after you save changes here.",
     ]
     for s in notes_:
         para(r, s)

@@ -35,7 +35,7 @@ from openpyxl.chart.marker import Marker
 from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from .build_workbook import Ctx, Layout as L, SHEETS
+from .build_workbook import Ctx, Layout as L, SHEETS, mod_adj_on
 from .sheets_engine import (
     LogRefs, mod_drift_at_switch, mod_value_formula, write_cohort_block,
     write_mod_anchor_cells)
@@ -194,8 +194,8 @@ def build_netcalc(ctx: Ctx):
         formula(ws, f"D{t}", f"=IF($C{t}=0,0,IF(ISBLANK(INDEX(lr_netp,$C{t})),0,1))",
                 fmt=FMT_INT)
         formula(ws, f"E{t}", f"=IF($D{t}=0,0,N(INDEX(lr_netp,$C{t})))", fmt="0.0%")
-        formula(ws, f"F{t}", f'=IF($C{t}=0,0,IF(AND(nr_ModAdjMaster="ON",'
-                             f'INDEX(lr_modadj,$C{t})="ON"),1,0))', fmt=FMT_INT)
+        formula(ws, f"F{t}", f"=IF($C{t}=0,0,IF({mod_adj_on(f'$C{t}')},1,0))",
+                fmt=FMT_INT)
         formula(ws, f"G{t}", f"=IF($C{t}=0,1,IF(N(INDEX(lr_mind,$C{t}))=0,1,"
                              f"INDEX(lr_mind,$C{t})))", fmt=FMT_MOD)
         formula(ws, f"H{t}", f"=IF($C{t}=0,1,IF(N(INDEX(lr_m0,$C{t}))=0,1,"

@@ -34,7 +34,7 @@ from .xlstyle import (
     FILL_NAVY, FILL_PANEL, FMT_DATE, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT,
     GREY_DARK, NAVY, PASS_GREEN, STEEL_LIGHT, col, font, formula, header_row,
     input_cell, jump, label, link, nav_bar, presentation_setup, print_setup,
-    put, quote_sheet, section, set_widths, title,
+    put, quote_sheet, section, set_widths, status_banner_cf, title,
 )
 
 PCT_S = "+0.0%;-0.0%;0.0%"
@@ -287,7 +287,8 @@ def build_control(ctx: BookCtx, n: int):
 
     section(ws, 16, "A", "Sources")
     header_row(ws, 17, 1, ["Line of business", "Workbook", "Built / modified",
-                           "Version", "Combos"], widths=[20, 42, 18, 10, 9])
+                           "Version", "Combos", "Source checks"],
+               widths=[20, 42, 18, 10, 9, 24])
     for i, s in enumerate(d.sources):
         r = 18 + i
         put(ws, f"A{r}", s.lob)
@@ -295,6 +296,11 @@ def build_control(ctx: BookCtx, n: int):
         put(ws, f"C{r}", s.modified, align=ALIGN_C)
         put(ws, f"D{r}", s.version, align=ALIGN_C)
         put(ws, f"E{r}", s.combos, fmt=FMT_INT, align=ALIGN_C)
+        # D83: what each source's OWN trust panel said when it was harvested.
+        # A red LOB used to roll up into a green book without a trace.
+        put(ws, f"F{r}", s.checks or "(not read)",
+            fnt=font(PASS_GREEN if s.checks_ok else FAIL_RED, bold=not s.checks_ok,
+                     size=9), align=ALIGN_C)
     tot = 18 + len(d.sources)
     put(ws, f"A{tot}", "TOTAL", fnt=font(NAVY, bold=True))
     formula(ws, f"E{tot}", f"=SUM($E$18:$E${tot - 1})", fmt=FMT_INT, align=ALIGN_C,
@@ -721,6 +727,12 @@ def build_checks(ctx: BookCtx, n: int):
          f"={n}", "=bk_srccombos", 0),
         ("Harvest", "Every harvested row carries a key",
          f"={n}", f'=COUNTIF({rng("key", n)},"?*")', 0),
+        # D83: the sources' own status, frozen at harvest time and counted here
+        # so a failing LOB cannot hide inside a green book.
+        ("Harvest", "Every source reported a passing Checks panel when harvested",
+         f"={len(d.sources)}",
+         f'=COUNTIF(Control!$F$18:$F${17 + len(d.sources)},"ALL CHECKS PASS")'
+         f'+COUNTIF(Control!$F$18:$F${17 + len(d.sources)},"PASS WITH *")', 0),
         # each exhibit applies its OWN filter set, so reconcile against the
         # matching subset — otherwise these hold only in the unfiltered view
         ("Reconciliation", "By-line roll-up total = the rows it should cover",
@@ -750,10 +762,15 @@ def build_checks(ctx: BookCtx, n: int):
                 f'=IF(ABS($E{r}-$D{r})<=$F{r},"PASS","{kind}")', align=ALIGN_C,
                 bold=True)
     last = 6 + len(rows) - 1
+    # same three-state banner as the LOB workbooks (D80) — advisories are
+    # visible here rather than rounded up into "pass"
     formula(ws, "C3",
-            f'=IF(COUNTIF($G$6:$G${last},"FAIL")=0,"ALL CHECKS PASS",'
-            f'"CHECKS FAILING: "&COUNTIF($G$6:$G${last},"FAIL"))', bold=True,
-            fill=FILL_PANEL)
+            f'=IF(COUNTIF($G$6:$G${last},"FAIL")>0,"CHECKS FAILING: "'
+            f'&COUNTIF($G$6:$G${last},"FAIL"),'
+            f'IF(COUNTIF($G$6:$G${last},"WARN")>0,"PASS WITH "'
+            f'&COUNTIF($G$6:$G${last},"WARN")&" WARNING(S)","ALL CHECKS PASS"))',
+            bold=True, fill=FILL_PANEL)
+    status_banner_cf(ws, "C3")
     ctx.define("bk_overall", "Checks", "$C$3", "Book-level status banner")
     put(ws, f"A{last + 2}",
         "These cannot re-derive the engines — that is the per-LOB harness's job "
@@ -783,10 +800,20 @@ def build_readme(ctx: BookCtx, n: int):
               "from those files, and it cannot follow them either.",
               "Every filter, weighted average and total IS live, so changing the view "
               "on Control recalculates instantly.",
-              "To refresh: regenerate the LOB workbooks, recalculate them, then "
-              "rebuild this book (python tools/build_book.py). The harvest refuses to "
-              "run against a workbook that was never recalculated, so a stale book "
-              "cannot be produced by accident."):
+              # The old wording said "regenerate the LOB workbooks" as the refresh
+              # step. Regeneration REPLACES a workbook with a fresh sample-seeded
+              # copy — the one action that destroys a season of pasted inputs — and
+              # it is not needed to refresh anything (D82/D83).
+              "To refresh after editing inputs: save the LOB workbook(s) in Excel, "
+              "then rebuild this book (python tools/build_book.py). That is the whole "
+              "loop.",
+              "Regenerate a LOB workbook only for STRUCTURAL changes (new state, new "
+              "capacity, new generator version) — regeneration replaces the file's "
+              "contents, so carry your inputs across with "
+              "'python -m src.build_workbook --lob \"<line>\" --carry-forward'.",
+              "The harvest refuses a workbook that was never recalculated, and refuses "
+              "one whose own Checks panel is failing — see 'Source checks' on Control "
+              "for what each file reported when it was read."):
         put(ws, f"B{r}", t, fnt=font(GREY_DARK, size=10))
         r += 1
     r += 1

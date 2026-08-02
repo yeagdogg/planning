@@ -263,6 +263,35 @@ def set_widths(ws, spec: dict):
         ws.column_dimensions[letter].width = w
 
 
+STATUS_PASS = "ALL CHECKS PASS"
+
+
+def status_banner_cf(ws, addr: str, size: int = 11):
+    """Green / amber / red conditional formatting for a checks-status cell (D80).
+
+    Three states, because a two-state banner had to call warnings "pass": the
+    old rules were equal / notEqual against the pass string, so any number of
+    WARNs stayed green at the one place a reader actually looks. The banner now
+    reads "PASS WITH n WARNING(S)" in that state and this paints it amber.
+
+    Rules are mutually exclusive (no stopIfTrue needed) and reference the cell
+    absolutely, so the same three lines work for a status cell on any sheet.
+    """
+    from openpyxl.formatting.rule import FormulaRule
+    from openpyxl.utils.cell import coordinate_from_string
+
+    c_letter, c_row = coordinate_from_string(addr.replace("$", ""))
+    a = f"${c_letter}${c_row}"
+    for rule_f, fill, fcolor in (
+            (f'={a}="{STATUS_PASS}"', FILL_GREEN, PASS_GREEN),
+            (f'=AND(LEFT({a},4)="PASS",{a}<>"{STATUS_PASS}")', FILL_AMBER, "7F6000"),
+            (f'=LEFT({a},4)<>"PASS"', FILL_RED, FAIL_RED)):
+        ws.conditional_formatting.add(
+            addr, FormulaRule(formula=[rule_f], fill=fill,
+                              font=font(fcolor, bold=True, size=size)))
+    return ws
+
+
 def chart_legend(c, pos="b"):
     """Move the legend OUT of the plot area (D69).
 
