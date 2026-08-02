@@ -22,7 +22,7 @@ ctx.lay_dyn for the visible sheets (Scenarios / Solver / Attribution) to link.
 
 from __future__ import annotations
 
-from .build_workbook import Ctx, Layout as L, SHEETS, mod_adj_on
+from .build_workbook import Ctx, Layout as L, SHEETS, mod_adj_on, slot_rank
 from .sheets_engine import (
     LogRefs, mod_drift_at_switch, write_cohort_block, write_mod_anchor_cells)
 from .xlstyle import (FMT_DATE, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT_SIGNED,
@@ -328,18 +328,19 @@ def build_calc(ctx: Ctx):
                    f'=COUNTIFS(rl_key,$A{r},rl_status,"{status}",rl_eff,"<>")', FMT_INT)
         for j in range(BOOK_SLOTS):
             c0 = BOOK_PUB["slot"] + j * 3
-            cnt = f"COUNTIFS(rl_key,$A{r},rl_seq,{j + 1})"
+            sq = slot_rank(f"$A{r}", j + 1, BOOK_SLOTS)   # the LAST four (D95)
+            cnt = f"COUNTIFS(rl_key,$A{r},rl_seq,{sq})"
             f_grey(ws, f"{col(c0)}{r}",
-                   f'=IF({cnt}=0,"",SUMIFS(rl_eff,rl_key,$A{r},rl_seq,{j + 1}))',
+                   f'=IF({cnt}=0,"",SUMIFS(rl_eff,rl_key,$A{r},rl_seq,{sq}))',
                    FMT_DATE)
             f_grey(ws, f"{col(c0 + 1)}{r}",
-                   f'=IF({cnt}=0,"",SUMIFS(rl_reff,rl_key,$A{r},rl_seq,{j + 1}))',
+                   f'=IF({cnt}=0,"",SUMIFS(rl_reff,rl_key,$A{r},rl_seq,{sq}))',
                    FMT_PCT_SIGNED)
             f_grey(ws, f"{col(c0 + 2)}{r}",
                    f'=IF({cnt}=0,"",'
-                   f'IF(COUNTIFS(rl_key,$A{r},rl_seq,{j + 1},rl_status,"planned")>0,'
+                   f'IF(COUNTIFS(rl_key,$A{r},rl_seq,{sq},rl_status,"planned")>0,'
                    f'"P","T")&'
-                   f'IF(COUNTIFS(rl_key,$A{r},rl_seq,{j + 1},rl_cons,"Y")>0,"","*"))')
+                   f'IF(COUNTIFS(rl_key,$A{r},rl_seq,{sq},rl_cons,"Y")>0,"","*"))')
     res_names = {
         "calc_key": ("A", "Combo keys, aligned 1:1 with tbl_LR rows"),
         "calc_term": ("B", "Policy term by combo"),

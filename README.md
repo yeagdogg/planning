@@ -17,7 +17,10 @@ Marine ships as the 6-month-term example).
   Projected LR × rate earn-in × mod drift × other adj **= Plan LR** — all inside the first screen;
   the chronological rate-change history, the P+1 view and the net-selection block follow. A BU
   filter whose "All" view combines business units on **adjusted-plan-EP weights** (the EP column
-  is the weight behind every aggregate in the book — enter adjusted EP there).
+  is the weight behind every aggregate in the book — enter adjusted EP there). Its four
+  rate-change slots show the **most recent** four (D95) — the plan-year actions, not the history
+  that has already earned — and a Checks advisory names any combo carrying more than four. The
+  `# taken` / `# planned` counts always cover the whole log, and the Bridge shows up to eight.
 - **LR Flow** — the plan loss ratio month by month: the same bridge the headline uses,
   evaluated at each month instead of averaged over the year. Rate and price earn IN while
   trend pushes the other way, and the exhibit's headline is the **breakeven trend** — the net

@@ -37,7 +37,7 @@ from . import engine
 from .engine import ComboInputs, ModInputs, RateChange
 from .xlstyle import quote_sheet
 
-GENERATOR_VERSION = "3.5.0"
+GENERATOR_VERSION = "3.5.1"
 
 # Leads every seeded Mod Log comment so the Checks tripwire can spot a sample
 # action left in a real book (D80). Kept short and unmistakable — a real
@@ -60,6 +60,28 @@ def mod_adj_on(row_expr: str) -> str:
     malformed token loud rather than letting either default paper over it.
     """
     return f'AND(nr_ModAdjMaster="ON",INDEX(lr_modadj,{row_expr})<>"OFF")'
+
+
+def slot_rank(key_expr: str, j: int, slots: int = 4) -> str:
+    """Excel expression: which chronological rank belongs in display slot ``j``.
+
+    The four-slot chronologies show the LAST four changes, not the first (D95).
+    ``rl_seq`` ranks a combo's filings from oldest, so asking for ranks 1..4
+    kept the oldest four — and a combo with six filings carries its two
+    PLAN-YEAR actions at ranks 5 and 6. The exhibit that exists to support a
+    planning decision was dropping the decisions and keeping 2025 history that
+    has long since fully earned.
+
+    Below the limit the offset is zero and every formula is unchanged, so a
+    book with four or fewer changes per combo is bit-identical either way.
+
+    The EIGHT-slot chronologies (Bridge, One-Pager, Flow Dashboard, Attribution,
+    Walkthrough) deliberately keep first-N: the Walkthrough builds a CUMULATIVE
+    rate index across its slots, which only means anything counted from the
+    start, and eight covers essentially every real program.
+    """
+    n = f'COUNTIFS(rl_key,{key_expr},rl_eff,"<>")'
+    return f"IF({n}>{slots},{n}-{slots}+{j},{j})"
 
 
 class SHEETS:

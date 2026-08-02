@@ -1176,7 +1176,9 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
                 bad += 1
             if (ss[f"{ss_l('nplanned')}{r}"].value or 0) != len(log) - n_tk:
                 bad += 1
-            for j, rr in enumerate(log[:4]):
+            # the LAST four, matching the exhibit (D95); identical to the
+            # first four whenever a combo has four or fewer
+            for j, rr in enumerate(log[-4:]):
                 d = ss.cell(row=r, column=ss_c(f"chg{j + 1}_date")).value
                 v = ss.cell(row=r, column=ss_c(f"chg{j + 1}_pct")).value
                 tok = ss.cell(row=r, column=ss_c(f"chg{j + 1}_tok")).value
@@ -1199,6 +1201,73 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
         check(f"[State Summary {fbu}] rows, totals, rate slots, and status tokens tie",
               bad == 0, f"{bad} mismatches")
     run(f"State Summary filter {fbu}", {("State Summary", "B4"): fbu}, a9b)
+
+    # 9b2. more than four rate changes on one combo (D95). The seeded book has
+    # at most three per combo, so nothing else in this harness ever reaches the
+    # truncation branch — and the branch is the whole point: the exhibit must
+    # keep the NEWEST four, because a fifth and sixth filing are plan-year
+    # actions and the first two are history that has already earned.
+    ov_bu, ov_state = we["bu"], we["state"]
+    ov_key = f"{ov_bu}|{ov_state}"
+    ov_log = sorted([r for r in rate_rows if f"{r['bu']}|{r['state']}" == ov_key],
+                    key=lambda r: r["eff"])
+    ov_rl0 = L.RL_FIRST + len(rate_rows)
+    ov_extra = [
+        dict(eff=dt.date(p, 8, 1), filed=0.03, status="planned", cons="N", ach=1.0),
+        dict(eff=dt.date(p, 11, 1), filed=0.02, status="planned", cons="N", ach=1.0),
+    ]
+    ov_muts = {("State Summary", "B4"): ov_bu}
+    for i, x in enumerate(ov_extra):
+        rr_ = ov_rl0 + i
+        ov_muts.update({("Rate Log", f"A{rr_}"): ov_bu,
+                        ("Rate Log", f"B{rr_}"): ov_state,
+                        ("Rate Log", f"C{rr_}"): x["eff"],
+                        ("Rate Log", f"D{rr_}"): x["filed"],
+                        ("Rate Log", f"E{rr_}"): x["status"],
+                        ("Rate Log", f"F{rr_}"): x["cons"],
+                        ("Rate Log", f"G{rr_}"): x["ach"]})
+    ov_all = sorted(ov_log + [dict(bu=ov_bu, state=ov_state, eff=x["eff"],
+                                   filed=x["filed"], status=x["status"],
+                                   considered=x["cons"], achievement=x["ach"],
+                                   comment="") for x in ov_extra],
+                    key=lambda r: r["eff"])
+    ov_m = engine.run_bridge(
+        p, sample_to_combo(cfg, lob, we, rate_rows + [
+            dict(bu=ov_bu, state=ov_state, eff=x["eff"], filed=x["filed"],
+                 status=x["status"], considered=x["cons"], achievement=x["ach"],
+                 comment="") for x in ov_extra], mod_rows), "monthly")
+
+    def a9b2(wb):
+        ss = wb[SHEETS.STATE_SUMMARY]
+        r = 8 + list(_states(cfg)).index(ov_state)
+        check(f"[>4 changes] the combo now has {len(ov_all)} rate changes",
+              len(ov_all) > 4, f"{len(ov_all)}")
+        # the four slots must be the LAST four, in order
+        bad = 0
+        for j, rr_ in enumerate(ov_all[-4:], start=1):
+            got = ss[f"{ss_l(f'chg{j}_date')}{r}"].value
+            got = got.date() if hasattr(got, "date") else got
+            if got != rr_["eff"]:
+                bad += 1
+        check("[>4 changes] State Summary shows the LAST four changes, newest last",
+              bad == 0, f"{bad} slots off")
+        check("[>4 changes] the oldest change is NOT shown",
+              all((ss[f"{ss_l(f'chg{j}_date')}{r}"].value.date()
+                   if hasattr(ss[f"{ss_l(f'chg{j}_date')}{r}"].value, "date")
+                   else ss[f"{ss_l(f'chg{j}_date')}{r}"].value) != ov_all[0]["eff"]
+                  for j in range(1, 5)))
+        # the counts stay complete, which is what makes the truncation visible
+        n_tk = sum(1 for x in ov_all if x["status"] == "taken")
+        got_tk = ss[f"{ss_l('ntaken')}{r}"].value or 0
+        got_pl = ss[f"{ss_l('nplanned')}{r}"].value or 0
+        check("[>4 changes] # taken / # planned still count the WHOLE log",
+              got_tk == n_tk and got_pl == len(ov_all) - n_tk,
+              f"wb={got_tk}/{got_pl} oracle={n_tk}/{len(ov_all) - n_tk}")
+        # and the arithmetic sees every change, truncated display or not
+        check("[>4 changes] CY plan LR still ties a fresh oracle run over ALL of them",
+              approx(nval(wb, "nr_CYLR_P"), ov_m.cy_lr_p, 1e-9),
+              f"wb={nval(wb, 'nr_CYLR_P')} oracle={ov_m.cy_lr_p}")
+    run("more than four rate changes", ov_muts, a9b2)
 
     # 9c. trend default inheritance: blank combos inherit 2%, explicit entries win
     trend_m = engine.run_bridge(

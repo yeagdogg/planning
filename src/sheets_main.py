@@ -11,7 +11,7 @@ from openpyxl.chart.marker import Marker
 from openpyxl.formatting.rule import ColorScaleRule, DataBarRule, FormulaRule
 from openpyxl.styles import Alignment, Border, Font, Side
 
-from .build_workbook import Ctx, Layout as L, SHEETS, mod_adj_on
+from .build_workbook import Ctx, Layout as L, SHEETS, mod_adj_on, slot_rank
 from .xlstyle import (ALIGN_C, ALIGN_WRAP, BORDER_THIN, DOWN_BAR, FAIL_RED, FILL_GREY,
     FILL_NAVY, FILL_PANEL, FMT_DATE, FMT_DATE_S, FMT_EP_Z, FMT_GEN, FMT_IDX,
     FMT_IDX_Z, FMT_INT, FMT_MOD, FMT_PCT, FMT_PCT_SIGNED, FMT_PCT_Z, FMT_PTS_COL,
@@ -807,20 +807,24 @@ def build_state_summary(ctx: Ctx):
         # rate-change slots: date, effective %, and the status token (D61) —
         # T/P for taken/planned, * when the row is outside the indication
         for j in range(1, 5):
-            cnt = f"COUNTIFS(rl_key,${KY}{r},rl_seq,{j})"
+            # the LAST four, not the first (D95): a combo with six filings keeps
+            # its plan-year actions at ranks 5 and 6, and those are the ones a
+            # planning exhibit exists to show
+            sq = slot_rank(f"${KY}{r}", j)
+            cnt = f"COUNTIFS(rl_key,${KY}{r},rl_seq,{sq})"
             formula(ws, f"{ss_l(f'chg{j}_date')}{r}",
                     f'=IF(${KY}{r}="","",IF({cnt}=0,"",'
-                    f"SUMIFS(rl_eff,rl_key,${KY}{r},rl_seq,{j})))",
+                    f"SUMIFS(rl_eff,rl_key,${KY}{r},rl_seq,{sq})))",
                     fmt=FMT_DATE_S, align=ALIGN_C, fill=band, border=BORDER_THIN)
             formula(ws, f"{ss_l(f'chg{j}_pct')}{r}",
                     f'=IF(${KY}{r}="","",IF({cnt}=0,"",'
-                    f"SUMIFS(rl_reff,rl_key,${KY}{r},rl_seq,{j})))",
+                    f"SUMIFS(rl_reff,rl_key,${KY}{r},rl_seq,{sq})))",
                     fmt=FMT_PCT_SIGNED, align=ALIGN_C, fill=band, border=BORDER_THIN)
             formula(ws, f"{ss_l(f'chg{j}_tok')}{r}",
                     f'=IF(${KY}{r}="","",IF({cnt}=0,"",'
-                    f'IF(COUNTIFS(rl_key,${KY}{r},rl_seq,{j},rl_status,"planned")>0,'
+                    f'IF(COUNTIFS(rl_key,${KY}{r},rl_seq,{sq},rl_status,"planned")>0,'
                     f'"P","T")&'
-                    f'IF(COUNTIFS(rl_key,${KY}{r},rl_seq,{j},rl_cons,"Y")>0,"","*")))',
+                    f'IF(COUNTIFS(rl_key,${KY}{r},rl_seq,{sq},rl_cons,"Y")>0,"","*")))',
                     align=ALIGN_C, fill=band, border=BORDER_THIN)
         # counts split by status — these work in the All view too, where the
         # per-change slots are necessarily blank (they are single-BU)

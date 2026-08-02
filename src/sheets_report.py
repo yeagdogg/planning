@@ -826,6 +826,15 @@ def build_checks(ctx: Ctx):
     A(("Structure", "LR Flow: trend is anchored at 7/1 of the plan year — the monthly "
        "exponents sum to 0 over P and to 12 over P+1", "=0",
        f"=ABS(SUM(lrf_delta_p))+ABS(SUM(lrf_delta_p1)-12)", 1e-9, "FAIL"))
+    # D95: the four-slot chronologies show the LAST four, which is the right
+    # four — but a row that starts mid-program looks like a whole program unless
+    # something says otherwise. The counts beside it are complete, so this row
+    # is what turns "3 taken + 3 planned against four slots" from a puzzle into
+    # a statement.
+    A(("Advisory", "Combo(s) carry more than four rate changes — the State Summary and "
+       "the Book show the most recent four (the # taken / # planned counts are complete, "
+       "and the Bridge shows up to eight)", "=0",
+       '=SUMPRODUCT((lr_key<>"")*(COUNTIF(rl_key,lr_key)>4))', 0, "WARN"))
     A(("Advisory", "LR Flow: the monthly walk and the CY headline differ by more than "
        "25 bp — a short term with lumpy writings moves the exposure centre of gravity "
        "off 7/1 (see the tilt line on that tab)", "=0",

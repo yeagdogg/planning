@@ -20,8 +20,11 @@ file (D84) — before, two concurrent runs deleted each other's working copy.
 
 Width is FITTED to the machine (D94), not hard-coded: a phase-D worker is one
 Python process plus one Excel instance and the pair peaks around 670 MB, so the
-bound is `min(lines, cores - 2, two-thirds of free RAM / 900 MB, 8)`. It used to
-be 2, which on a 24-core box turned six lines into three waves for no reason.
+bound is `min(lines, cores - 2, two-thirds of free RAM / 900 MB, cap)`, cap 4 for
+--full and 8 for --quick. It used to be 2, which on a 24-core box turned six
+lines into three waves for no reason; six turned out too wide in the other
+direction, because Excel/COM starts killing workers and each kill costs a full
+serial re-run.
 
 And phase D does not run when it cannot say anything. It mutates inputs,
 recalculates through Excel and ties the results to the oracle — it tests the
@@ -65,7 +68,16 @@ STATE_FILE = "release-state.json"
 # no longer has to absorb that failure by staying small.
 MB_PER_JOB_FULL = 900
 MB_PER_JOB_QUICK = 400
-HARD_JOB_CAP = 8          # past this, Excel/COM instability costs more than it saves
+# The binding constraint on --full is COM STABILITY, not memory. Measured over
+# three runs at six concurrent Excel instances (39 GB free, 24 cores, nowhere
+# near a memory wall): 0, 1 and 2 lines killed by access violation. Each kill
+# costs a full serial re-run of that line — about 7.5 minutes — which more than
+# eats the wave that the sixth worker saved. Two kills took a 26-minute run to
+# 47. Four is the honest setting: two waves instead of one, but a fan-out that
+# usually finishes on the first pass. Phases A-C never start Excel, so they keep
+# the wider cap.
+HARD_JOB_CAP_FULL = 4
+HARD_JOB_CAP_QUICK = 8
 
 
 def _free_mb() -> int:
@@ -100,12 +112,13 @@ def _max_jobs(full: bool, n_lobs: int) -> int:
     and 60 GB. The bound that matters is memory per worker, and it is small.
     """
     per = MB_PER_JOB_FULL if full else MB_PER_JOB_QUICK
+    cap = HARD_JOB_CAP_FULL if full else HARD_JOB_CAP_QUICK
     by_cpu = max(1, (os.cpu_count() or 4) - 2)
     free = _free_mb()
     # leave a third of free memory alone: Excel grows while it recalculates,
     # and a swapping box is slower than a serial one
-    by_mem = max(1, int(free * 0.67) // per) if free > 0 else HARD_JOB_CAP
-    return max(1, min(n_lobs, by_cpu, by_mem, HARD_JOB_CAP))
+    by_mem = max(1, int(free * 0.67) // per) if free > 0 else cap
+    return max(1, min(n_lobs, by_cpu, by_mem, cap))
 
 
 def _formula_fingerprint(path: Path) -> str:
@@ -190,34 +203,66 @@ def _run(args: list[str], label: str, retries: int = 0) -> tuple[str, int, str]:
     return label, r.returncode, tail
 
 
-def _await_excel_drain(timeout_s: float = 60.0) -> int:
-    """Wait for the parallel recalc instances to finish dying (D92).
+def _excel_pids() -> set[int]:
+    """PIDs of every running Excel, or an empty set where we cannot tell."""
+    try:
+        out = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq EXCEL.EXE", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, timeout=20).stdout
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    pids = set()
+    for line in out.splitlines():
+        parts = [p.strip('" ') for p in line.split('","')]
+        if len(parts) > 1 and parts[0].upper().startswith("EXCEL"):
+            try:
+                pids.add(int(parts[1]))
+            except ValueError:
+                pass
+    return pids
+
+
+_EXCEL_BASELINE: set[int] = set()
+
+
+def _await_excel_drain(timeout_s: float = 45.0) -> int:
+    """Wait for the instances THIS RUN started to die, then kill the stragglers.
 
     Excel's teardown is asynchronous: the subprocess returns as soon as it has
-    called Quit, while the process itself lingers for a second or two releasing
-    its RPC endpoints. Starting the next instance inside that window fails in a
-    different way each time — 'The interface is unknown', an RPC error, or a
-    proxy that answers property reads with the wrong type ("'bool' object is
-    not callable"). All three were observed at the BOOK step, which is the one
-    that always follows a fan-out, and all three survived recalc.py's own
-    retries because its backoff is shorter than the drain.
+    called Quit, while the process lingers releasing its RPC endpoints. Starting
+    the next instance inside that window fails a different way each time — 'The
+    interface is unknown', an RPC error, or a proxy answering a property read
+    with the wrong type ("'bool' object is not callable") — which is why the
+    symptom set looked like several unrelated bugs (D92).
 
-    Returns the number of Excel processes still up when we stopped waiting.
+    Waiting alone was not enough: one instance sometimes never exits at all, and
+    the driver would print "still shutting down; continuing anyway" and then
+    fail all three book attempts against the wedged process. So after the wait,
+    stragglers are terminated.
+
+    ONLY ones that appeared after this run started. `_EXCEL_BASELINE` is
+    snapshotted before any subprocess launches, so an Excel the user already had
+    open — with unsaved work in it — is never a candidate. (The release also
+    refuses to start at all when a `~$` lock file says one of OUR workbooks is
+    open, which is the other half of that guarantee.)
     """
     deadline = time.monotonic() + timeout_s
-    n = -1
+    ours: set[int] = set()
     while time.monotonic() < deadline:
-        try:
-            out = subprocess.run(
-                ["tasklist", "/FI", "IMAGENAME eq EXCEL.EXE", "/NH"],
-                capture_output=True, text=True, timeout=20).stdout
-        except (OSError, subprocess.SubprocessError):
-            return -1                      # not Windows, or tasklist missing
-        n = sum(1 for l in out.splitlines() if "EXCEL.EXE" in l.upper())
-        if n == 0:
+        ours = _excel_pids() - _EXCEL_BASELINE
+        if not ours:
             return 0
         time.sleep(1.0)
-    return n
+    for pid in ours:
+        try:
+            subprocess.run(["taskkill", "/PID", str(pid), "/F"],
+                           capture_output=True, timeout=20)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    if ours:
+        print(f"  (terminated {len(ours)} wedged Excel process(es) this run started)")
+        time.sleep(2.0)
+    return len(ours)
 
 
 def _locked(out_dir: Path) -> list[str]:
@@ -269,6 +314,9 @@ def main(argv=None) -> int:
     ap.add_argument("--force-full", action="store_true",
                     help="run phase D even where every formula is unchanged")
     args = ap.parse_args(argv)
+
+    global _EXCEL_BASELINE
+    _EXCEL_BASELINE = _excel_pids()      # never kill an Excel the user already had open
 
     cfg = load_config(args.config)
     out_dir = Path(args.out or cfg.output_dir)
@@ -332,10 +380,7 @@ def main(argv=None) -> int:
 
         # The book must follow every line, or it silently reports last month.
         if set(lobs) == set(cfg.output_lobs):
-            left = _await_excel_drain()
-            if left > 0:
-                print(f"  (note: {left} Excel process(es) still shutting down; "
-                      f"continuing anyway)")
+            _await_excel_drain()
             stage("book")
             for step in (["tools/build_book.py", "--config", args.config,
                           "--out", str(out_dir)],
