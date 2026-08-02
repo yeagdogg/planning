@@ -39,14 +39,13 @@ from openpyxl.worksheet.datavalidation import DataValidation
 
 from .build_workbook import Ctx, Layout as L, SHEETS
 from .sheets_calc import FLOW_PUB, PRIOR_PUB
-from .xlstyle import (
-    ALIGN_C, ALIGN_L, BORDER_THIN, F_LABEL, F_SMALL_IT, FAIL_RED, FILL_NAVY,
-    FILL_PANEL, FILL_STEEL, GREY_DARK, NAVY, col, font, formula, header_row,
-    input_cell, jump, label, link, nav_bar, presentation_setup, print_setup, put,
-    quote_sheet as _q, section, set_widths, title,
+from .xlstyle import (ALIGN_C, ALIGN_L, BORDER_THIN, FAIL_RED, FILL_NAVY, FILL_PANEL,
+    FILL_STEEL, FMT_PTS_COL, F_LABEL, F_SMALL_IT, GREY_DARK, NAVY, col, font, formula,
+    header_row, input_cell, jump, label, link, nav_bar, presentation_setup,
+    print_setup, put, quote_sheet as _q, section, set_widths, title,
 )
 
-PCT_S = "+0.0%;-0.0%;0.0%"
+from .xlstyle import FMT_PCT_SIGNED as PCT_S   # one definition, seven readers
 
 # ---- sheet geometry (module-level so the harness can address the exhibit) ----
 PF_BAND_ROW = 7                         # the two-year band caption
@@ -236,7 +235,7 @@ def build_program_flow(ctx: Ctx):
                    f"SUMPRODUCT((calc_state=$A{r})*calc_netmode*calc_proggap)/{nm_st})")
         formula(ws, f"{cGAP}{r}",
                 f'=IF($A{r}="","",IF(pf_BU="All",{all_gap},{one_gap}))',
-                fmt='+0.00;-0.00;0.00', align=ALIGN_C, fill=band_fill,
+                fmt=FMT_PTS_COL, align=ALIGN_C, fill=band_fill,
                 border=BORDER_THIN)
         cells = (
             (pRATE, _all_avg("avg_rate", PRIOR_PUB), one_prate, False),

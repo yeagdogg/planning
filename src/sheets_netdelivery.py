@@ -39,19 +39,19 @@ from .build_workbook import Ctx, Layout as L, SHEETS, mod_adj_on
 from .sheets_engine import (
     LogRefs, mod_drift_at_switch, mod_value_formula, write_cohort_block,
     write_mod_anchor_cells)
-from .xlstyle import (
-    ALIGN_C, ALIGN_L, BORDER_THIN, F_LABEL, F_SMALL_IT, FAIL_RED, FILL_GREY,
-    FILL_NAVY, FILL_PANEL, FILL_STEEL, FMT_DATE, FMT_IDX, FMT_INT, FMT_MOD,
-    FMT_PCT, GREY_DARK, NAVY,
-    STEEL, WARN_AMBER, col, chart_legend, font, formula, header_row, input_cell, jump, label,
-    link, nav_bar, presentation_setup, print_setup, prose, put, quote_sheet,
-    section, set_widths, title,
+from .xlstyle import (ALIGN_C, ALIGN_L, BORDER_THIN, FAIL_RED, FILL_GREY, FILL_NAVY,
+    FILL_PANEL, FILL_STEEL, FMT_DATE, FMT_DATE_S, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT,
+    FMT_PTS_COL, F_LABEL, F_SMALL_IT, GREY_DARK, NAVY, STEEL, WARN_AMBER,
+    chart_legend, col, dv_decimal, dv_plan_year_date, font, formula, header_row,
+    input_cell, jump, label, link,
+    nav_bar, presentation_setup, print_setup, prose, put, quote_sheet, section,
+    set_widths, title,
 )
 
 ND = quote_sheet(SHEETS.NET_DELIVERY)
 NC = SHEETS.NETCALC                     # "_netcalc" (no quoting needed)
 RL = quote_sheet(SHEETS.RATE_LOG)
-PCT_S = "+0.0%;-0.0%;0.0%"
+from .xlstyle import FMT_PCT_SIGNED as PCT_S   # one definition, seven readers
 
 # ---- _netcalc geometry (module-level so the harness can address blocks) ----
 NDL_FIRST = 4                           # live-log strip first row
@@ -132,9 +132,9 @@ def build_netcalc(ctx: Ctx):
         formula(ws, f"A{r}",
                 f"=IF({RL}!$C${ir}=\"\",0,IF(OR({RL}!$E${ir}=\"taken\","
                 f"{RL}!$C${ir}<DATE(nr_PlanYear,1,1)),1,0))", fmt=FMT_INT)
-        formula(ws, f"B{r}", f'=IF($A{r}=0,"",{RL}!$C${ir})', fmt="mm/dd/yyyy")
+        formula(ws, f"B{r}", f'=IF($A{r}=0,"",{RL}!$C${ir})', fmt=FMT_DATE)
         formula(ws, f"C{r}", f'=IF($A{r}=0,"",DATE(YEAR($B{r}),MONTH($B{r}),1))',
-                fmt="mm/dd/yyyy")
+                fmt=FMT_DATE)
         formula(ws, f"D{r}", f"=IF($A{r}=0,0,{RL}!$L${ir})", fmt=FMT_IDX)
         formula(ws, f"E{r}", f"=IF($A{r}=0,0,{RL}!$N${ir})", fmt=FMT_INT)
         # first LIVE change in its key + cohort month (rl_first is
@@ -202,7 +202,7 @@ def build_netcalc(ctx: Ctx):
                              f"INDEX(lr_m0,$C{t})))", fmt=FMT_MOD)
         formula(ws, f"I{t}", f"=IF($C{t}=0,DATE(nr_PlanYear-1,10,1),"
                              f"IF(N(INDEX(lr_m0asof,$C{t}))=0,DATE(nr_PlanYear-1,10,1),"
-                             f"INDEX(lr_m0asof,$C{t})))", fmt="mm/dd/yyyy")
+                             f"INDEX(lr_m0asof,$C{t})))", fmt=FMT_DATE)
         formula(ws, f"J{t}", f"=IF($C{t}=0,1,IF(N(INDEX(lr_m1,$C{t}))=0,1,"
                              f"INDEX(lr_m1,$C{t})))", fmt=FMT_MOD)
         formula(ws, f"K{t}", f"=IF($C{t}=0,0,N(INDEX(lr_mprior,$C{t})))", fmt=FMT_MOD)
@@ -230,14 +230,14 @@ def build_netcalc(ctx: Ctx):
                 f'rl_eff,">="&{jan1},rl_eff,"<="&{dec31}))', fmt=FMT_INT)
         formula(ws, f"X{t}",
                 f"=IF($W{t}=0,nd_DefaultDate,SUMIFS(rl_eff,rl_key,$B{t},rl_firstplanned,1))",
-                fmt="mm/dd/yyyy")
+                fmt=FMT_DATE)
         formula(ws, f"Y{t}",
                 f'=IF($W{t}=0,"",SUMIFS(rl_reff,rl_key,$B{t},rl_firstplanned,1))',
                 fmt="0.00%")
         formula(ws, f"Z{t}",
                 f'=IF($W{t}=0,"",SUMIFS(rl_filed,rl_key,$B{t},rl_firstplanned,1))',
                 fmt="0.00%")
-        formula(ws, f"O{t}", eff_f, fmt="mm/dd/yyyy")
+        formula(ws, f"O{t}", eff_f, fmt=FMT_DATE)
         formula(ws, f"V{t}", ovr_f, fmt="0.00%")
         # D70: how many mod actions this combo has logged, and the level they
         # compound on. The mod log is read WHOLE here, unlike the rate log: a
@@ -549,7 +549,6 @@ def build_netcalc(ctx: Ctx):
 
 def build_net_delivery(ctx: Ctx):
     ws = ctx.wb[SHEETS.NET_DELIVERY]
-    p = ctx.p
     states = ctx.cfg.states
     nd = n_disp(ctx)
     title(ws, "A1", f"Net Delivery — how the net rate target gets delivered ({ctx.lob.name})",
@@ -560,10 +559,11 @@ def build_net_delivery(ctx: Ctx):
     nav_bar(ws, 3, 1, ["Control", "State Summary", "Rate Log", "Solver", "Checks"], step=2)
 
     # ---- controls ----
-    # seed the view on the BU that actually carries a net selection in the
-    # sample, so the tab demonstrates itself on first open
+    # seed the view on the BU that actually carries a net selection, so the tab
+    # demonstrates itself on first open (Ctx.net_seed_bu explains why Program
+    # Flow does not share this default)
     net_rows = [r for r in ctx.lr_rows if r.get("netp") is not None]
-    seed_bu = net_rows[0]["bu"] if net_rows else ctx.we_row["bu"]
+    seed_bu = ctx.net_seed_bu
     label(ws, "A5", "Business unit in view", bold=True)
     c = input_cell(ws, "B5", seed_bu)
     c.alignment = ALIGN_C
@@ -586,6 +586,10 @@ def build_net_delivery(ctx: Ctx):
     input_cell(ws, "I5", 1.0, fmt=FMT_PCT, required=False)
     ctx.define("nd_Ach", SHEETS.NET_DELIVERY, "$I$5",
                "Assumed achievement on the suggested filing (filed equivalent = r / this)")
+    dv_plan_year_date(ws, ["E5"], "The default effective date must lie inside the "
+                                  "plan year (blank = April 1).")
+    dv_decimal(ws, ["I5"], 0.1, 2, "Achievement is a fraction of the filing you expect "
+                                   "to realise — 0.7 for 70%, not 70.")
     formula(ws, "A6",
             '=IF(nd_BU="All","Pick a single business unit to see delivery and '
             'suggestions — combining different rate histories across BUs would not '
@@ -609,17 +613,15 @@ def build_net_delivery(ctx: Ctx):
     header_row(ws, hdr, 1, headers)
     header_row(ws, hdr, ND_FLAG_COL, ["Flags"])
     ws.row_dimensions[hdr].height = 42
-    dv_date = DataValidation(
-        type="date", operator="between",
-        formula1=f"DATE({p},1,1)", formula2=f"DATE({p},12,31)",
-        allow_blank=True, showErrorMessage=True,
-        error="The rate-change date must lie inside the plan year (prior-year "
-              "vehicles belong in the Rate Log).")
-    ws.add_data_validation(dv_date)
-    dv_r = DataValidation(type="decimal", operator="between", formula1="-0.5",
-                          formula2="2", allow_blank=True, showErrorMessage=True,
-                          error="Enter a decimal fraction in [-50%, +200%].")
-    ws.add_data_validation(dv_r)
+    # Both bounds follow nr_PlanYear, NOT the year this file was generated in:
+    # the plan year is an input (Control!C6), and a validation baked with the
+    # build-time year starts rejecting perfectly good dates the moment anyone
+    # rolls it forward — while the engine happily calculates them.
+    dv_date = dv_plan_year_date(
+        ws, [], "The rate-change date must lie inside the plan year (prior-year "
+                "vehicles belong in the Rate Log).")
+    dv_r = dv_decimal(ws, [], -0.5, 2,
+                      "Enter a decimal fraction in [-50%, +200%].")
     for i in range(nd):
         r = first + i
         t = block_top(i)
@@ -637,12 +639,12 @@ def build_net_delivery(ctx: Ctx):
                 f'SUMIFS(calc_netx,calc_state,$A{r})/SUMIFS(calc_netmode,calc_state,$A{r})),'
                 f"IF('{NC}'!$D${t}=0,\"—\",'{NC}'!$E${t})))",
                 fmt=PCT_S, align=ALIGN_C, fill=band_fill, border=BORDER_THIN)
-        input_cell(ws, f"D{r}", None, fmt="m/d/yy", required=False)
+        input_cell(ws, f"D{r}", None, fmt=FMT_DATE_S, required=False)
         input_cell(ws, f"E{r}", None, fmt="0.0%", required=False)
         dv_date.add(f"D{r}")
         dv_r.add(f"E{r}")
         # the planned filing picked up from the rate log (blank when none)
-        for cc, src, fmt in (("F", "X", "m/d/yy"), ("G", "Z", "+0.0%;-0.0%;0.0%")):
+        for cc, src, fmt in (("F", "X", FMT_DATE_S), ("G", "Z", PCT_S)):
             formula(ws, f"{cc}{r}",
                     f'=IF(OR($A{r}="",nd_BU="All"),"",'
                     f"IF('{NC}'!$D${t}=0,\"—\",IF('{NC}'!$W${t}=0,\"none\","
@@ -846,7 +848,7 @@ def build_net_delivery(ctx: Ctx):
          f"='{NC}'!$O${rb}", FMT_PCT),
         ("Difference (earned-shape residual, pts)",
          f"=IF(OR(NOT(ISNUMBER('{NC}'!$N${rb})),NOT(ISNUMBER('{NC}'!$O${rb}))),\"n/a\","
-         f"('{NC}'!$N${rb}-'{NC}'!$O${rb})*100)", "+0.00;-0.00;0.00"),
+         f"('{NC}'!$N${rb}-'{NC}'!$O${rb})*100)", FMT_PTS_COL),
     ]
     for lbl, f, fmt in recon:
         label(ws, f"A{r}", lbl)
@@ -939,8 +941,10 @@ def build_net_delivery(ctx: Ctx):
     for j in range(24):
         ws.column_dimensions[col(ND_PRIOR_COL + j)].width = 10
     set_widths(ws, {col(ND_FLAG_COL): 24})
-    # column A only: the tab now has three stacked sections with different
-    # headers, and pinning one section's header while you read another is worse
-    # than pinning none — but the row labels are wanted throughout (D74)
-    presentation_setup(ws, gridlines_off=True, freeze="B1", tab_color=NAVY)
+    # Column A plus the CONTROL band (rows 1-7). The tab has three stacked
+    # sections with different headers, and pinning one section's header while
+    # you read another is worse than pinning none (D74) — but "which BU am I
+    # looking at" is the question you have at row 70 in the pricing grid, and
+    # B5 is where the answer lives. Row 8 (the first section) scrolls freely.
+    presentation_setup(ws, gridlines_off=True, freeze=f"B{ND_BAND_TOP}", tab_color=NAVY)
     print_setup(ws)

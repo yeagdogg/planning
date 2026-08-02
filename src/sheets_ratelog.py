@@ -14,15 +14,14 @@ from openpyxl.worksheet.table import Table
 
 from .build_workbook import Ctx, Layout as L, SHEETS
 from .sheets_inputs import RL_HELPER_HEADERS, TABLE_STYLE, _dv, rl_headers
-from .xlstyle import (
-    ALIGN_C, ALIGN_L, BORDER_THIN, F_SMALL_IT, FAIL_RED, FILL_GREY, FMT_DATE,
-    FMT_IDX, FMT_INT, FMT_PCT, GREY_DARK, WARN_AMBER, font, formula, header_row,
-    input_cell, nav_bar, presentation_setup, print_setup, put, quote_sheet,
-    set_widths, title,
+from .xlstyle import (ALIGN_C, ALIGN_L, BORDER_THIN, FAIL_RED, FILL_GREY, FMT_DATE,
+    FMT_IDX, FMT_INT, FMT_PCT, FMT_PTS_COL, F_SMALL_IT, GREY_DARK, WARN_AMBER, font,
+    formula, header_row, input_cell, nav_bar, presentation_setup, print_setup, put,
+    quote_sheet, set_widths, title,
 )
 
 RE = quote_sheet(SHEETS.RATE_ENGINE)
-PCT_S = "+0.0%;-0.0%;0.0%"
+from .xlstyle import FMT_PCT_SIGNED as PCT_S   # one definition, seven readers
 
 
 def build_rate_log(ctx: Ctx):
@@ -123,7 +122,7 @@ def build_rate_log(ctx: Ctx):
                 f'=IF(OR($J{r}="",COUNTIF(lr_key,$J{r})=0),"",'
                 f"(INDEX(calc_cylr_p,MATCH($J{r},lr_key,0))"
                 f"-INDEX(calc_lrcur,MATCH($J{r},lr_key,0)))*100)",
-                fmt='+0.00;-0.00;0.00', align=ALIGN_C)
+                fmt=FMT_PTS_COL, align=ALIGN_C)
         formula(ws, f"X{r}",
                 f'=IF(OR($C{r}="",$J{r}<>nr_SelKey),"",'
                 f"(SUMPRODUCT(({absmi}>YEAR($C{r})*12+MONTH($C{r})-1)*{wrng},{ecp})"

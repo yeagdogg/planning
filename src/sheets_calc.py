@@ -25,8 +25,9 @@ from __future__ import annotations
 from .build_workbook import Ctx, Layout as L, SHEETS, mod_adj_on
 from .sheets_engine import (
     LogRefs, mod_drift_at_switch, write_cohort_block, write_mod_anchor_cells)
-from .xlstyle import (FMT_IDX, FMT_INT, FMT_MOD, GREY_DARK, col, font, formula, label,
-                      put, quote_sheet)
+from .xlstyle import (FMT_DATE, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT_SIGNED,
+    FMT_PTS_COL, GREY_DARK, col, font, formula, label, put, quote_sheet,
+)
 
 RL = quote_sheet(SHEETS.RATE_LOG)   # the rate-log rows the scenario/attr logs mirror
 
@@ -133,7 +134,7 @@ def build_calc(ctx: Ctx):
         f_grey(ws, f"G{t}", f"=IF(N(INDEX(lr_m0,{n}))=0,1,INDEX(lr_m0,{n}))", FMT_MOD)
         f_grey(ws, f"H{t}",
                f"=IF(N(INDEX(lr_m0asof,{n}))=0,DATE(nr_PlanYear-1,10,1),INDEX(lr_m0asof,{n}))",
-               "mm/dd/yyyy")
+               FMT_DATE)
         f_grey(ws, f"I{t}", f"=IF(N(INDEX(lr_m1,{n}))=0,1,INDEX(lr_m1,{n}))", FMT_MOD)
         f_grey(ws, f"J{t}", f"=INDEX(lr_mprior,{n})", FMT_MOD)
         f_grey(ws, f"K{t}", f"=INDEX(lr_m2,{n})", FMT_MOD)
@@ -319,7 +320,7 @@ def build_calc(ctx: Ctx):
         f_grey(ws, f"{col(PROG_LR['ident'])}{r}",
                f"=IF($AK{r}=1,0,ABS(${cy}{r}-$N{r})+ABS(${cy1}{r}-$O{r}))", FMT_IDX)
         f_grey(ws, f"{col(PROG_LR['gap'])}{r}",
-               f"=IF($AK{r}=0,0,(${cy}{r}-$N{r})*100)", "+0.00;-0.00;0.00")
+               f"=IF($AK{r}=0,0,(${cy}{r}-$N{r})*100)", FMT_PTS_COL)
         # rate-change history for the book harvest (D66)
         for cidx, status in ((BOOK_PUB["ntaken"], "taken"),
                              (BOOK_PUB["nplanned"], "planned")):
@@ -330,10 +331,10 @@ def build_calc(ctx: Ctx):
             cnt = f"COUNTIFS(rl_key,$A{r},rl_seq,{j + 1})"
             f_grey(ws, f"{col(c0)}{r}",
                    f'=IF({cnt}=0,"",SUMIFS(rl_eff,rl_key,$A{r},rl_seq,{j + 1}))',
-                   "m/d/yy")
+                   FMT_DATE)
             f_grey(ws, f"{col(c0 + 1)}{r}",
                    f'=IF({cnt}=0,"",SUMIFS(rl_reff,rl_key,$A{r},rl_seq,{j + 1}))',
-                   "+0.0%;-0.0%;0.0%")
+                   FMT_PCT_SIGNED)
             f_grey(ws, f"{col(c0 + 2)}{r}",
                    f'=IF({cnt}=0,"",'
                    f'IF(COUNTIFS(rl_key,$A{r},rl_seq,{j + 1},rl_status,"planned")>0,'
@@ -420,10 +421,10 @@ def build_calc(ctx: Ctx):
             ir = L.RL_FIRST + j
             f_grey(ws, f"{cEff}{r}",
                    f'=IF({RL}!$C${ir}="","",IF({RL}!$E${ir}="planned",'
-                   f"EDATE({RL}!$C${ir},N(INDEX(sc_shift,{s}))),{RL}!$C${ir}))", "mm/dd/yyyy")
+                   f"EDATE({RL}!$C${ir},N(INDEX(sc_shift,{s}))),{RL}!$C${ir}))", FMT_DATE)
             f_grey(ws, f"{cEm}{r}",
                    f'=IF(${cEff}{r}="","",DATE(YEAR(${cEff}{r}),MONTH(${cEff}{r}),1))',
-                   "mm/dd/yyyy")
+                   FMT_DATE)
             f_grey(ws, f"{cAch}{r}",
                    f'=IF(N(INDEX(sc_ach,{s}))=0,IF({RL}!$G${ir}="",1,{RL}!$G${ir}),'
                    f"INDEX(sc_ach,{s}))", "0.0%")
@@ -527,8 +528,8 @@ def build_calc(ctx: Ctx):
         f_grey(ws, f"D{r}",
                f'=IF({RL}!$C${ir}="","",IF($A{r}=0,{RL}!$C${ir},'
                f"IF(ISBLANK(INDEX(att_actdate,$A{r})),{RL}!$C${ir},INDEX(att_actdate,$A{r}))))",
-               "mm/dd/yyyy")
-        f_grey(ws, f"E{r}", f'=IF($D{r}="","",DATE(YEAR($D{r}),MONTH($D{r}),1))', "mm/dd/yyyy")
+               FMT_DATE)
+        f_grey(ws, f"E{r}", f'=IF($D{r}="","",DATE(YEAR($D{r}),MONTH($D{r}),1))', FMT_DATE)
         f_grey(ws, f"F{r}", f'=IF($D{r}="",0,EOMONTH($D{r},0)-$D{r}+1)', FMT_INT)
         f_grey(ws, f"G{r}",
                f'=IF($D{r}="",0,COUNTIFS(rl_key,{RL}!$J${ir},'
@@ -580,7 +581,7 @@ def build_calc(ctx: Ctx):
     put(ws, f"A{t}", "Attribution block 3 — actual written-mod path",
         fnt=font(GREY_DARK, bold=True, size=9))
     f_grey(ws, f"M{t}", "=IF(N(att_m0)=0,nr_M0,att_m0)", FMT_MOD)
-    f_grey(ws, f"N{t}", "=IF(N(att_asof)=0,nr_M0Asof,att_asof)", "mm/dd/yyyy")
+    f_grey(ws, f"N{t}", "=IF(N(att_asof)=0,nr_M0Asof,att_asof)", FMT_DATE)
     f_grey(ws, f"O{t}", "=IF(N(att_m1)=0,nr_M1,att_m1)", FMT_MOD)
     f_grey(ws, f"P{t}", "=IF(N(att_m2)=0,N(nr_M2),att_m2)", FMT_MOD)
     # D70: taken mod actions ARE the actual path, so the actual-mod block reads
@@ -651,7 +652,7 @@ def build_calc(ctx: Ctx):
     f_grey(ws, f"V{t}", "=COUNTIF(ml_key,slv_key)+1", FMT_INT)
     f_grey(ws, f"W{t}", hdr("Q", "1"), FMT_MOD)          # guarded M_endPrior
     f_grey(ws, f"X{t}", hdr("G", "1"), FMT_MOD)          # guarded M_0
-    f_grey(ws, f"Y{t}", hdr("H", "DATE(nr_PlanYear-1,10,1)"), "mm/dd/yyyy")
+    f_grey(ws, f"Y{t}", hdr("H", "DATE(nr_PlanYear-1,10,1)"), FMT_DATE)
     f_grey(ws, f"Z{t}", hdr("J", "0"), FMT_MOD)          # M_prior (raw, as _calc)
     anchors_s = write_mod_anchor_cells(
         ws, ctx, t + 1, 1,

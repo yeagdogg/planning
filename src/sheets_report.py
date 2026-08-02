@@ -10,11 +10,11 @@ from openpyxl.chart.series import SeriesLabel
 from openpyxl.formatting.rule import CellIsRule
 
 from .build_workbook import GENERATOR_VERSION, SAMPLE_MOD_TAG, Ctx, Layout as L
-from .xlstyle import (
-    ALIGN_C, ALIGN_WRAP, BAND_FILL, BORDER_THIN, F_HEADER, F_INPUT, F_LABEL, F_LINK,
-    F_SMALL_IT, FAIL_RED, FILL_AMBER, FILL_GREEN, FILL_GREY, FILL_NAVY, FILL_PANEL,
-    FILL_RED, FILL_REQ, FMT_DATE, FMT_GEN, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT,
-    GREY_DARK, LINK_GREEN, NAVY, PASS_GREEN, STEEL, col, chart_legend, font, formula, header_row,
+from .xlstyle import (ALIGN_C, ALIGN_WRAP, BAND_FILL, BORDER_THIN, FAIL_RED,
+    FILL_AMBER, FILL_GREEN, FILL_GREY, FILL_NAVY, FILL_PANEL, FILL_RED, FILL_REQ,
+    FMT_DATE, FMT_DATE_S, FMT_GEN, FMT_IDX, FMT_INT, FMT_MOD, FMT_MONTH, FMT_PCT,
+    FMT_PCT_SIGNED, F_HEADER, F_INPUT, F_LABEL, F_LINK, F_SMALL_IT, GREY_DARK,
+    LINK_GREEN, NAVY, PASS_GREEN, STEEL, chart_legend, col, font, formula, header_row,
     jump, label, link, nav_bar, note, presentation_setup, print_setup, prose, put,
     quote_sheet as _q, section, set_widths, status_banner_cf, text_height, title,
 )
@@ -93,7 +93,7 @@ def build_flow_dashboard(ctx: Ctx):
         r = CD0 + 1 + j
         mcol = col(L.RE_MATRIX_COL + j)
         coh = L.RE_COH_FIRST + 12 + j  # cohort row for this reported month
-        link(ws, f"B{r}", f"={RE}!{mcol}${L.RE_COH_HDR}", fmt="mmm-yy")
+        link(ws, f"B{r}", f"={RE}!{mcol}${L.RE_COH_HDR}", fmt=FMT_MONTH)
         link(ws, f"C{r}", f"={RE}!$U${coh}", fmt=FMT_IDX)  # in-force index (D39)
         link(ws, f"D{r}", f"={RE}!{mcol}${L.RE_ROW_EM}", fmt=FMT_IDX)
         link(ws, f"E{r}", f"='Mod Engine'!$E${coh}", fmt=FMT_MOD)
@@ -104,7 +104,7 @@ def build_flow_dashboard(ctx: Ctx):
                 f'=IF(OR($D{r}="",$F{r}=""),"",IF(nr_NetMode,$D{r},$D{r}*($F{r}/nr_MInd)))',
                 fmt=FMT_IDX)
         formula(ws, f"I{r}", f"=IF(YEAR($B{r})=nr_PlanYear,1,0)", fmt=FMT_INT)
-        pct_m = "+0.0%;-0.0%;0.0%"
+        pct_m = FMT_PCT_SIGNED
         if j >= 12:  # first 12 reported months have no year-ago comparison
             formula(ws, f"J{r}", f'=IF(OR($D{r}="",$D{r - 12}=""),"",$D{r}/$D{r - 12}-1)',
                     fmt=pct_m)
@@ -218,10 +218,10 @@ def build_flow_dashboard(ctx: Ctx):
         formula(ws, f"D{r}",
                 f"=SUM({RE}!{p1}${L.RE_ROW_NUM}:{p2}${L.RE_ROW_NUM})"
                 f"/SUM({RE}!{p1}${L.RE_ROW_DEN}:{p2}${L.RE_ROW_DEN})", fmt=FMT_IDX, align=ALIGN_C)
-        formula(ws, f"E{r}", f"=$C{r}/$D{r}-1", fmt="+0.0%;-0.0%;0.0%", align=ALIGN_C)
+        formula(ws, f"E{r}", f"=$C{r}/$D{r}-1", fmt=FMT_PCT_SIGNED, align=ALIGN_C)
         coh_end = L.RE_COH_FIRST + 12 + off + 2
         link(ws, f"F{r}", f"={RE}!$N${coh_end}", fmt=FMT_IDX, align=ALIGN_C)
-        formula(ws, f"G{r}", f"=$F{r}/$C{r}-1", fmt="+0.0%;-0.0%;0.0%", align=ALIGN_C)
+        formula(ws, f"G{r}", f"=$F{r}/$C{r}-1", fmt=FMT_PCT_SIGNED, align=ALIGN_C)
         # combined price: rate x quarterly earned mod / M_ind (net path already combined)
         formula(ws, f"H{r}",
                 f"=IF(nr_NetMode,$C{r},$C{r}*SUM({RE}!{c1}${L.RE_ROW_MODNUM}:{c2}${L.RE_ROW_MODNUM})"
@@ -232,7 +232,7 @@ def build_flow_dashboard(ctx: Ctx):
                 f"/SUM({RE}!{p1}${L.RE_ROW_DEN}:{p2}${L.RE_ROW_DEN})/nr_MInd)",
                 fmt=FMT_IDX, align=ALIGN_C)
         ws[f"I{r}"].font = font(GREY_DARK, size=9)
-        formula(ws, f"J{r}", f"=$H{r}/$I{r}-1", fmt="+0.0%;-0.0%;0.0%", align=ALIGN_C)
+        formula(ws, f"J{r}", f"=$H{r}/$I{r}-1", fmt=FMT_PCT_SIGNED, align=ALIGN_C)
     put(ws, f"B{qt + 10}",
         "Runway = written level / earned level - 1: rate locked in but not yet earned "
         "(D27). Price = rate x earned mod / M_ind (series coincide under a net selection). "
@@ -372,25 +372,25 @@ def build_flow_dashboard(ctx: Ctx):
         cnt = f"COUNTIFS(rl_key,nr_SelKey,rl_seq,{j})"
         put(ws, f"B{r}", j, fnt=font(GREY_DARK, size=9), align=ALIGN_C)
         formula(ws, f"C{r}", f'=IF({cnt}=0,"",SUMIFS(rl_eff,rl_key,nr_SelKey,rl_seq,{j}))',
-                fmt="m/d/yy", align=ALIGN_C)
+                fmt=FMT_DATE_S, align=ALIGN_C)
         formula(ws, f"D{r}", f'=IF({cnt}=0,"",SUMIFS(rl_reff,rl_key,nr_SelKey,rl_seq,{j}))',
-                fmt="+0.0%;-0.0%;0.0%", align=ALIGN_C)
+                fmt=FMT_PCT_SIGNED, align=ALIGN_C)
         formula(ws, f"E{r}", _share(r, ecp), fmt=FMT_PCT, align=ALIGN_C)
         formula(ws, f"F{r}", _share(r, ecp1), fmt=FMT_PCT, align=ALIGN_C)
         formula(ws, f"G{r}", f'=IF($C{r}="","",EXP(LN(1+$D{r})*($F{r}-$E{r}))-1)',
-                fmt="+0.0%;-0.0%;0.0%", align=ALIGN_C)
+                fmt=FMT_PCT_SIGNED, align=ALIGN_C)
         formula(ws, f"H{r}", f'=IF($C{r}="",0,LN(1+$D{r})*($F{r}-$E{r}))', fmt=FMT_IDX)
         ws[f"H{r}"].font = font(GREY_DARK, size=8)
     tot_r = cl + 11
     label(ws, f"C{tot_r}", "Actions combined", bold=True)
     formula(ws, f"G{tot_r}", f"=EXP(SUM($H${cl + 3}:$H${cl + 10}))-1",
-            fmt="+0.0%;-0.0%;0.0%", align=ALIGN_C, bold=True, fill=FILL_PANEL)
+            fmt=FMT_PCT_SIGNED, align=ALIGN_C, bold=True, fill=FILL_PANEL)
     label(ws, f"C{tot_r + 1}", "Timing / compounding interaction (residual)")
     formula(ws, f"G{tot_r + 1}",
             f"=(1+nr_YoY_P1)/EXP(SUM($H${cl + 3}:$H${cl + 10}))-1",
-            fmt="+0.0%;-0.0%;0.0%", align=ALIGN_C)
+            fmt=FMT_PCT_SIGNED, align=ALIGN_C)
     label(ws, f"C{tot_r + 2}", "Total carryover (earned rate chg into next year)", bold=True)
-    link(ws, f"G{tot_r + 2}", "=nr_YoY_P1", fmt="+0.0%;-0.0%;0.0%", align=ALIGN_C,
+    link(ws, f"G{tot_r + 2}", "=nr_YoY_P1", fmt=FMT_PCT_SIGNED, align=ALIGN_C,
          bold=True, fill=FILL_PANEL)
 
     set_widths(ws, {"A": 2, "B": 11, "C": 12, "D": 12, "E": 12, "F": 12, "G": 13, "H": 13,

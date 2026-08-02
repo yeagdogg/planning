@@ -18,16 +18,15 @@ from openpyxl.worksheet.datavalidation import DataValidation
 
 from .build_workbook import Ctx, Layout as L, SHEETS
 from .sheets_report import CD0
-from .xlstyle import (
-    ALIGN_C, BORDER_THIN, DOWN_BAR, F_LABEL, F_SMALL_IT, FAIL_RED, FILL_GREEN,
-    FILL_GREY, FILL_PANEL, FILL_RED, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT, GREY_DARK,
-    NAVY, PASS_GREEN, STEEL, TOTAL_BAR, UP_BAR, col, font, formula, header_row,
-    input_cell, jump, label, link, nav_bar, presentation_setup, print_setup, put,
-    quote_sheet, section, set_widths, status_banner_cf, title,
+from .xlstyle import (ALIGN_C, BORDER_THIN, DOWN_BAR, FAIL_RED, FILL_GREEN, FILL_GREY,
+    FILL_PANEL, FILL_RED, FMT_DATE_S, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT, F_LABEL,
+    F_SMALL_IT, GREY_DARK, NAVY, PASS_GREEN, STEEL, TOTAL_BAR, UP_BAR, col, font,
+    formula, header_row, input_cell, jump, label, link, nav_bar, presentation_setup,
+    print_setup, put, quote_sheet, section, set_widths, status_banner_cf, title,
 )
 
-PCT_S = "+0.0%;-0.0%;0.0%"
-PTS_S = "+0.00;-0.00;0.00"
+from .xlstyle import FMT_PCT_SIGNED as PCT_S   # one definition, seven readers
+from .xlstyle import FMT_PTS_COL as PTS_S  # points in a column already headed (pts)
 
 
 def build_one_pager(ctx: Ctx):
@@ -114,7 +113,7 @@ def build_one_pager(ctx: Ctx):
         cnt = f"COUNTIFS(rl_key,nr_SelKey,rl_seq,{j})"
         put(ws, f"B{r}", j, fnt=font(GREY_DARK, size=9), align=ALIGN_C)
         formula(ws, f"C{r}", f'=IF({cnt}=0,"",SUMIFS(rl_eff,rl_key,nr_SelKey,rl_seq,{j}))',
-                fmt="m/d/yy", align=ALIGN_C)
+                fmt=FMT_DATE_S, align=ALIGN_C)
         formula(ws, f"D{r}", f'=IF({cnt}=0,"",SUMIFS(rl_reff,rl_key,nr_SelKey,rl_seq,{j}))',
                 fmt=PCT_S, align=ALIGN_C)
         formula(ws, f"E{r}",

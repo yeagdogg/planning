@@ -10,13 +10,13 @@ from openpyxl.formatting.rule import ColorScaleRule, DataBarRule, FormulaRule
 from openpyxl.styles import Alignment, Border, Font, Side
 
 from .build_workbook import Ctx, Layout as L, SHEETS, mod_adj_on
-from .xlstyle import (
-    ALIGN_C, ALIGN_WRAP, BORDER_THIN, DOWN_BAR, F_HEADER, F_LABEL, F_SMALL_IT, FAIL_RED,
-    FILL_GREY, FILL_NAVY, FILL_PANEL, FMT_DATE, FMT_EP_Z, FMT_GEN, FMT_IDX, FMT_IDX_Z,
-    FMT_INT, FMT_MOD, FMT_PCT, FMT_PCT_Z, GREY_DARK, NAVY, STEEL, STEEL_LIGHT,
-    TOTAL_BAR, UP_BAR, WARN_AMBER, chart_legend, col, font, formula, header_row,
-    input_cell, jump, label, link, nav_bar, note, presentation_setup, print_setup,
-    prose, put, section, set_widths, title,
+from .xlstyle import (ALIGN_C, ALIGN_WRAP, BORDER_THIN, DOWN_BAR, FAIL_RED, FILL_GREY,
+    FILL_NAVY, FILL_PANEL, FMT_DATE, FMT_DATE_S, FMT_EP_Z, FMT_GEN, FMT_IDX,
+    FMT_IDX_Z, FMT_INT, FMT_MOD, FMT_PCT, FMT_PCT_SIGNED, FMT_PCT_Z, FMT_PTS_COL,
+    F_HEADER, F_LABEL, F_SMALL_IT, GREY_DARK, NAVY, STEEL, STEEL_LIGHT, TOTAL_BAR,
+    UP_BAR, WARN_AMBER, add_dv, chart_legend, col, dv_decimal, dv_plan_year_date,
+    font, formula, header_row, input_cell, jump, label, link, nav_bar, note,
+    presentation_setup, print_setup, prose, put, section, set_widths, title,
 )
 
 PTS_Z = '+0.00 "pts";-0.00 "pts";""'
@@ -275,7 +275,7 @@ def build_bridge(ctx: Ctx):
         cnt = f"COUNTIFS(rl_key,nr_SelKey,rl_seq,{j})"
         put(ws, f"B{rr}", j, fnt=font(GREY_DARK, size=9), align=ALIGN_C)
         formula(ws, f"C{rr}", f'=IF({cnt}=0,"",SUMIFS(rl_eff,rl_key,nr_SelKey,rl_seq,{j}))',
-                fmt="m/d/yy", align=ALIGN_C)
+                fmt=FMT_DATE_S, align=ALIGN_C)
         formula(ws, f"D{rr}", f'=IF({cnt}=0,"",SUMIFS(rl_filed,rl_key,nr_SelKey,rl_seq,{j}))',
                 fmt=FMT_PCT, align=ALIGN_C)
         formula(ws, f"E{rr}",
@@ -285,7 +285,7 @@ def build_bridge(ctx: Ctx):
                 f'=IF({cnt}=0,"",IF(COUNTIFS(rl_key,nr_SelKey,rl_seq,{j},rl_cons,"Y")>0,'
                 f'"Y","N"))', align=ALIGN_C)
         formula(ws, f"G{rr}", f'=IF({cnt}=0,"",SUMIFS(rl_reff,rl_key,nr_SelKey,rl_seq,{j}))',
-                fmt="+0.0%;-0.0%;0.0%", align=ALIGN_C)
+                fmt=FMT_PCT_SIGNED, align=ALIGN_C)
     formula(ws, f"B{act + 10}",
             '=IF(COUNTIFS(rl_key,nr_SelKey)>8,"Showing the first 8 of "&'
             'COUNTIFS(rl_key,nr_SelKey)&" changes - see the rate log for the rest.",'
@@ -433,7 +433,7 @@ def build_portfolio(ctx: Ctx):
              fmt=FMT_PCT_Z, align=ALIGN_C)
         formula(ws, f"Q{r}",
                 f'=IF($C{r}="","",IF(INDEX(calc_netmode,{n})=0,"—",'
-                f"INDEX(calc_proggap,{n})))", fmt='+0.00;-0.00;0.00', align=ALIGN_C)
+                f"INDEX(calc_proggap,{n})))", fmt=FMT_PTS_COL, align=ALIGN_C)
 
     f0, f1 = L.PF_FIRST, L.PF_LAST
     wr, sr = L.PF_W_TOTAL, L.PF_S_TOTAL
@@ -466,10 +466,13 @@ def build_portfolio(ctx: Ctx):
         r = L.PF_FIRST + i
         formula(ws, f"AA{r}", f'=IF($C{r}="","",RANK($H{r},$H${f0}:$H${f1}))',
                 fmt=FMT_INT, align=ALIGN_C)
-        # epsilon tiebreak so LARGE/MATCH never lands on the same row twice
-        formula(ws, f"AB{r}", f'=IF($C{r}="","",$H{r}+ROW()/1000000000)')
+        # epsilon tiebreak so LARGE/MATCH never lands on the same row twice.
+        # The tiebreak is what makes it unreadable — General renders it as
+        # 0.5000000371 — so it prints like the points column it is derived from.
+        formula(ws, f"AB{r}", f'=IF($C{r}="","",$H{r}+ROW()/1000000000)',
+                fmt=FMT_PTS_COL)
         formula(ws, f"AC{r}", f'=IF(OR($C{r}="",$O{r}=""),"",N($O{r})*$H{r})',
-                fmt='+0.00;-0.00;0.00', align=ALIGN_C)
+                fmt=FMT_PTS_COL, align=ALIGN_C)
         for cL in ("AA", "AB", "AC"):
             ws[f"{cL}{r}"].font = font(GREY_DARK, size=9)
 
@@ -490,9 +493,9 @@ def build_portfolio(ctx: Ctx):
         formula(ws, f"U{r}", f'=IF($Y{r}=0,"",INDEX($G${f0}:$G${f1},$Y{r}))',
                 fmt=FMT_PCT_Z, align=ALIGN_C)
         formula(ws, f"V{r}", f'=IF($Y{r}=0,"",INDEX($H${f0}:$H${f1},$Y{r}))',
-                fmt='+0.00;-0.00;0.00', align=ALIGN_C)
+                fmt=FMT_PTS_COL, align=ALIGN_C)
         formula(ws, f"W{r}", f'=IF($Y{r}=0,"",INDEX($AC${f0}:$AC${f1},$Y{r}))',
-                fmt='+0.00;-0.00;0.00', align=ALIGN_C, bold=True)
+                fmt=FMT_PTS_COL, align=ALIGN_C, bold=True)
     put(ws, "T18",
         "Contribution = EP weight x change vs projected: which combos move the BOOK.",
         fnt=F_SMALL_IT)
@@ -507,7 +510,7 @@ def build_portfolio(ctx: Ctx):
          FMT_IDX, False),
         ("Mix / interaction (pts)",
          f'=IF(OR(SUM(calc_ep)=0,NOT(ISNUMBER($G${wr}))),"n/a",($G${wr}-$U$21*$U$22*$U$23)*100)',
-         '+0.00;-0.00;0.00', False),
+         FMT_PTS_COL, False),
         ("CY plan LR — exact EP-weighted total", f"=$G${wr}", FMT_PCT, True),
     ]
     for i, (lbl, f, fmt, bold_) in enumerate(pf_bridge):
@@ -532,6 +535,13 @@ def build_portfolio(ctx: Ctx):
     _style_chart(tor, "Who moves the book — EP-weighted contribution (pts)",
                  y_title="Contribution (pts)", height=9, width=11)
     ws.add_chart(tor, "T29")
+
+    # The ranking machinery is collapsible: it sits right of the exhibit with no
+    # explanation of its own, and only the Decision Board reads it. Grouped, not
+    # hidden — the outline button says "there is more here" without asserting it
+    # is interesting (same treatment as the Rate Engine's index columns).
+    for cL in ("AA", "AB", "AC"):
+        ws.column_dimensions[cL].outlineLevel = 1
 
     ws.auto_filter.ref = f"A{L.PF_HDR}:Q{f1}"
     put(ws, f"B{L.PF_S_TOTAL + 4}",
@@ -677,7 +687,7 @@ def build_state_summary(ctx: Ctx):
         (24, "calc_w_arate", "calc_arate_p", None, FMT_IDX),
         (25, "calc_w_amod", "calc_amod_p", None, FMT_IDX),
         (26, "calc_w_aother", "calc_aother", None, FMT_IDX),
-        (29, "calc_w_trend", "calc_trend", None, "+0.0%;-0.0%;0.0%"),
+        (29, "calc_w_trend", "calc_trend", None, FMT_PCT_SIGNED),
         (30, "calc_w_arate1", "calc_arate_p1", None, FMT_IDX),
         (31, "calc_w_amod1", "calc_amod_p1", None, FMT_IDX),
     ]
@@ -705,11 +715,11 @@ def build_state_summary(ctx: Ctx):
             formula(ws, ws.cell(row=r, column=cd).coordinate,
                     f'=IF($AM{r}="","",IF({cnt}=0,"",'
                     f"SUMIFS(rl_eff,rl_key,$AM{r},rl_seq,{j + 1})))",
-                    fmt="m/d/yy", align=ALIGN_C, fill=band, border=BORDER_THIN)
+                    fmt=FMT_DATE_S, align=ALIGN_C, fill=band, border=BORDER_THIN)
             formula(ws, ws.cell(row=r, column=cp).coordinate,
                     f'=IF($AM{r}="","",IF({cnt}=0,"",'
                     f"SUMIFS(rl_reff,rl_key,$AM{r},rl_seq,{j + 1})))",
-                    fmt="+0.0%;-0.0%;0.0%", align=ALIGN_C, fill=band, border=BORDER_THIN)
+                    fmt=FMT_PCT_SIGNED, align=ALIGN_C, fill=band, border=BORDER_THIN)
             formula(ws, ws.cell(row=r, column=cs).coordinate,
                     f'=IF($AM{r}="","",IF({cnt}=0,"",'
                     f'IF(COUNTIFS(rl_key,$AM{r},rl_seq,{j + 1},rl_status,"planned")>0,'
@@ -737,13 +747,13 @@ def build_state_summary(ctx: Ctx):
                     fmt=FMT_PCT, align=ALIGN_C, fill=band, border=BORDER_THIN, bold=True)
         formula(ws, f"AB{r}",
                 f'=IF($AL{r}<=1,"",($AA{r}-{chain(r, CHAIN_P)})*100)',
-                fmt='+0.00;-0.00;0.00', align=ALIGN_C, fill=band, border=BORDER_THIN)
+                fmt=FMT_PTS_COL, align=ALIGN_C, fill=band, border=BORDER_THIN)
         formula(ws, f"AN{r}", f"=SUMIFS(calc_netmode,calc_state,$A{r},calc_bu,{crit})",
                 fmt=FMT_INT)
         formula(ws, f"AG{r}",
                 f'=IF($AL{r}=0,"",IF($AN{r}=0,"—",'
                 f"SUMIFS(calc_netx,calc_state,$A{r},calc_bu,{crit})/$AN{r}))",
-                fmt="+0.0%;-0.0%;0.0%", align=ALIGN_C, fill=band, border=BORDER_THIN)
+                fmt=FMT_PCT_SIGNED, align=ALIGN_C, fill=band, border=BORDER_THIN)
         # D65: the same rows valued on the EXPLICIT rate x mod paths, and the
         # gap that opens only where a net target is asserted
         formula(ws, f"AH{r}",
@@ -752,7 +762,7 @@ def build_state_summary(ctx: Ctx):
                 fmt=FMT_PCT, align=ALIGN_C, fill=band, border=BORDER_THIN)
         formula(ws, f"AI{r}",
                 f'=IF($AL{r}=0,"",IF($AN{r}=0,"—",($AH{r}-$AA{r})*100))',
-                fmt='+0.00;-0.00;0.00', align=ALIGN_C, fill=band, border=BORDER_THIN,
+                fmt=FMT_PTS_COL, align=ALIGN_C, fill=band, border=BORDER_THIN,
                 bold=True)
         # audit helper: the visible product vs the engine's weighted value on
         # single-combo rows (0 elsewhere) — the Checks cross-tie, never circular
@@ -784,7 +794,7 @@ def build_state_summary(ctx: Ctx):
                 fill=FILL_STEEL_LIGHT_safe(), border=Border(top=med))
     formula(ws, f"AB{tot}",
             f'=IF($B${tot}=0,"",($AA{tot}-{chain(tot, CHAIN_P)})*100)',
-            fmt='+0.00;-0.00;0.00', align=ALIGN_C, fill=FILL_STEEL_LIGHT_safe(),
+            fmt=FMT_PTS_COL, align=ALIGN_C, fill=FILL_STEEL_LIGHT_safe(),
             border=Border(top=med))
     for cc, status in ((18, "taken"), (19, "planned")):
         formula(ws, ws.cell(row=tot, column=cc).coordinate,
@@ -795,7 +805,7 @@ def build_state_summary(ctx: Ctx):
     formula(ws, f"AG{tot}",
             f'=IF(SUMIFS(calc_netmode,calc_bu,{crit})=0,"—",'
             f"SUMIFS(calc_netx,calc_bu,{crit})/SUMIFS(calc_netmode,calc_bu,{crit}))",
-            fmt="+0.0%;-0.0%;0.0%", align=ALIGN_C, fill=FILL_STEEL_LIGHT_safe(),
+            fmt=FMT_PCT_SIGNED, align=ALIGN_C, fill=FILL_STEEL_LIGHT_safe(),
             border=Border(top=med))
     formula(ws, f"AH{tot}",
             f'=IF($B${tot}=0,"n/a",SUMIFS(calc_w_cylr_prog,calc_bu,{crit})/$B${tot})',
@@ -803,7 +813,7 @@ def build_state_summary(ctx: Ctx):
             border=Border(top=med))
     formula(ws, f"AI{tot}",
             f'=IF($B${tot}=0,"",($AH{tot}-$AA{tot})*100)',
-            fmt='+0.00;-0.00;0.00', align=ALIGN_C, bold=True,
+            fmt=FMT_PTS_COL, align=ALIGN_C, bold=True,
             fill=FILL_STEEL_LIGHT_safe(), border=Border(top=med))
     for cc in list(range(6, 18)):
         put(ws, ws.cell(row=tot, column=cc).coordinate, None,
@@ -887,6 +897,12 @@ def build_state_summary(ctx: Ctx):
                "single-combo rows, 0 elsewhere (D61)")
     for cL, w in (("AK", 6), ("AL", 6), ("AM", 10), ("AN", 6), ("AO", 8)):
         ws.column_dimensions[cL].width = w
+    # Six unlabelled helper columns immediately right of the flagship exhibit —
+    # the first thing you meet scrolling right. Collapsible, so the exhibit ends
+    # where it looks like it ends. (AO is ss_mathchk, which Checks reads: a
+    # grouped column still calculates, it just isn't in the way.)
+    for cL in ("AJ", "AK", "AL", "AM", "AN", "AO"):
+        ws.column_dimensions[cL].outlineLevel = 1
     presentation_setup(ws, gridlines_off=True, freeze=f"B{first}", tab_color=NAVY)
     print_setup(ws)
 
@@ -1050,11 +1066,25 @@ def build_solver(ctx: Ctx):
     formula(ws, "G5", '=IF(UPPER($C$4)="N",$D$5,nr_SelState)')
     ws["G5"].font = font(GREY_DARK, size=9)
     ctx.define("slv_state", "Solver", "$G$5", "State of the combo the Solver solves for")
-    from openpyxl.worksheet.datavalidation import DataValidation as _DV
     for _rng, _f in (("C4", '"Y,N"'), ("C5", "=lst_bu"), ("D5", "=lst_state")):
-        _dv_ = _DV(type="list", formula1=_f, allow_blank=True, showErrorMessage=True)
-        ws.add_data_validation(_dv_)
-        _dv_.add(_rng)
+        add_dv(ws, "list", [_rng], formula1=_f)
+    # Every NUMBER typed on this tab is bounded too. A target loss ratio of 65
+    # instead of 0.65 solves cleanly, prints a required change of several
+    # thousand percent, and nothing on the sheet contradicts it.
+    dv_decimal(ws, ["C7"], 0, 3,
+               "Enter the target as a decimal fraction — 0.65 for a 65% loss ratio.")
+    dv_decimal(ws, ["C9", "C47"], 0.1, 2,
+               "Achievement is the fraction of a filing you expect to realise — "
+               "0.7 for 70%, not 70.")
+    dv_decimal(ws, ["C21", "C22", "G47"], 0, 1,
+               "A reasonability bound is a positive decimal fraction.")
+    dv_decimal(ws, ["C26"], -0.5, 2, "Enter a decimal fraction in [-50%, +200%].")
+    dv_decimal(ws, ["G49"], -0.5, 0.5,
+               "A mod action is a decimal fraction — mods live in [0.5, 1.5], so a "
+               "step beyond ±50% is not a schedule mod.")
+    dv_plan_year_date(ws, ["C8"],
+                      "The effective date must lie inside the plan year — the solver "
+                      "replaces the whole planned program with one action in P.")
 
     # ---- Mode A ----
     section(ws, 6, "B", "Mode A — required rate for a target CY LR")
@@ -1067,6 +1097,26 @@ def build_solver(ctx: Ctx):
     input_cell(ws, "C9", 1.0, fmt=FMT_PCT)
     note(ws, "D7", "seeded with the sample book's own CY plan LR - the solver should return "
                    "the seeded planned change (+5.0% at 4/1) while sample data is intact")
+
+    # ---- the answer, before the mechanics that produce it --------------------
+    # Mode A's result was C17: seventh of nine rows in a list that opens with
+    # cohort-month exposure sums. The number people come to this tab for should
+    # not be something you find by reading down a column of intermediates.
+    formula(ws, "B10",
+            '=IF(COUNTIF(lr_key,slv_key)=0,"No row in tbl_LR for "&slv_key&" — the solver '
+            'has nothing to solve.",'
+            'IF($C$7="","Enter a target loss ratio above.",'
+            'IF(NOT(ISNUMBER($C$17)),"No single rate change at this date reaches the '
+            'target — nothing is left to earn. Try an earlier date, or Mode C.",'
+            '"To reach "&TEXT($C$7,"0.0%")&" for "&slv_key&": FILE "'
+            '&TEXT($C$18,"+0.00%;-0.00%")&" effective "&TEXT($C$8,"m/d/yy")'
+            '&"   (earns "&TEXT($C$17,"+0.00%;-0.00%")&" at "&TEXT($C$9,"0%")'
+            '&" achievement; "&TEXT($C$19,"0.0%")&" of the year is still ahead of that '
+            'date).")))')
+    ws["B10"].font = font(NAVY, bold=True, size=12)
+    ws["B10"].fill = FILL_PANEL
+    for cc in range(3, 5):        # C..D carry the band; E is the 3-wide gutter
+        put(ws, ws.cell(row=10, column=cc).coordinate, None, fill=FILL_PANEL)
 
     helpers = [
         ("abs eff month", "=YEAR($C$8)*12+MONTH($C$8)-1", FMT_INT),
@@ -1213,8 +1263,7 @@ def build_solver(ctx: Ctx):
     lc.legend = None
     lc.y_axis.number_format = "0.0%"
     _style_chart(lc,
-                 "Timing sensitivity: full-year plan LR if the change starts in each "
-                 "month (later start = less earned benefit; dashed = target)",
+                 "Rate lever: full-year plan LR by start month (dashed = target)",
                  y_title="Full-year plan LR", height=8, width=14)
     ws.add_chart(lc, "K28")
 
@@ -1355,8 +1404,7 @@ def build_solver(ctx: Ctx):
     mc_.legend = None
     mc_.y_axis.number_format = "0.0%"
     _style_chart(mc_,
-                 "Timing sensitivity on the PRICING lever: full-year plan LR if the "
-                 "chosen mod action lands in each month (dashed = target)",
+                 "Pricing lever: full-year plan LR by action month (dashed = target)",
                  y_title="Full-year plan LR", height=8, width=14)
     ws.add_chart(mc_, "P52")
 
@@ -1430,6 +1478,22 @@ def build_attribution(ctx: Ctx):
                "Attribution: actual achieved total change per planned row (blank = plan)")
     ctx.define("att_actdate", "Attribution", "$F$14:$F$21",
                "Attribution: actual effective date per planned row (blank = plan)")
+    # Actuals arrive late, typed under time pressure, and every one of them is
+    # a DENOMINATOR in the decomposition — an unbounded typo here reappears as a
+    # residual step and gets explained rather than caught. Same bounds tbl_LR
+    # already applies to the plan-side twins of these cells.
+    dv_decimal(ws, ["C6", "C8", "C9"], 0.5, 1.5,
+               "Schedule mods must lie in [0.5, 1.5].")
+    dv_decimal(ws, ["C10"], 0, 3,
+               "Enter the actual loss ratio as a decimal fraction — 0.65 for 65%.")
+    dv_decimal(ws, ["E14:E21"], -0.5, 2,
+               "Enter the achieved change as a decimal fraction in [-50%, +200%].")
+    # the as-of date may legitimately sit in the prior year; the effective dates
+    # of plan-year actions may not
+    dv_plan_year_date(ws, ["C7"], "The actual as-of date must fall within the plan "
+                                  "year or the two before it.", back_years=2)
+    dv_plan_year_date(ws, ["F14:F21"],
+                      "An actual effective date belongs inside the plan year.")
 
     section(ws, 23, "B", "Decomposition")
     header_row(ws, 24, 2, ["Step", "Factor", "LR after", "Step"],

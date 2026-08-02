@@ -37,7 +37,7 @@ from .xlstyle import (
 )
 
 RE = quote_sheet(SHEETS.RATE_ENGINE)
-PCT_S = "+0.0%;-0.0%;0.0%"
+from .xlstyle import FMT_PCT_SIGNED as PCT_S   # one definition, seven readers
 
 ML_HELPER_HEADERS = ["Key", "m_eff", "ln(1+m)", "Eff month", "Days on/after",
                      "Earlier cnt", "Same cnt", "First?", "Dup month?", "Seq"]

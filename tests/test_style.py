@@ -43,3 +43,36 @@ def test_newlines_count_as_line_breaks():
 
 def test_smaller_font_fits_more_per_line():
     assert _height_for(400, 30, size=9) <= _height_for(400, 30, size=11)
+
+
+# ---------------------------------------------------------------------------
+# D89: unbalanced formulas make the whole FILE unopenable
+# ---------------------------------------------------------------------------
+
+
+def _wb_with(formula_text):
+    from openpyxl import Workbook
+    wb = Workbook()
+    wb.active["B10"] = formula_text
+    return wb
+
+
+def test_balanced_formulas_pass():
+    from src.xlstyle import assert_formulas_balanced
+    # parentheses inside string literals are not structure: every "(pts)"
+    # caption and every TEXT() mask contains them
+    for f in ('=IF($A$1=0,"n/a",SUM(B1:B9))',
+              '=IF(A1,"Change vs projected (pts)","")',
+              '=TEXT(A1,"+0.00%;-0.00%")&" (earned)"',
+              '=IF(N(x)=0,"",IF(y,"a","b"))'):
+        assert_formulas_balanced(_wb_with(f))          # must not raise
+
+
+def test_unbalanced_formula_names_its_cell():
+    import pytest
+    from src.xlstyle import assert_formulas_balanced
+    for f in ('=IF(A1,"x","y")))',           # the v3.4.1 Solver!B10 typo
+              '=IF(A1,SUM(B1:B9),0',         # short a closer
+              '=IF(A1,"unterminated,0)'):    # a quote that never closes
+        with pytest.raises(ValueError, match=r"B10"):
+            assert_formulas_balanced(_wb_with(f))

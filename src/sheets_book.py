@@ -29,16 +29,16 @@ from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from .xlstyle import (
-    ALIGN_C, ALIGN_L, BORDER_THIN, F_LABEL, F_SMALL_IT, FAIL_RED, FILL_GREY,
-    FILL_NAVY, FILL_PANEL, FMT_DATE, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT,
-    GREY_DARK, NAVY, PASS_GREEN, STEEL_LIGHT, col, font, formula, header_row,
-    input_cell, jump, label, link, nav_bar, presentation_setup, print_setup,
-    put, quote_sheet, section, set_widths, status_banner_cf, title,
+from .xlstyle import (ALIGN_C, ALIGN_L, BORDER_THIN, FAIL_RED, FILL_GREY, FILL_NAVY,
+    FILL_PANEL, FMT_DATE, FMT_DATE_S, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT,
+    FMT_PTS_SIGNED, F_LABEL, F_SMALL_IT, GREY_DARK, NAVY, PASS_GREEN, STEEL_LIGHT,
+    assert_formulas_balanced, col, font, formula, header_row, input_cell, jump,
+    label, link, nav_bar, presentation_setup, print_setup, put, quote_sheet,
+    section, set_widths, status_banner_cf, title,
 )
 
-PCT_S = "+0.0%;-0.0%;0.0%"
-PTS = "+0.00;-0.00;0.00"
+from .xlstyle import FMT_PCT_SIGNED as PCT_S   # one definition, seven readers
+from .xlstyle import FMT_PTS_COL as PTS  # points in a column already headed (pts)
 ALL = "All"
 
 BOOK = "_book"
@@ -175,7 +175,7 @@ def build_book_data(ctx: BookCtx):
                 put(ws, f"{col(COLS[f'{fam}_{j}'])}{r}", v, fmt=FMT_IDX)
         for j in range(SLOTS):
             d, pct, tok = rec["slots"][j]
-            put(ws, f"{col(COLS[f'slot{j}_date'])}{r}", d, fmt="m/d/yy")
+            put(ws, f"{col(COLS[f'slot{j}_date'])}{r}", d, fmt=FMT_DATE_S)
             put(ws, f"{col(COLS[f'slot{j}_pct'])}{r}", pct, fmt=PCT_S)
             put(ws, f"{col(COLS[f'slot{j}_tok'])}{r}", tok)
     for f in ("lob", "bu", "state", "key", "ukey", "ep", "netmode", "netx",
@@ -271,7 +271,7 @@ def build_control(ctx: BookCtx, n: int):
          f'({sumifs("w_prog", "lob", "bu", "state")}-'
          f'{sumifs("w_cylr", "lob", "bu", "state")})'
          f'/{sumifs("ep", "lob", "bu", "state")}*100)',
-         '+0.00" pts";-0.00" pts";0.00" pts"', "0.00 pts when nothing asserts a net target"),
+         FMT_PTS_SIGNED, "0.00 pts when nothing asserts a net target"),
         ("Net-target combos", f'={sumifs("netmode", "lob", "bu", "state")}', FMT_INT,
          "combos carrying an asserted net selection"),
     ]
@@ -412,7 +412,7 @@ def build_state_summary(ctx: BookCtx, n: int):
         # rate-change slots: only when the filters resolve to exactly one combo
         uk = f'bkf_lob&"|"&bkf_bu&"|"&$A{r}'
         for j in range(SLOTS):
-            for k, (part, fmt) in enumerate((("date", "m/d/yy"), ("pct", PCT_S),
+            for k, (part, fmt) in enumerate((("date", FMT_DATE_S), ("pct", PCT_S),
                                              ("tok", None))):
                 formula(ws, ws.cell(row=r, column=6 + j * 3 + k).coordinate,
                         f'=IF({cnt}<>1,"—",'
@@ -889,6 +889,7 @@ def build_book(data) -> Workbook:
     build_checks(ctx, n)
     build_readme(ctx, n)
     ctx.flush_names()
+    assert_formulas_balanced(wb)          # D89 — same guard as the LOB builder
     wb.calculation.calcMode = "auto"
     wb.calculation.fullCalcOnLoad = True
     return wb

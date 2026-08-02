@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from openpyxl.comments import Comment
 from openpyxl.utils import get_column_letter as col_letter
 from openpyxl.formatting.rule import CellIsRule
-from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
 from .build_workbook import Ctx, Layout as L
@@ -20,8 +19,8 @@ from .xlstyle import (
     ALIGN_C, ALIGN_L, ALIGN_WRAP, BORDER_THIN, F_HEADER, F_LABEL, F_SMALL, F_SMALL_IT,
     F_SUB, FAIL_RED, FILL_GREY, FILL_NAVY, FILL_PANEL, FILL_PANEL_2, FILL_RED,
     FILL_GREEN, FMT_DATE, FMT_EP, FMT_GEN, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT,
-    FMT_PTS_SIGNED, GREY_DARK, NAVY, PASS_GREEN, STEEL, WARN_AMBER,
-    font, formula, header_row, input_cell, jump, label, link, nav_bar, note,
+    FMT_PCT_SIGNED, FMT_PTS_SIGNED, GREY_DARK, NAVY, PASS_GREEN, STEEL, WARN_AMBER,
+    add_dv, font, formula, header_row, input_cell, jump, label, link, nav_bar, note,
     presentation_setup, print_setup, put, rng, section, set_widths,
     status_banner_cf, title,
 )
@@ -37,12 +36,7 @@ def _carried(ctx, attr):
     return getattr(ctx.carried, attr, None) if ctx.carried is not None else None
 
 
-def _dv(ws, kind, ranges, blocking=True, **kw):
-    dv = DataValidation(type=kind, allow_blank=True, showErrorMessage=blocking, **kw)
-    ws.add_data_validation(dv)
-    for r in ranges:
-        dv.add(r)
-    return dv
+_dv = add_dv          # the helper started here; it now serves every entry sheet
 
 
 # ---------------------------------------------------------------------------
@@ -243,7 +237,13 @@ LR_DV: dict[str, dict] = {
 }
 
 LR_LAST_COL = col_letter(len(LR_COLS))          # "S" today; derived, never typed
-LR_KEY_COL = col_letter(len(LR_COLS) + 1)       # BU|State helper, right of the block
+# A BLANK column separates the paste block from the machinery to its right, and
+# another separates the Key helper from the live results. Without the first one
+# the block and the helper are contiguous: Ctrl+Shift+Right runs straight past
+# the edge of what you may edit, and a paste one column too wide lands on the
+# key formulas instead of in dead space. The gap is the fence.
+LR_KEY_COL = col_letter(len(LR_COLS) + 2)       # "U" today — BU|State helper
+LR_ECHO_COL = len(LR_COLS) + 4                  # "W" today (1-based) — live results
 
 
 def lr_letter(name: str) -> str:
@@ -331,11 +331,16 @@ def build_inputs(ctx: Ctx):
     ctx.define("lr_key", "Inputs", f"${K}${L.LR_FIRST}:${K}${L.LR_LAST}",
                "Helper: concatenated BU|State key (right of the paste block, D40)")
 
-    # ---- live per-row results (echo columns V:Y, right of the Key helper) ----
+    # ---- live per-row results, right of the Key helper -----------------------
     # The hidden _calc results table aligns 1:1 with tbl_LR, so editing any
-    # input on row n moves that same row's plan LR on the same screen.
-    put(ws, f"V{L.LR_HDR - 1}", "live results (formulas — do not edit)", fnt=F_SMALL_IT)
-    header_row(ws, L.LR_HDR, 22,
+    # input on row n moves that same row's plan LR on the same screen. Every
+    # column here is DERIVED from LR_KEY_COL: adding a tbl_LR column has to move
+    # the whole right-hand block, and a hard-coded letter is how the blank test
+    # ($T) ends up pointing at a data column instead of the key.
+    echo = [col_letter(LR_ECHO_COL + j) for j in range(4)]
+    put(ws, f"{echo[0]}{L.LR_HDR - 1}", "live results (formulas — do not edit)",
+        fnt=F_SMALL_IT)
+    header_row(ws, L.LR_HDR, LR_ECHO_COL,
                ["This combo's CY plan LR", "Chg vs projected (pts)",
                 "Rate earn-in (A_rate)", "Mod drift (A_mod)"],
                widths=[13, 12, 11, 11], fill=FILL_GREY,
@@ -343,13 +348,14 @@ def build_inputs(ctx: Ctx):
     for i in range(L.LR_ROWS):
         r = L.LR_FIRST + i
         n = i + 1
-        formula(ws, f"V{r}", f'=IF($T{r}="","",INDEX(calc_cylr_p,{n}))', fmt=FMT_PCT)
-        formula(ws, f"W{r}",
-                f'=IF($T{r}="","",(INDEX(calc_cylr_p,{n})-INDEX(calc_lrcur,{n}))*100)',
-                fmt=FMT_PTS_SIGNED)
-        formula(ws, f"X{r}", f'=IF($T{r}="","",INDEX(calc_arate_p,{n}))', fmt=FMT_IDX)
-        formula(ws, f"Y{r}", f'=IF($T{r}="","",INDEX(calc_amod_p,{n}))', fmt=FMT_IDX)
-        for cL in "VWXY":
+        blank = f'${K}{r}=""'
+        for cL, f, fmt in (
+                (echo[0], f"INDEX(calc_cylr_p,{n})", FMT_PCT),
+                (echo[1], f"(INDEX(calc_cylr_p,{n})-INDEX(calc_lrcur,{n}))*100",
+                 FMT_PTS_SIGNED),
+                (echo[2], f"INDEX(calc_arate_p,{n})", FMT_IDX),
+                (echo[3], f"INDEX(calc_amod_p,{n})", FMT_IDX)):
+            formula(ws, f"{cL}{r}", f'=IF({blank},"",{f})', fmt=fmt)
             ws[f"{cL}{r}"].font = font(GREY_DARK, size=9)
             ws[f"{cL}{r}"].alignment = ALIGN_C
 
@@ -513,19 +519,27 @@ def build_control(ctx: Ctx):
         (f'="CY "&nr_PlanYear&" plan loss ratio"', f'=IF({ok},nr_CYLR_P,"—")', FMT_PCT,
          "projected LR x rate earn-in x mod drift x other"),
         ('="CY earned rate chg vs indication"', f'=IF({ok},nr_EChgVsInd,"—")',
-         "+0.0%;-0.0%;0.0%",
+         FMT_PCT_SIGNED,
          "how the year's earned rate compares with the level the indication assumed"),
-        (f'="Carryover into "&(nr_PlanYear+1)', f'=IF({ok},nr_YoY_P1,"—")', "+0.0%;-0.0%;0.0%",
+        (f'="Carryover into "&(nr_PlanYear+1)', f'=IF({ok},nr_YoY_P1,"—")', FMT_PCT_SIGNED,
          "earned rate change already locked in for next year"),
+        # The two mod numbers are always what the user typed, so they are always
+        # shown — but on a net selection, or with either mod toggle off, they
+        # are NOT driving the plan LR beside them, and a KPI that doesn't say so
+        # reads as though the drift is in force. Disclose, don't blank (D46).
         ('="Written mod: current / projected"', None, FMT_GEN,
-         "current written mod  /  projected at plan-year end"),
+         '=IF(NOT(nr_SelOK),"current written mod  /  projected at plan-year end",'
+         'IF(nr_ModAdjMaster="OFF","master toggle OFF — this drift is NOT applied",'
+         'IF(nr_NetMode,"net selection: merged into the net factor, A_mod = 1.000",'
+         'IF(nr_ModAdjRow="OFF","mod adjustment OFF for this combo — A_mod = 1.000",'
+         '"current written mod  /  projected at plan-year end"))))'),
         ('="Checks status"', "=ck_overall", FMT_GEN, "see the Checks sheet"),
         # D65: book-level assertion vs logged program — "—" when nothing in the
         # book carries a net selection, so it never invents a comparison
         ('="Book: program vs asserted"',
          '=IF(OR(SUMPRODUCT(calc_netmode)=0,SUM(calc_ep)=0),"—",'
          "(SUM(calc_w_cylr_prog)-SUM(calc_w_cylr))/SUM(calc_ep)*100)",
-         '+0.00" pts";-0.00" pts";0.00" pts"',
+         FMT_PTS_SIGNED,
          "plan LR if you book the logged program instead of the net target"),
     ]
     for i, (lbl_f, val_f, fmt, sub) in enumerate(cards):
@@ -559,7 +573,7 @@ def build_control(ctx: Ctx):
         ("Rate earn-in factor (A_rate)", "=nr_Arate_P", "=nr_Arate_P1", FMT_IDX),
         ("Earned schedule mod", "=nr_MEarned_P", "=nr_MEarned_P1", FMT_MOD),
         ("Mod drift factor (A_mod)", "=nr_Amod_P", "=nr_Amod_P1", FMT_IDX),
-        ("Earned rate chg (year over year)", "=nr_YoY_P", "=nr_YoY_P1", "+0.0%;-0.0%;0.0%"),
+        ("Earned rate chg (year over year)", "=nr_YoY_P", "=nr_YoY_P1", FMT_PCT_SIGNED),
         ("CY plan loss ratio", "=nr_CYLR_P", "=nr_CYLR_P1", FMT_PCT),
     ]
     for i, (lbl_t, fp_, fp1, fmt) in enumerate(rows):
@@ -595,7 +609,7 @@ def build_control(ctx: Ctx):
         ("Earned rate level (E_CY)", "nr_ECY_P", "calc_ecy_p", FMT_IDX),
         ("Indication rate level (CRL_ind)", "nr_CRLind", "calc_crl", FMT_IDX),
         ('="Carryover into "&(nr_PlanYear+1)', "nr_YoY_P1", "calc_carry",
-         "+0.0%;-0.0%;0.0%"),
+         FMT_PCT_SIGNED),
         ('="CY "&(nr_PlanYear+1)&" plan LR"', "nr_CYLR_P1", "calc_cylr_p1", FMT_PCT),
     ]
     put(ws, "G26", "selected", fnt=F_SMALL)

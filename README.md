@@ -160,7 +160,7 @@ degenerate-input, stepped-mod, and plan-year-change exercises each tied to fresh
 **every line at full phase D**: Property, General Liability, Commercial Auto, Workers Comp
 and Umbrella **286 checks / 0 failed** each, the 6-month-term Inland Marine **284 / 0**, and
 the combined book **56 / 0** (`tools/verify_book.py`, including the source-freshness phase).
-pytest 282/282. Each verify run works in its own temporary scratch directory, so lines can be
+pytest 284/284. Each verify run works in its own temporary scratch directory, so lines can be
 verified in parallel — see the release driver above for the concurrency caps and why they are
 where they are.
 
@@ -280,7 +280,9 @@ a timestamped `.bak.xlsx` is written before anything is overwritten.
 3. Update what actually changed for the new year — projected LRs, the rate program, mod
    actions — rather than re-keying the whole book. Each dataset is one contiguous paste
    block (`tbl_LR` columns A:S, `tbl_RateLog` A:H, `tbl_ModLog` A:G; keys and engine helpers
-   sit to the right and recalculate on their own). Default capacities per workbook: 69
+   sit to the right, behind a blank spacer column, and recalculate on their own — so
+   Ctrl+Shift+Right stops at the edge of what you may edit and a paste one column too wide
+   lands in dead space rather than on the key formulas). Default capacities per workbook: 69
    `tbl_LR` rows (63 BU×state + 6 spare), 240 rate-log rows, 120 mod-log rows, 24
    seasonality rows (fixed; do not insert or delete rows).
 4. **Clear the seeded SAMPLE mod actions** if you started from a fresh build rather than a
@@ -327,6 +329,16 @@ is honest and shows you what a warning looks like.
   fill = required.
 - No VBA, no merged cells, no external links, no volatile functions, no `IFERROR`. Sheets are
   not protected (stated on `Read Me`); the `Checks` panel is the integrity mechanism.
+- **Every typed cell carries a bound.** Not to stop a determined user — data validation is
+  defeated by a paste, which is how the inputs arrive — but to catch the fat-finger a formula
+  would otherwise swallow: a target loss ratio of `65` instead of `0.65` solves cleanly, and
+  nothing downstream contradicts it. Date bounds follow `nr_PlanYear` rather than the year
+  the file was generated in, so rolling the plan year forward does not leave a validation
+  rejecting dates the engine accepts.
+- **The build refuses to emit a malformed formula** (D89). One unbalanced parenthesis makes
+  the entire file unopenable, and Excel reports it only from the recalculation step, minutes
+  later, as `Open method of Workbooks class failed` — naming no sheet and no cell.
+  `assert_formulas_balanced` runs at the end of both builders and names the cell.
 - `formula_mode: modern` is reserved but intentionally not implemented (DECISIONS.md D18).
 - v1 limitations (stated on `Methodology`): no new/renewal split, no exposure/audit premium
   effects, no retention response, premium-volume planning out of scope, inputs entered/pasted

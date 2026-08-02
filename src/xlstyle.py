@@ -13,6 +13,7 @@ import math
 
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.datavalidation import DataValidation
 
 # ---------------------------------------------------------------------------
 # Palette (restrained: navy headers, steel accents, near-white panels)
@@ -50,15 +51,30 @@ FONT_NAME = "Calibri"
 
 FMT_PCT = "0.0%"
 FMT_PCT2 = "0.00%"
+FMT_PCT_SIGNED = "+0.0%;-0.0%;0.0%"   # a CHANGE in rate/price: the sign is the message
 FMT_IDX = "0.0000"
 FMT_FACTOR = "0.0000"
 FMT_MOD = "0.000"
 FMT_PTS = '0.00 "pts"'
 FMT_PTS_SIGNED = '+0.00 "pts";-0.00 "pts";0.00 "pts"'
-FMT_DATE = "mm/dd/yyyy"
+# ...and the same number where the COLUMN HEADER already says "(pts)", so the
+# suffix would repeat itself on every row.
+FMT_PTS_COL = "+0.00;-0.00;0.00"
 FMT_INT = "0"
 FMT_EP = "#,##0"
 FMT_GEN = "General"
+
+# One date vocabulary, three widths — anything else is an accident:
+#   FMT_DATE     every date you TYPE, and every date in a column wide enough
+#   FMT_DATE_S   dates inside the 10-wide exhibit grids, where the long form ###s
+#   FMT_MONTH    month headers on cohort and flow grids
+# FMT_DATETIME is the one deliberate oddity: the Rate Engine samples cohorts at
+# mid-month, so its x-coordinate carries a time of day and must show it.
+FMT_DATE = "mm/dd/yyyy"
+FMT_DATE_S = "m/d/yy"
+FMT_MONTH = "mmm-yy"
+FMT_DATETIME = "m/d/yy h:mm"
+
 # zero-hiding variants for lookup grids whose blank-row fallback is 0:
 FMT_PCT_Z = '0.0%;-0.0%;""'
 FMT_IDX_Z = '0.0000;-0.0000;""'
@@ -190,6 +206,44 @@ def section(ws, row, col_letter, text, span_note=None):
 
 def note(ws, addr, text, italic=True):
     return put(ws, addr, text, fnt=F_SMALL_IT if italic else F_SMALL, align=ALIGN_WRAP)
+
+
+def add_dv(ws, kind, ranges, blocking=True, **kw):
+    """Attach one data validation to a set of ranges.
+
+    Every typed cell in the workbook should carry a bound. The point is not to
+    stop a determined user — DV is defeated by a paste, which is how the inputs
+    arrive — but to catch the fat-finger that a formula would otherwise swallow
+    silently: a target loss ratio of 65 instead of 0.65 returns a plausible
+    number everywhere downstream, and nothing on the sheet says it is wrong.
+
+    ``blocking=False`` makes the list a suggestion rather than a rule, for the
+    places where typing a NEW value is legitimate (tbl_LR defines the roster).
+    """
+    dv = DataValidation(type=kind, allow_blank=True, showErrorMessage=blocking, **kw)
+    ws.add_data_validation(dv)
+    for r in ranges:
+        dv.add(r)
+    return dv
+
+
+def dv_decimal(ws, ranges, lo, hi, error, blocking=True):
+    """A numeric bound on typed cells (the commonest case)."""
+    return add_dv(ws, "decimal", ranges, blocking=blocking, operator="between",
+                  formula1=str(lo), formula2=str(hi), error=error)
+
+
+def dv_plan_year_date(ws, ranges, error, back_years=0):
+    """A date bound anchored on ``nr_PlanYear``, NOT on the build-time year.
+
+    The plan year is an INPUT (Control!C6), and the sheets say so — "all
+    calculations follow the plan year entered above". A validation baked with
+    the year the file was generated quietly stops agreeing with that the moment
+    anyone rolls the year forward, and rejects dates the engine accepts.
+    """
+    lo = f"DATE(nr_PlanYear-{back_years},1,1)" if back_years else "DATE(nr_PlanYear,1,1)"
+    return add_dv(ws, "date", ranges, operator="between",
+                  formula1=lo, formula2="DATE(nr_PlanYear,12,31)", error=error)
 
 
 def text_height(text: str, width: float, size: int = 10) -> float:
@@ -341,6 +395,48 @@ def unoverlay_titles(wb):
                         t.overlay = False
                         n += 1
     return n
+
+
+def assert_formulas_balanced(wb):
+    """Fail the BUILD on a formula whose parentheses don't close (D89).
+
+    Excel does not report an unbalanced formula as an unbalanced formula. It
+    refuses to open the file at all, and the failure surfaces several minutes
+    later, from the recalculation step, as::
+
+        Open method of Workbooks class failed
+
+    — which names neither the sheet, the cell, nor the defect. These formulas
+    are assembled from nested f-strings, so a stray closing paren is an ordinary
+    typo; catching it here costs a fraction of a second and points at the cell.
+
+    Quotes are tracked because Excel string literals legitimately contain
+    parentheses (every "(pts)" caption, and every TEXT() format mask).
+    """
+    bad = []
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for c in row:
+                v = c.value
+                if not (isinstance(v, str) and v.startswith("=")):
+                    continue
+                depth = 0
+                in_str = False
+                for ch in v:
+                    if ch == '"':
+                        in_str = not in_str
+                    elif not in_str:
+                        depth += (ch == "(") - (ch == ")")
+                        if depth < 0:
+                            break
+                if depth or in_str:
+                    bad.append(f"  {ws.title}!{c.coordinate}: "
+                               f"{'unterminated string' if in_str else f'depth {depth:+d}'}"
+                               f"\n    {v[:160]}")
+    if bad:
+        raise ValueError(
+            f"{len(bad)} malformed formula(s) — Excel would refuse to open this "
+            f"file:\n" + "\n".join(bad))
 
 
 def presentation_setup(ws, gridlines_off=True, zoom=100, freeze=None, tab_color=None):

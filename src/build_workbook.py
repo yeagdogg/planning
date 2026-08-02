@@ -37,7 +37,7 @@ from . import engine
 from .engine import ComboInputs, ModInputs, RateChange
 from .xlstyle import quote_sheet
 
-GENERATOR_VERSION = "3.4.0"
+GENERATOR_VERSION = "3.4.1"
 
 # Leads every seeded Mod Log comment so the Checks tripwire can spot a sample
 # action left in a real book (D80). Kept short and unmistakable — a real
@@ -622,6 +622,24 @@ class Ctx:
     def p(self) -> int:
         return self.cfg.plan_year
 
+    @property
+    def net_seed_bu(self) -> str:
+        """The BU Net Delivery opens on: one that carries a net selection, so
+        the tab demonstrates itself on a seeded book, falling back to the worked
+        example for a carried-forward book with no net rows.
+
+        Program Flow deliberately does NOT share this. The two tabs are the same
+        book seen twice — prescriptive and descriptive — and it is tempting to
+        open them on the same BU so clicking between them compares like with
+        like. But each default is tied by verify_workbook phase C: Net Delivery's
+        to the net showcase combo, Program Flow's to the worked example. Making
+        them agree would mean either coupling an oracle tie to a cosmetic seed,
+        or giving up the demo on one of them. Both tabs name the BU in view in
+        bold beside the picker, which is where the answer belongs anyway.
+        """
+        net = next((r for r in self.lr_rows if r.get("netp") is not None), None)
+        return (net or self.we_row)["bu"]
+
 
 # Final tab order (approved redesign): orientation -> inputs -> the all-combo
 # answers -> the selected-combo deep-dive chain -> what-ifs -> audit -> docs.
@@ -757,8 +775,12 @@ def build(cfg: Config, lob_name: str, carried=None) -> Workbook:
     ctx.flush_names()
     # D71: every chart is built by now, so sweep their titles out of the plot
     # area in one place — a per-chart fix is a thing the next chart forgets.
-    from .xlstyle import unoverlay_titles
+    from .xlstyle import assert_formulas_balanced, unoverlay_titles
     unoverlay_titles(wb)
+    # D89: a formula that does not close its parentheses makes the whole file
+    # unopenable, and Excel says so only from the recalculation step, minutes
+    # later, without naming the cell. Catch it here, where the cell has a name.
+    assert_formulas_balanced(wb)
     wb.calculation.calcMode = "auto"
     wb.calculation.fullCalcOnLoad = True
     return wb

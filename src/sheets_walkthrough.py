@@ -18,17 +18,19 @@ from openpyxl.formatting.rule import CellIsRule
 from openpyxl.styles import Font
 
 from .build_workbook import Ctx, Layout as L, SHEETS
-from .xlstyle import (
-    ALIGN_C, BORDER_THIN, F_LABEL, F_SMALL_IT, FAIL_RED, FILL_GREEN, FILL_GREY,
-    FILL_PANEL, FILL_RED, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT, GREY_DARK, NAVY,
-    PASS_GREEN, STEEL, col, chart_legend, font, formula, header_row, jump, label, link,
-    presentation_setup, print_setup, prose, put, quote_sheet, section, set_widths,
-    title,
+from .xlstyle import (ALIGN_C, BORDER_THIN, FAIL_RED, FILL_GREEN, FILL_GREY,
+    FILL_PANEL, FILL_RED, FMT_DATE, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT, F_LABEL,
+    F_SMALL_IT, GREY_DARK, NAVY, PASS_GREEN, STEEL, chart_legend, col, font, formula,
+    header_row, jump, label, link, presentation_setup, print_setup, prose, put,
+    quote_sheet, section, set_widths, title,
 )
 
 RE = quote_sheet(SHEETS.RATE_ENGINE)
 ME = quote_sheet(SHEETS.MOD_ENGINE)
-PCT_S = "+0.0%;-0.0%;0.0%"
+# Rows a 6.5cm chart covers at the default row height (~0.53cm), rounded up.
+# The narrative steps past this so the next section never lands under the plot.
+CHART_ROWS = 14
+from .xlstyle import FMT_PCT_SIGNED as PCT_S   # one definition, seven readers
 
 
 def _expl(ws, r, text_or_formula, size=10):
@@ -91,7 +93,7 @@ def build_walkthrough(ctx: Ctx):
          "The average schedule mod the indication priced against — the mod benchmark."),
         ("Current avg written mod (M_0)", "=nr_M0", FMT_MOD, "G",
          "Where the written mod stands at the as-of date."),
-        ("M_0 as-of date", "=nr_M0Asof", "m/d/yyyy", "H",
+        ("M_0 as-of date", "=nr_M0Asof", FMT_DATE, "H",
          "Anchored close-of-day: 'as of 9/30' means the 10/1 boundary."),
         ("Projected mod, plan-yr end (M_1)", "=nr_M1", FMT_MOD, "I",
          "Where you project the written mod by 12/31 of the plan year."),
@@ -139,7 +141,7 @@ def build_walkthrough(ctx: Ctx):
         cnt = f"COUNTIFS(rl_key,nr_SelKey,rl_seq,{j})"
         put(ws, f"B{r}", j, fnt=font(GREY_DARK, size=9), align=ALIGN_C)
         formula(ws, f"C{r}", f'=IF({cnt}=0,"",SUMIFS(rl_eff,rl_key,nr_SelKey,rl_seq,{j}))',
-                fmt="m/d/yy", align=ALIGN_C)
+                fmt=FMT_DATE, align=ALIGN_C)
         formula(ws, f"D{r}", f'=IF({cnt}=0,"",SUMIFS(rl_filed,rl_key,nr_SelKey,rl_seq,{j}))',
                 fmt=FMT_PCT, align=ALIGN_C)
         formula(ws, f"E{r}",
@@ -278,7 +280,7 @@ def build_walkthrough(ctx: Ctx):
     ]
     for lbl, arow in anchors:
         label(ws, f"B{r}", lbl)
-        link(ws, f"C{r}", f"={ME}!$F${arow}-1", fmt="m/d/yy", align=ALIGN_C)
+        link(ws, f"C{r}", f"={ME}!$F${arow}-1", fmt=FMT_DATE, align=ALIGN_C)
         link(ws, f"D{r}", f"={ME}!$G${arow}", fmt=FMT_MOD, align=ALIGN_C)
         r += 1
     label(ws, f"B{r}", "Path slope over the plan year (mod pts / month)")
@@ -302,6 +304,35 @@ def build_walkthrough(ctx: Ctx):
                  'in exactly like rate")')
     jump(ws, f"I{r}", f"{ME}!A1", "mod engine >", size=9)
     r += 2
+
+    # ---- the mod path, drawn — in the narrative, not beside it ----
+    # This chart used to hang at K8: to the RIGHT of the 85-wide prose column,
+    # which put it off the screen on first open AND outside the print area
+    # (A1:J), so it existed in neither medium. It belongs here, under the
+    # section it illustrates, where the page reads top to bottom.
+    from .sheets_report import CD0
+    flow = ctx.wb[SHEETS.FLOW]
+    mini = LineChart()
+    for c_ in (5, 6):        # written mod, then earned mod
+        mini.add_data(Reference(flow, min_col=c_, min_row=CD0,
+                                max_row=CD0 + L.N_MONTHS), titles_from_data=True)
+    mini.set_categories(Reference(flow, min_col=2, min_row=CD0 + 1,
+                                  max_row=CD0 + L.N_MONTHS))
+    for s, rgb in zip(mini.series, (STEEL, NAVY)):
+        s.graphicalProperties.line.solidFill = rgb
+        s.graphicalProperties.line.width = int(2.25 * 12700)
+        s.marker = Marker(symbol="none")
+        s.smooth = False
+    mini.y_axis.number_format = "0.000"
+    mini.title = "Written vs earned mod path"
+    mini.style = 2
+    mini.height, mini.width = 6.5, 11
+    mini.visible_cells_only = False
+    mini.x_axis.delete = False
+    mini.y_axis.delete = False
+    chart_legend(mini)           # legend beside the plot, not on it (D69)
+    ws.add_chart(mini, f"C{r}")
+    r += CHART_ROWS              # step past the plot so the next section clears it
 
     # ---- W7: assembly ----
     section(ws, r, "B", "6.  Assembly — multiply the factors")
@@ -387,32 +418,6 @@ def build_walkthrough(ctx: Ctx):
         _expl(ws, r, expl, size=9)
         r += 1
     jump(ws, f"B{r}", "Checks!A1", "Full validation panel: Checks >", size=10)
-
-    # ---- W6 mini chart: written vs earned mod path (reads the Flow table) ----
-    from .sheets_report import CD0
-    flow = ctx.wb[SHEETS.FLOW]
-    mini = LineChart()
-    mini.add_data(Reference(flow, min_col=5, min_row=CD0, max_row=CD0 + L.N_MONTHS),
-                  titles_from_data=True)
-    mini.add_data(Reference(flow, min_col=6, min_row=CD0, max_row=CD0 + L.N_MONTHS),
-                  titles_from_data=True)
-    mini.set_categories(Reference(flow, min_col=2, min_row=CD0 + 1,
-                                  max_row=CD0 + L.N_MONTHS))
-    for s, rgb in zip(mini.series, (STEEL, NAVY)):
-        s.graphicalProperties.line.solidFill = rgb
-        s.graphicalProperties.line.width = int(2.25 * 12700)
-        s.marker = Marker(symbol="none")
-        s.smooth = False
-    mini.y_axis.number_format = "0.000"
-    mini.title = "Written vs earned mod path"
-    mini.style = 2
-    mini.height = 6.5
-    mini.width = 11
-    mini.visible_cells_only = False
-    mini.x_axis.delete = False
-    mini.y_axis.delete = False
-    chart_legend(mini)           # legend beside the plot, not on it (D69)
-    ws.add_chart(mini, "K8")
 
     set_widths(ws, {"A": 2, "B": 42, "C": 13, "D": 13, "E": 13, "F": 13, "G": 12,
                     "H": 12, "I": 12, "J": 85})

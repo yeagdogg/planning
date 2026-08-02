@@ -16,11 +16,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .build_workbook import Ctx, Layout as L
-from .xlstyle import (
-    ALIGN_C, BORDER_THIN, F_HEADER, F_LABEL, F_SMALL_IT, FILL_GREY, FILL_NAVY, FILL_PANEL,
-    FMT_DATE, FMT_GEN, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT, GREY_DARK, STEEL,
-    col, chart_legend, font, formula, header_row, jump, label, link, note, presentation_setup,
-    print_setup, put, section, set_widths, title,
+from .xlstyle import (ALIGN_C, BORDER_THIN, FILL_GREY, FILL_NAVY, FILL_PANEL,
+    FMT_DATE, FMT_DATETIME, FMT_DATE_S, FMT_GEN, FMT_IDX, FMT_INT, FMT_MOD, FMT_MONTH,
+    FMT_PCT, FMT_PCT_SIGNED, FMT_PTS_COL, F_HEADER, F_LABEL, F_SMALL_IT, GREY_DARK,
+    STEEL, chart_legend, col, font, formula, header_row, jump, label, link, note,
+    presentation_setup, print_setup, put, section, set_widths, title,
 )
 
 COH_HEADERS = ["#", "Written month", "Month end", "Days", "Mo#", "Mid-month",
@@ -351,7 +351,7 @@ def _mod_reconciliation(ws, ctx: Ctx, top: int) -> None:
             formula(ws, f"K{r}", kf, fmt=FMT_MOD, border=BORDER_THIN, bold=bold)
             formula(ws, f"L{r}", lr(f"$K${r}"), fmt=FMT_PCT, border=BORDER_THIN, bold=bold)
         if mf:
-            formula(ws, f"M{r}", mf, fmt="+0.00;-0.00;0.00", border=BORDER_THIN)
+            formula(ws, f"M{r}", mf, fmt=FMT_PTS_COL, border=BORDER_THIN)
     put(ws, f"J{top + 8}", "Start level — written mod at 12/31 of the current year", fnt=F_LABEL)
     formula(ws, f"K{top + 8}", "=$C$12", fmt=FMT_MOD, border=BORDER_THIN)
     put(ws, f"J{top + 9}", "End level — written mod at 12/31 of the plan year", fnt=F_LABEL)
@@ -373,7 +373,7 @@ def _mod_reconciliation(ws, ctx: Ctx, top: int) -> None:
     # the gap, and the check that the three legs actually close it
     put(ws, f"J{top + 12}", "Current process minus model (LR points)", fnt=F_LABEL)
     formula(ws, f"M{top + 12}", f"=($L${top + 3}-$L${top + 7})*100",
-            fmt="+0.00;-0.00;0.00", border=BORDER_THIN, bold=True)
+            fmt=FMT_PTS_COL, border=BORDER_THIN, bold=True)
     ctx.define("me_ProcGap", "Mod Engine", f"$M${top + 12}",
                "Current-process plan LR minus the model's, in LR points (D76)")
     formula(ws, f"N{top + 12}",
@@ -429,12 +429,12 @@ def build_rate_engine(ctx: Ctx):
          "nr_Arate_P", "Rate adjustment factor for the plan year"),
         ('="Rate earn-in factor  A_rate("&(nr_PlanYear+1)&")"', "=nr_CRLind/nr_ECY_P1", FMT_IDX,
          "nr_Arate_P1", "Rate adjustment factor for plan year + 1"),
-        ("CY earned rate chg vs indication", "=nr_ECY_P/nr_CRLind-1", "+0.0%;-0.0%;0.0%",
+        ("CY earned rate chg vs indication", "=nr_ECY_P/nr_CRLind-1", FMT_PCT_SIGNED,
          "nr_EChgVsInd", "E_CY(P)/CRL_ind - 1"),
-        ('="Earned rate chg "&(nr_PlanYear-1)&" -> "&nr_PlanYear', "=nr_ECY_P/nr_ECY_Pm1-1", "+0.0%;-0.0%;0.0%",
+        ('="Earned rate chg "&(nr_PlanYear-1)&" -> "&nr_PlanYear', "=nr_ECY_P/nr_ECY_Pm1-1", FMT_PCT_SIGNED,
          "nr_YoY_P", "Year-over-year earned rate change into P"),
         ('="Earned rate chg "&nr_PlanYear&" -> "&(nr_PlanYear+1)&" (carryover + new)"', "=nr_ECY_P1/nr_ECY_P-1",
-         "+0.0%;-0.0%;0.0%", "nr_YoY_P1", "Year-over-year earned rate change into P+1"),
+         FMT_PCT_SIGNED, "nr_YoY_P1", "Year-over-year earned rate change into P+1"),
     ]
     cf, cl = L.RE_COH_FIRST, L.RE_COH_LAST
     # Aggregates read the IN-FORCE index column U: the combined net path when a
@@ -525,11 +525,11 @@ def build_rate_engine(ctx: Ctx):
         cL = col(mcol0 + j)
         if j == 0:
             formula(ws, f"{cL}{L.RE_ROW_MIDX}", "=(nr_PlanYear-1)*12", fmt=FMT_INT)
-            formula(ws, f"{cL}{L.RE_COH_HDR}", "=DATE(nr_PlanYear-1,1,1)", fmt="mmm-yy")
+            formula(ws, f"{cL}{L.RE_COH_HDR}", "=DATE(nr_PlanYear-1,1,1)", fmt=FMT_MONTH)
         else:
             prev = col(mcol0 + j - 1)
             formula(ws, f"{cL}{L.RE_ROW_MIDX}", f"={prev}{L.RE_ROW_MIDX}+1", fmt=FMT_INT)
-            formula(ws, f"{cL}{L.RE_COH_HDR}", f"=EDATE({prev}{L.RE_COH_HDR},1)", fmt="mmm-yy")
+            formula(ws, f"{cL}{L.RE_COH_HDR}", f"=EDATE({prev}{L.RE_COH_HDR},1)", fmt=FMT_MONTH)
         c = ws[f"{cL}{L.RE_COH_HDR}"]
         c.font = F_HEADER
         c.fill = FILL_NAVY
@@ -612,7 +612,7 @@ def build_rate_engine(ctx: Ctx):
         ws.column_dimensions[col(L.RE_MATRIX_COL + j)].width = 7.5
     # mid-month sampling date reads as a date, not a raw serial
     for i in range(L.N_COH):
-        ws[f"F{L.RE_COH_FIRST + i}"].number_format = "m/d/yy h:mm"
+        ws[f"F{L.RE_COH_FIRST + i}"].number_format = FMT_DATETIME
     # index-construction detail columns are collapsible (audit on demand)
     for cL in "IJKLM":
         ws.column_dimensions[cL].outlineLevel = 1
@@ -657,7 +657,7 @@ def build_mod_engine(ctx: Ctx):
     for i, (lbl, fx, fm) in enumerate(anchor_rows):
         r = 6 + i
         label(ws, f"E{r}", lbl)
-        formula(ws, f"F{r}", fx, fmt="m/d/yy", border=BORDER_THIN)
+        formula(ws, f"F{r}", fx, fmt=FMT_DATE_S, border=BORDER_THIN)
         formula(ws, f"G{r}", fm, fmt=FMT_MOD, border=BORDER_THIN)
         if i < 3:
             formula(ws, f"H{r}", f"=($G${r + 1}-$G${r})/($F${r + 1}-$F${r})", fmt="0.000000",
