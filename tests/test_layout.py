@@ -78,3 +78,60 @@ def test_class_defaults_match_shipped_configure(cfg):
     mismatched = {k: (v, getattr(L, k)) for k, v in defaults.items()
                   if getattr(L, k) != v}
     assert not mismatched, f"class defaults diverge from configure(): {mismatched}"
+
+
+# ---------------------------------------------------------------------------
+# D90: the State Summary column map is the single declaration of that exhibit's
+# order — for the per-LOB sheet, the Book's mirror, and both harnesses.
+# ---------------------------------------------------------------------------
+
+
+def test_ss_column_map_is_well_formed():
+    from src.sheets_main import SS_COLS, SS_COL, SS_HELP, SS_LAST
+    keys = [c.key for c in SS_COLS]
+    assert len(keys) == len(set(keys)), "duplicate State Summary column key"
+    assert SS_LAST == len(SS_COLS) == 35
+    assert sorted(SS_COL.values()) == list(range(1, SS_LAST + 1))
+    # helpers live strictly to the RIGHT of the exhibit, never inside it
+    assert min(SS_HELP.values()) > SS_LAST
+    assert sorted(SS_HELP.values()) == list(range(SS_LAST + 1, SS_LAST + 7))
+
+
+def test_ss_groups_are_contiguous_and_cover_every_column():
+    from src.sheets_main import SS_COLS, ss_groups
+    runs = ss_groups()
+    assert runs[0][0] == 1 and runs[-1][1] == len(SS_COLS)
+    for (_, prev_last, _), (nxt_first, _, _) in zip(runs, runs[1:]):
+        assert nxt_first == prev_last + 1, "a group span has a hole in it"
+    # a caption may not appear in two separate runs: the two-tier header writes
+    # it once at the run's first column, so a split group would print it twice
+    caps = [c for _f, _l, c in runs if c]
+    assert len(caps) == len(set(caps))
+
+
+def test_the_bridge_and_its_headline_fit_the_first_screen():
+    """The reason the exhibit was reordered (D90).
+
+    Plan LR used to sit at column 27, about 1,600px in — off the right edge of
+    a 1080p window, so the flagship leadership exhibit did not show its own
+    headline without scrolling. Excel renders a column of width w at roughly
+    7w + 5 px; the roster column is frozen, so everything up to and including
+    Plan LR must fit."""
+    from src.sheets_main import SS_COLS, ss_c
+    px = sum(7 * c.width + 5 for c in SS_COLS[:ss_c("planlr")]) + 30
+    assert px < 1100, f"plan LR sits {px:.0f}px in — off screen again"
+    # and the bridge must read left to right, ending in the number it produces
+    order = [ss_c(k) for k in ("lrcur", "arate", "amod", "aother", "planlr", "mix")]
+    assert order == sorted(order) and order == list(range(order[0], order[0] + 6))
+    # the chronology is reference, and follows the answer
+    assert ss_c("chg1_date") > ss_c("planlr")
+
+
+def test_book_mirror_shares_the_column_map():
+    """The Book's State Summary is the same exhibit one dimension deeper. It
+    used to carry its own hand-maintained copy of the 35-column order, which is
+    exactly the arrangement that lets one drift from the other."""
+    import src.sheets_book as bk
+    import src.sheets_main as sm
+    assert bk.SS_COLS is sm.SS_COLS
+    assert bk.ss_l("planlr") == sm.ss_l("planlr")

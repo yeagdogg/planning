@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import datetime as dt
 
 from openpyxl.chart import BarChart, LineChart, Reference
@@ -574,11 +576,127 @@ def build_portfolio(ctx: Ctx):
 
 SS_CAPTION_FILL = "EDF1F5"
 
+# The two long group captions, named so the Book's mirror uses the same words.
+SS_G_BRIDGE = '="CY "&nr_PlanYear&" plan — the bridge, left to right"'
+SS_G_HIST = ("Rate change history — chronological (single-BU view). "
+             "T = taken, P = planned, * = not counted in the indication")
+SS_G_P1 = '="CY "&(nr_PlanYear+1)&" indicative"'
+SS_G_NET = "Net selection — asserted vs the logged program"
+
+
+@dataclass(frozen=True)
+class SsCol:
+    """One State Summary column, declared once (D90).
+
+    Before this, the exhibit was six parallel structures keyed by POSITION:
+    the header list, the width list, the group spans, the metric map, the slot
+    arithmetic (``6 + j * 3``), and every hard-coded letter in the bridge chain,
+    the conditional formats, the Book's independent mirror and six harness
+    reads. Moving one column meant editing all of them in lockstep, and a miss
+    did not fail the build — it produced a correct-looking exhibit with one
+    column of the wrong thing in it. Same lesson as ``LrCol`` (D72), applied to
+    the flagship.
+    """
+
+    key: str                    # stable identity — what every consumer addresses
+    header: str
+    width: float
+    group: str = ""             # two-tier caption; equal ADJACENT values span
+    live: str | None = None     # formula header, for year-bearing labels (D44)
+
+
+def _ss_slots():
+    for j in (1, 2, 3, 4):
+        yield SsCol(f"chg{j}_date", f"Chg {j} date", 9, SS_G_HIST)
+        yield SsCol(f"chg{j}_pct", f"Chg {j}", 7, SS_G_HIST)
+        yield SsCol(f"chg{j}_tok", "T/P", 4, SS_G_HIST)
+
+
+# ORDER IS THE POINT (D90). The bridge and the plan LR it produces now sit
+# inside the first screen; the chronology, which is reference rather than the
+# answer, follows. Plan LR moves from column 27 (~1,600px in — off-screen on a
+# 1080p display, so the flagship exhibit did not show its own headline) to
+# column 13, about 915px, which is on screen with the roster frozen.
+SS_COLS: tuple[SsCol, ...] = (
+    SsCol("state", "State", 7),
+    SsCol("ep", "Adj plan EP (000s)", 12, "Volume"),
+    SsCol("mind", "Mod in indication", 9, "Schedule mods"),
+    SsCol("m0", "Current mod", 8.5, "Schedule mods"),
+    SsCol("m1", "Proj. mod, plan-yr end", 9, "Schedule mods"),
+    SsCol("crl", "Indication rate level", 9.5, "Engine levels"),
+    SsCol("ecy", "Earned rate level", 9.5, "Engine levels",
+          '=nr_PlanYear&" earned rate level"'),
+    SsCol("mbar", "Earned mod", 9, "Engine levels", '=nr_PlanYear&" earned mod"'),
+    SsCol("lrcur", "Projected LR (current level)", 11, SS_G_BRIDGE),
+    SsCol("arate", "x  Rate earn-in (A_rate)", 9.5, SS_G_BRIDGE),
+    SsCol("amod", "x  Mod drift (A_mod)", 9.5, SS_G_BRIDGE),
+    SsCol("aother", "x  Other adj (A_other)", 8.5, SS_G_BRIDGE),
+    SsCol("planlr", "=  Plan LR", 10, SS_G_BRIDGE,
+          '="=  CY "&nr_PlanYear&" plan LR"'),
+    SsCol("mix", "Mix (pts)", 7, SS_G_BRIDGE),
+    *_ss_slots(),
+    SsCol("ntaken", "# taken", 7, SS_G_HIST),
+    SsCol("nplanned", "# planned", 8, SS_G_HIST),
+    SsCol("trend", "Net trend", 8.5, SS_G_P1, '="Net trend ("&(nr_PlanYear+1)&")"'),
+    SsCol("arate1", "Rate earn-in +1", 9.5, SS_G_P1,
+          '=(nr_PlanYear+1)&" rate earn-in"'),
+    SsCol("amod1", "Mod drift +1", 9.5, SS_G_P1, '=(nr_PlanYear+1)&" mod drift"'),
+    SsCol("planlr1", "Plan LR +1", 10, SS_G_P1,
+          '="CY "&(nr_PlanYear+1)&" plan LR"'),
+    SsCol("netsel", "Net rate sel", 8.5, SS_G_NET),
+    SsCol("progbasis", "Plan LR — program basis", 11, SS_G_NET),
+    SsCol("proggap", "Program vs asserted (pts)", 12, SS_G_NET),
+)
+
+SS_COL = {c.key: i for i, c in enumerate(SS_COLS, 1)}    # key -> 1-based column
+SS_LAST = len(SS_COLS)
+# helper columns live to the right of the exhibit proper
+SS_HELP = {k: SS_LAST + 1 + i for i, k in
+           enumerate(("pad", "crit", "cnt", "key", "netcnt", "mathchk"))}
+
+
+def ss_c(key: str) -> int:
+    """1-based column index of a State Summary column, by key."""
+    return SS_COL[key]
+
+
+def ss_l(key: str) -> str:
+    """Column letter of a State Summary column, by key."""
+    return col(SS_COL[key])
+
+
+def ss_h(key: str) -> str:
+    """Column letter of a State Summary HELPER column, by key."""
+    return col(SS_HELP[key])
+
+
+def ss_groups() -> list[tuple[int, int, str]]:
+    """(first, last, caption) runs, derived from the declared order — so a
+    reordered column takes its group span with it."""
+    runs: list[list] = []
+    for i, c in enumerate(SS_COLS, 1):
+        if runs and runs[-1][2] == c.group:
+            runs[-1][1] = i
+        else:
+            runs.append([i, i, c.group])
+    return [tuple(r) for r in runs]
+
+
+def ss_group_starts() -> set[int]:
+    """Columns that open a group — where the medium divider rule is drawn.
+    The State/Volume boundary is deliberately not one: a state and its premium
+    read as one label."""
+    return {first for first, _last, cap in ss_groups()[2:] if cap}
+
 
 def build_state_summary(ctx: Ctx):
-    """One row per state: adjusted EP, mods, chronological rate-change history,
-    engine results, and the CY P / P+1 plan LR — filtered by BU, with an
-    'All' view that combines business units on adjusted-EP weights."""
+    """One row per state: adjusted EP, mods, engine levels, the visible bridge
+    through to the CY P plan LR, then the chronological rate-change history and
+    the P+1 view — filtered by BU, with an 'All' view that combines business
+    units on adjusted-EP weights.
+
+    Every column position comes from :data:`SS_COLS`; nothing here counts
+    columns by hand (D90)."""
     ws = ctx.wb["State Summary"]
     p = ctx.p
     states = ctx.cfg.states
@@ -599,64 +717,34 @@ def build_state_summary(ctx: Ctx):
     ctx.define("nr_SumBU", "State Summary", "$B$4",
                "State Summary business-unit filter (All = EP-weighted across BUs)")
     # criteria helper: SUMIFS wildcard when 'All'
-    formula(ws, "AK4", '=IF($B$4="All","*",$B$4)')
-    ws["AK4"].font = font(GREY_DARK, size=8)
-    from openpyxl.worksheet.datavalidation import DataValidation
-    dv = DataValidation(type="list", formula1="=lst_bu_all", allow_blank=False,
-                        showErrorMessage=True)
-    ws.add_data_validation(dv)
-    dv.add("B4")
+    CR, CN, KY, NC_, MC = (ss_h("crit"), ss_h("cnt"), ss_h("key"),
+                           ss_h("netcnt"), ss_h("mathchk"))
+    formula(ws, f"{CR}4", '=IF($B$4="All","*",$B$4)')
+    ws[f"{CR}4"].font = font(GREY_DARK, size=8)
+    add_dv(ws, "list", ["B4"], formula1="=lst_bu_all")
 
     cap_row, hdr, first = 6, 7, 8
     n_disp = len(states) + 3   # live-roster slots incl. headroom for new states (D42)
     last = first + n_disp - 1
     tot = last + 2
-    crit = "$AK$4"
+    crit = f"${CR}$4"
 
     # ---- two-tier header ----
-    groups = [
-        (1, 1, ""), (2, 2, "Volume"), (3, 5, "Schedule mods"),
-        (6, 19, "Rate change history — chronological (single-BU view). "
-                "T = taken, P = planned, * = not counted in the indication"),
-        (20, 22, "Engine levels"),
-        (23, 28, '="CY "&nr_PlanYear&" plan — the bridge, left to right"'),
-        (29, 32, '="CY "&(nr_PlanYear+1)&" indicative"'),
-        (33, 35, "Net selection — asserted vs the logged program"),
-    ]
-    for c1, c2, text in groups:
+    for c1, c2, text in ss_groups():
         for cc in range(c1, c2 + 1):
             cell = ws.cell(row=cap_row, column=cc, value=text if cc == c1 else None)
             cell.alignment = Alignment(horizontal="centerContinuous", vertical="center")
             cell.font = font(NAVY, bold=True, size=9)
             cell.fill = PatternFill_safe(SS_CAPTION_FILL)
-    headers = ["State", "Adj plan EP (000s)", "Mod in indication", "Current mod",
-               "Proj. mod, plan-yr end",
-               "Chg 1 date", "Chg 1", "T/P", "Chg 2 date", "Chg 2", "T/P",
-               "Chg 3 date", "Chg 3", "T/P", "Chg 4 date", "Chg 4", "T/P",
-               "# taken", "# planned",
-               "Indication rate level", "Earned rate level", "Earned mod",
-               "Projected LR (current level)", "x  Rate earn-in (A_rate)",
-               "x  Mod drift (A_mod)", "x  Other adj (A_other)", "=  Plan LR",
-               "Mix (pts)",
-               "Net trend", "Rate earn-in +1", "Mod drift +1", "Plan LR +1",
-               "Net rate sel", "Plan LR — program basis", "Program vs asserted (pts)"]
-    widths = [7, 12, 9, 8.5, 9,
-              9, 7, 4, 9, 7, 4, 9, 7, 4, 9, 7, 4, 7, 8,
-              9.5, 9.5, 9, 11, 9.5, 9.5, 8.5, 10, 7,
-              8.5, 9.5, 9.5, 10, 8.5, 11, 12]
-    header_row(ws, hdr, 1, headers, widths=widths)
+    header_row(ws, hdr, 1, [c.header for c in SS_COLS],
+               widths=[c.width for c in SS_COLS])
     ws.row_dimensions[hdr].height = 42
     # year-bearing headers are LIVE so a Control plan-year change relabels
     # the exhibit, not just the math (D44)
-    for cc, f in ((21, '=nr_PlanYear&" earned rate level"'),
-                  (22, '=nr_PlanYear&" earned mod"'),
-                  (27, '="=  CY "&nr_PlanYear&" plan LR"'),
-                  (29, '="Net trend ("&(nr_PlanYear+1)&")"'),
-                  (30, '=(nr_PlanYear+1)&" rate earn-in"'),
-                  (31, '=(nr_PlanYear+1)&" mod drift"'),
-                  (32, '="CY "&(nr_PlanYear+1)&" plan LR"')):
-        ws.cell(row=hdr, column=cc).value = f
-    group_starts = {3, 6, 20, 23, 29, 33}
+    for i, spec in enumerate(SS_COLS, 1):
+        if spec.live:
+            ws.cell(row=hdr, column=i).value = spec.live
+    group_starts = ss_group_starts()
     med = Side(style="medium", color=STEEL)
 
     def wtd_body(row_, prod, plain, plain_dims=("calc_state", "calc_bu")):
@@ -664,32 +752,35 @@ def build_state_summary(ctx: Ctx):
         ps, pb = plain_dims
         return (f"IF($B{row_}>0,"
                 f"SUMIFS({prod},calc_state,$A{row_},calc_bu,{crit})/$B{row_},"
-                f"SUMIFS({plain},{ps},$A{row_},{pb},{crit})/$AL{row_})")
+                f"SUMIFS({plain},{ps},$A{row_},{pb},{crit})/${CN}{row_})")
 
     def wtd(row_, prod, plain, plain_dims=("calc_state", "calc_bu")):
-        return f'=IF($AL{row_}=0,"",{wtd_body(row_, prod, plain, plain_dims)})'
+        return f'=IF(${CN}{row_}=0,"",{wtd_body(row_, prod, plain, plain_dims)})'
 
     # the visible bridge chain: Projected LR x A_rate x A_mod x A_other
-    CHAIN_P = ("$W{r}", "$X{r}", "$Y{r}", "$Z{r}")
-    CHAIN_P1 = ("$W{r}", "(1+$AC{r})", "$AD{r}", "$AE{r}", "$Z{r}")
+    CHAIN_P = tuple(f"${ss_l(k)}{{r}}"
+                    for k in ("lrcur", "arate", "amod", "aother"))
+    CHAIN_P1 = (f"${ss_l('lrcur')}{{r}}", f"(1+${ss_l('trend')}{{r}})",
+                f"${ss_l('arate1')}{{r}}", f"${ss_l('amod1')}{{r}}",
+                f"${ss_l('aother')}{{r}}")
 
     def chain(row_, parts):
         return "*".join(x.format(r=row_) for x in parts)
 
     metric_cols = [
-        (3, "calc_w_mind", "lr_mind", ("lr_state", "lr_bu"), FMT_MOD),
-        (4, "calc_w_m0", "lr_m0", ("lr_state", "lr_bu"), FMT_MOD),
-        (5, "calc_w_m1", "lr_m1", ("lr_state", "lr_bu"), FMT_MOD),
-        (20, "calc_w_crl", "calc_crl", None, FMT_IDX),
-        (21, "calc_w_ecy", "calc_ecy_p", None, FMT_IDX),
-        (22, "calc_w_mbar", "calc_mbar_p", None, FMT_MOD),
-        (23, "calc_w_lrcur", "calc_lrcur", None, FMT_PCT),
-        (24, "calc_w_arate", "calc_arate_p", None, FMT_IDX),
-        (25, "calc_w_amod", "calc_amod_p", None, FMT_IDX),
-        (26, "calc_w_aother", "calc_aother", None, FMT_IDX),
-        (29, "calc_w_trend", "calc_trend", None, FMT_PCT_SIGNED),
-        (30, "calc_w_arate1", "calc_arate_p1", None, FMT_IDX),
-        (31, "calc_w_amod1", "calc_amod_p1", None, FMT_IDX),
+        ("mind", "calc_w_mind", "lr_mind", ("lr_state", "lr_bu"), FMT_MOD),
+        ("m0", "calc_w_m0", "lr_m0", ("lr_state", "lr_bu"), FMT_MOD),
+        ("m1", "calc_w_m1", "lr_m1", ("lr_state", "lr_bu"), FMT_MOD),
+        ("crl", "calc_w_crl", "calc_crl", None, FMT_IDX),
+        ("ecy", "calc_w_ecy", "calc_ecy_p", None, FMT_IDX),
+        ("mbar", "calc_w_mbar", "calc_mbar_p", None, FMT_MOD),
+        ("lrcur", "calc_w_lrcur", "calc_lrcur", None, FMT_PCT),
+        ("arate", "calc_w_arate", "calc_arate_p", None, FMT_IDX),
+        ("amod", "calc_w_amod", "calc_amod_p", None, FMT_IDX),
+        ("aother", "calc_w_aother", "calc_aother", None, FMT_IDX),
+        ("trend", "calc_w_trend", "calc_trend", None, FMT_PCT_SIGNED),
+        ("arate1", "calc_w_arate1", "calc_arate_p1", None, FMT_IDX),
+        ("amod1", "calc_w_amod1", "calc_amod_p1", None, FMT_IDX),
     ]
 
     for i in range(n_disp):
@@ -698,81 +789,81 @@ def build_state_summary(ctx: Ctx):
         # live roster: the k-th distinct state currently in tbl_LR (D42)
         link(ws, f"A{r}", f"=_lists!$B${3 + i}", align=ALIGN_C, fill=band,
              border=BORDER_THIN, bold=True)
-        formula(ws, f"AL{r}", f"=COUNTIFS(calc_state,$A{r},calc_bu,{crit})", fmt=FMT_INT)
-        formula(ws, f"AM{r}", f'=IF($B$4="All","",$B$4&"|"&$A{r})')
+        formula(ws, f"{CN}{r}", f"=COUNTIFS(calc_state,$A{r},calc_bu,{crit})", fmt=FMT_INT)
+        formula(ws, f"{KY}{r}", f'=IF($B$4="All","",$B$4&"|"&$A{r})')
         formula(ws, f"B{r}",
-                f'=IF($AL{r}=0,"",SUMIFS(calc_ep,calc_state,$A{r},calc_bu,{crit}))',
+                f'=IF(${CN}{r}=0,"",SUMIFS(calc_ep,calc_state,$A{r},calc_bu,{crit}))',
                 fmt="#,##0", align=ALIGN_C, fill=band, border=BORDER_THIN)
-        for cc, prod, plain, dims, fmt in metric_cols:
+        for key, prod, plain, dims, fmt in metric_cols:
             f = wtd(r, prod, plain, dims) if dims else wtd(r, prod, plain)
-            formula(ws, ws.cell(row=r, column=cc).coordinate, f, fmt=fmt, align=ALIGN_C,
+            formula(ws, f"{ss_l(key)}{r}", f, fmt=fmt, align=ALIGN_C,
                     fill=band, border=BORDER_THIN)
         # rate-change slots: date, effective %, and the status token (D61) —
         # T/P for taken/planned, * when the row is outside the indication
-        for j in range(4):
-            cd, cp, cs = 6 + j * 3, 7 + j * 3, 8 + j * 3
-            cnt = f"COUNTIFS(rl_key,$AM{r},rl_seq,{j + 1})"
-            formula(ws, ws.cell(row=r, column=cd).coordinate,
-                    f'=IF($AM{r}="","",IF({cnt}=0,"",'
-                    f"SUMIFS(rl_eff,rl_key,$AM{r},rl_seq,{j + 1})))",
+        for j in range(1, 5):
+            cnt = f"COUNTIFS(rl_key,${KY}{r},rl_seq,{j})"
+            formula(ws, f"{ss_l(f'chg{j}_date')}{r}",
+                    f'=IF(${KY}{r}="","",IF({cnt}=0,"",'
+                    f"SUMIFS(rl_eff,rl_key,${KY}{r},rl_seq,{j})))",
                     fmt=FMT_DATE_S, align=ALIGN_C, fill=band, border=BORDER_THIN)
-            formula(ws, ws.cell(row=r, column=cp).coordinate,
-                    f'=IF($AM{r}="","",IF({cnt}=0,"",'
-                    f"SUMIFS(rl_reff,rl_key,$AM{r},rl_seq,{j + 1})))",
+            formula(ws, f"{ss_l(f'chg{j}_pct')}{r}",
+                    f'=IF(${KY}{r}="","",IF({cnt}=0,"",'
+                    f"SUMIFS(rl_reff,rl_key,${KY}{r},rl_seq,{j})))",
                     fmt=FMT_PCT_SIGNED, align=ALIGN_C, fill=band, border=BORDER_THIN)
-            formula(ws, ws.cell(row=r, column=cs).coordinate,
-                    f'=IF($AM{r}="","",IF({cnt}=0,"",'
-                    f'IF(COUNTIFS(rl_key,$AM{r},rl_seq,{j + 1},rl_status,"planned")>0,'
+            formula(ws, f"{ss_l(f'chg{j}_tok')}{r}",
+                    f'=IF(${KY}{r}="","",IF({cnt}=0,"",'
+                    f'IF(COUNTIFS(rl_key,${KY}{r},rl_seq,{j},rl_status,"planned")>0,'
                     f'"P","T")&'
-                    f'IF(COUNTIFS(rl_key,$AM{r},rl_seq,{j + 1},rl_cons,"Y")>0,"","*")))',
+                    f'IF(COUNTIFS(rl_key,${KY}{r},rl_seq,{j},rl_cons,"Y")>0,"","*")))',
                     align=ALIGN_C, fill=band, border=BORDER_THIN)
         # counts split by status — these work in the All view too, where the
         # per-change slots are necessarily blank (they are single-BU)
-        for cc, status in ((18, "taken"), (19, "planned")):
-            formula(ws, ws.cell(row=r, column=cc).coordinate,
-                    f'=IF($AL{r}=0,"",IF($AM{r}="",'
+        for key, status in (("ntaken", "taken"), ("nplanned", "planned")):
+            formula(ws, f"{ss_l(key)}{r}",
+                    f'=IF(${CN}{r}=0,"",IF(${KY}{r}="",'
                     f'COUNTIFS(rl_state,$A{r},rl_status,"{status}",rl_eff,"<>"),'
-                    f'COUNTIFS(rl_key,$AM{r},rl_status,"{status}",rl_eff,"<>")))',
+                    f'COUNTIFS(rl_key,${KY}{r},rl_status,"{status}",rl_eff,"<>")))',
                     fmt=FMT_INT, align=ALIGN_C, fill=band, border=BORDER_THIN)
         # CY P and CY P+1 plan LR: on a single-combo row the bridge is visible
         # arithmetic across this row's own factor cells — no lookup. Where a row
         # genuinely combines combos, the EP-weighted engine value is exact and
-        # the product of the displayed averages is not (mix, col AB).
-        for cc, parts, wprod, wplain in (
-                (27, CHAIN_P, "calc_w_cylr", "calc_cylr_p"),
-                (32, CHAIN_P1, "calc_w_cylr1", "calc_cylr_p1")):
-            formula(ws, ws.cell(row=r, column=cc).coordinate,
-                    f'=IF($AL{r}=0,"",IF($AL{r}=1,{chain(r, parts)},'
+        # the product of the displayed averages is not (mix).
+        for key, parts, wprod, wplain in (
+                ("planlr", CHAIN_P, "calc_w_cylr", "calc_cylr_p"),
+                ("planlr1", CHAIN_P1, "calc_w_cylr1", "calc_cylr_p1")):
+            formula(ws, f"{ss_l(key)}{r}",
+                    f'=IF(${CN}{r}=0,"",IF(${CN}{r}=1,{chain(r, parts)},'
                     f"{wtd_body(r, wprod, wplain)}))",
                     fmt=FMT_PCT, align=ALIGN_C, fill=band, border=BORDER_THIN, bold=True)
-        formula(ws, f"AB{r}",
-                f'=IF($AL{r}<=1,"",($AA{r}-{chain(r, CHAIN_P)})*100)',
+        formula(ws, f"{ss_l('mix')}{r}",
+                f'=IF(${CN}{r}<=1,"",(${ss_l("planlr")}{r}-{chain(r, CHAIN_P)})*100)',
                 fmt=FMT_PTS_COL, align=ALIGN_C, fill=band, border=BORDER_THIN)
-        formula(ws, f"AN{r}", f"=SUMIFS(calc_netmode,calc_state,$A{r},calc_bu,{crit})",
+        formula(ws, f"{NC_}{r}", f"=SUMIFS(calc_netmode,calc_state,$A{r},calc_bu,{crit})",
                 fmt=FMT_INT)
-        formula(ws, f"AG{r}",
-                f'=IF($AL{r}=0,"",IF($AN{r}=0,"—",'
-                f"SUMIFS(calc_netx,calc_state,$A{r},calc_bu,{crit})/$AN{r}))",
+        formula(ws, f"{ss_l('netsel')}{r}",
+                f'=IF(${CN}{r}=0,"",IF(${NC_}{r}=0,"—",'
+                f"SUMIFS(calc_netx,calc_state,$A{r},calc_bu,{crit})/${NC_}{r}))",
                 fmt=FMT_PCT_SIGNED, align=ALIGN_C, fill=band, border=BORDER_THIN)
         # D65: the same rows valued on the EXPLICIT rate x mod paths, and the
         # gap that opens only where a net target is asserted
-        formula(ws, f"AH{r}",
-                f'=IF($AL{r}=0,"",IF($AN{r}=0,"—",'
+        formula(ws, f"{ss_l('progbasis')}{r}",
+                f'=IF(${CN}{r}=0,"",IF(${NC_}{r}=0,"—",'
                 f"{wtd_body(r, 'calc_w_cylr_prog', 'calc_cylr_prog')}))",
                 fmt=FMT_PCT, align=ALIGN_C, fill=band, border=BORDER_THIN)
-        formula(ws, f"AI{r}",
-                f'=IF($AL{r}=0,"",IF($AN{r}=0,"—",($AH{r}-$AA{r})*100))',
+        formula(ws, f"{ss_l('proggap')}{r}",
+                f'=IF(${CN}{r}=0,"",IF(${NC_}{r}=0,"—",'
+                f'(${ss_l("progbasis")}{r}-${ss_l("planlr")}{r})*100))',
                 fmt=FMT_PTS_COL, align=ALIGN_C, fill=band, border=BORDER_THIN,
                 bold=True)
         # audit helper: the visible product vs the engine's weighted value on
         # single-combo rows (0 elsewhere) — the Checks cross-tie, never circular
         # because the right-hand side is the engine, not this row's cells
-        formula(ws, f"AO{r}",
-                f"=IF($AL{r}<>1,0,"
+        formula(ws, f"{MC}{r}",
+                f"=IF(${CN}{r}<>1,0,"
                 f"ABS({wtd_body(r, 'calc_w_cylr', 'calc_cylr_p')}-{chain(r, CHAIN_P)})"
                 f"+ABS({wtd_body(r, 'calc_w_cylr1', 'calc_cylr_p1')}"
                 f"-{chain(r, CHAIN_P1)}))", fmt=FMT_IDX)
-        for cL in ("AJ", "AK", "AL", "AM"):
+        for cL in (ss_h("pad"), CR, CN, KY):
             ws[f"{cL}{r}"].font = font(GREY_DARK, size=8)
 
     # ---- total band ----
@@ -780,44 +871,46 @@ def build_state_summary(ctx: Ctx):
         fill=FILL_STEEL_LIGHT_safe(), border=Border(top=med))
     formula(ws, f"B{tot}", f"=SUMIFS(calc_ep,calc_bu,{crit})", fmt="#,##0", align=ALIGN_C,
             bold=True, fill=FILL_STEEL_LIGHT_safe(), border=Border(top=med))
-    for cc, prod, plain, dims, fmt in metric_cols:
-        formula(ws, ws.cell(row=tot, column=cc).coordinate,
+    for key, prod, plain, dims, fmt in metric_cols:
+        formula(ws, f"{ss_l(key)}{tot}",
                 f'=IF($B${tot}=0,"n/a",SUMIFS({prod},calc_bu,{crit})/$B${tot})',
                 fmt=fmt, align=ALIGN_C,
                 fill=FILL_STEEL_LIGHT_safe(), border=Border(top=med))
     # the book total always uses the exact EP-weighted engine value; the mix
     # cell shows what the displayed factors leave on the table
-    for cc, prod in ((27, "calc_w_cylr"), (32, "calc_w_cylr1")):
-        formula(ws, ws.cell(row=tot, column=cc).coordinate,
+    for key, prod in (("planlr", "calc_w_cylr"), ("planlr1", "calc_w_cylr1")):
+        formula(ws, f"{ss_l(key)}{tot}",
                 f'=IF($B${tot}=0,"n/a",SUMIFS({prod},calc_bu,{crit})/$B${tot})',
                 fmt=FMT_PCT, align=ALIGN_C, bold=True,
                 fill=FILL_STEEL_LIGHT_safe(), border=Border(top=med))
-    formula(ws, f"AB{tot}",
-            f'=IF($B${tot}=0,"",($AA{tot}-{chain(tot, CHAIN_P)})*100)',
+    formula(ws, f"{ss_l('mix')}{tot}",
+            f'=IF($B${tot}=0,"",(${ss_l("planlr")}{tot}-{chain(tot, CHAIN_P)})*100)',
             fmt=FMT_PTS_COL, align=ALIGN_C, fill=FILL_STEEL_LIGHT_safe(),
             border=Border(top=med))
-    for cc, status in ((18, "taken"), (19, "planned")):
-        formula(ws, ws.cell(row=tot, column=cc).coordinate,
+    for key, status in (("ntaken", "taken"), ("nplanned", "planned")):
+        formula(ws, f"{ss_l(key)}{tot}",
                 f'=IF($B$4="All",COUNTIFS(rl_status,"{status}",rl_eff,"<>"),'
                 f'COUNTIFS(rl_bu,$B$4,rl_status,"{status}",rl_eff,"<>"))',
                 fmt=FMT_INT, align=ALIGN_C, fill=FILL_STEEL_LIGHT_safe(),
                 border=Border(top=med))
-    formula(ws, f"AG{tot}",
+    formula(ws, f"{ss_l('netsel')}{tot}",
             f'=IF(SUMIFS(calc_netmode,calc_bu,{crit})=0,"—",'
             f"SUMIFS(calc_netx,calc_bu,{crit})/SUMIFS(calc_netmode,calc_bu,{crit}))",
             fmt=FMT_PCT_SIGNED, align=ALIGN_C, fill=FILL_STEEL_LIGHT_safe(),
             border=Border(top=med))
-    formula(ws, f"AH{tot}",
+    formula(ws, f"{ss_l('progbasis')}{tot}",
             f'=IF($B${tot}=0,"n/a",SUMIFS(calc_w_cylr_prog,calc_bu,{crit})/$B${tot})',
             fmt=FMT_PCT, align=ALIGN_C, fill=FILL_STEEL_LIGHT_safe(),
             border=Border(top=med))
-    formula(ws, f"AI{tot}",
-            f'=IF($B${tot}=0,"",($AH{tot}-$AA{tot})*100)',
+    formula(ws, f"{ss_l('proggap')}{tot}",
+            f'=IF($B${tot}=0,"",(${ss_l("progbasis")}{tot}-${ss_l("planlr")}{tot})*100)',
             fmt=FMT_PTS_COL, align=ALIGN_C, bold=True,
             fill=FILL_STEEL_LIGHT_safe(), border=Border(top=med))
-    for cc in list(range(6, 18)):
-        put(ws, ws.cell(row=tot, column=cc).coordinate, None,
-            fill=FILL_STEEL_LIGHT_safe(), border=Border(top=med))
+    # the chronology band carries no total: four dated changes do not add up
+    for j in range(1, 5):
+        for part in ("date", "pct", "tok"):
+            put(ws, f"{ss_l(f'chg{j}_{part}')}{tot}", None,
+                fill=FILL_STEEL_LIGHT_safe(), border=Border(top=med))
 
     # group divider borders down the table
     for cc in group_starts:
@@ -827,9 +920,10 @@ def build_state_summary(ctx: Ctx):
             cell.border = Border(left=med, right=b.right, top=b.top, bottom=b.bottom)
 
     # conditional formatting: LR heatmaps + EP data bars
-    for colL in ("AA", "AF"):
+    for key in ("planlr", "planlr1"):
+        cL = ss_l(key)
         ws.conditional_formatting.add(
-            f"{colL}{first}:{colL}{last}",
+            f"{cL}{first}:{cL}{last}",
             ColorScaleRule(start_type="min", start_color="D6E8D5",
                            mid_type="percentile", mid_value=50, mid_color="FFF2CC",
                            end_type="max", end_color="F4B8B8"))
@@ -839,8 +933,8 @@ def build_state_summary(ctx: Ctx):
                     color="8497B0", showValue=True))
     # planned changes read amber italic; taken stay plain (the token still
     # prints in black and white, so colour is reinforcement, not the message)
-    for cs in (8, 11, 14, 17):
-        cl = col(cs)
+    for j in range(1, 5):
+        cl = ss_l(f"chg{j}_tok")
         ws.conditional_formatting.add(
             f"{cl}{first}:{cl}{last}",
             FormulaRule(formula=[f'LEFT(${cl}{first},1)="P"'],
@@ -853,13 +947,13 @@ def build_state_summary(ctx: Ctx):
     notes = [
         "Weighted view: every metric is adjusted-plan-EP weighted across the business "
         "units in view (states with no EP fall back to a simple average).",
-        "Rate change history is chronological and single-BU: T = taken, P = planned, "
-        "* = NOT counted in the indication; percents are filed % x achievement. The "
-        "# taken / # planned counts work in every view; past four changes see the rate log.",
         "Plan LR is the product of the four factors to its left, multiplied on this row — "
         "on rows that combine business units those factors are EP-weighted averages that "
         "do not multiply exactly, so the exact weighted value is shown and Mix is the "
         "difference. Displayed factors are rounded; the cells carry full precision.",
+        "Rate change history is chronological and single-BU: T = taken, P = planned, "
+        "* = NOT counted in the indication; percents are filed % x achievement. The "
+        "# taken / # planned counts work in every view; past four changes see the rate log.",
         "The following year is indicative — see the canonical caveat on the Bridge. "
         "It multiplies the same Projected LR and Other adj by (1 + net trend).",
         "Net sel: the net selection in force (— = explicit program); net combos carry the "
@@ -892,17 +986,17 @@ def build_state_summary(ctx: Ctx):
     jump(ws, f"A{d}", "'Net Delivery'!A1",
          "Net-target combos: how the target is delivered month by month — Net Delivery >")
 
-    ctx.define("ss_mathchk", "State Summary", f"$AO${first}:$AO${last}",
+    ctx.define("ss_mathchk", "State Summary", f"${MC}${first}:${MC}${last}",
                "Per-row |engine plan LR - the row's visible factor product| on "
                "single-combo rows, 0 elsewhere (D61)")
-    for cL, w in (("AK", 6), ("AL", 6), ("AM", 10), ("AN", 6), ("AO", 8)):
-        ws.column_dimensions[cL].width = w
-    # Six unlabelled helper columns immediately right of the flagship exhibit —
+    for k, w in (("crit", 6), ("cnt", 6), ("key", 10), ("netcnt", 6), ("mathchk", 8)):
+        ws.column_dimensions[ss_h(k)].width = w
+    # six unlabelled helper columns immediately right of the flagship exhibit —
     # the first thing you meet scrolling right. Collapsible, so the exhibit ends
-    # where it looks like it ends. (AO is ss_mathchk, which Checks reads: a
+    # where it looks like it ends. (mathchk is ss_mathchk, which Checks reads: a
     # grouped column still calculates, it just isn't in the way.)
-    for cL in ("AJ", "AK", "AL", "AM", "AN", "AO"):
-        ws.column_dimensions[cL].outlineLevel = 1
+    for k in SS_HELP:
+        ws.column_dimensions[ss_h(k)].outlineLevel = 1
     presentation_setup(ws, gridlines_off=True, freeze=f"B{first}", tab_color=NAVY)
     print_setup(ws)
 

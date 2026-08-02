@@ -26,6 +26,7 @@ from src.build_workbook import (load_config, sample_lr_rows, sample_mod_rows,  #
                                 sample_rate_rows,
                                 sample_to_combo)
 from src.sheets_book import COLS, PF_FIRST, SS_FIRST  # noqa: E402
+from src.sheets_main import ss_l  # noqa: E402  (shared column order, D90)
 from tools.build_book import book_path  # noqa: E402
 from tools.harvest import harvest  # noqa: E402
 from tools.recalc import recalc  # noqa: E402
@@ -163,10 +164,10 @@ def phase_bc(path: Path, cfg, do_recalc=True):
           approx(ss[f"B{tot}"].value, ep_all, 1e-6),
           f"wb={ss[f'B{tot}'].value} py={ep_all}")
     check("State Summary total plan LR ties the EP-weighted harvest",
-          approx(ss[f"AA{tot}"].value, lr_all, 1e-9),
+          approx(ss[f"{ss_l('planlr')}{tot}"].value, lr_all, 1e-9),
           f"wb={ss[f'AA{tot}'].value} py={lr_all}")
     check("State Summary total program basis ties the harvest",
-          approx(ss[f"AH{tot}"].value, prog_all, 1e-9))
+          approx(ss[f"{ss_l('progbasis')}{tot}"].value, prog_all, 1e-9))
     # per-state rows, unfiltered
     bad = 0
     for i, st in enumerate(book.states):
@@ -175,7 +176,7 @@ def phase_bc(path: Path, cfg, do_recalc=True):
         lr_s = sum(r["ep"] * r["cylr_p"] for r in sub) / ep_s
         r = SS_FIRST + i
         if not (approx(ss[f"B{r}"].value, ep_s, 1e-6)
-                and approx(ss[f"AA{r}"].value, lr_s, 1e-9)):
+                and approx(ss[f"{ss_l('planlr')}{r}"].value, lr_s, 1e-9)):
             bad += 1
     check("every State Summary row ties an EP-weighted recomputation", bad == 0,
           f"{bad} mismatched states")
@@ -218,7 +219,7 @@ def phase_d(path: Path, cfg, book, scratch_dir: Path):
         if ep:
             lr = sum(r["ep"] * r["cylr_p"] for r in sub) / ep
             check(f"[{label_}] State Summary total plan LR matches the subset",
-                  approx(ss[f"AA{tot}"].value, lr, 1e-9),
+                  approx(ss[f"{ss_l('planlr')}{tot}"].value, lr, 1e-9),
                   f"wb={ss[f'AA{tot}'].value} py={lr}")
         # the Control KPI band honours all three
         sub3 = [r for r in sub if state == "All" or r["state"] == state]

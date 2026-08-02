@@ -29,6 +29,8 @@ from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
 
+from .sheets_main import (SS_COLS, SS_G_BRIDGE, SS_G_HIST, SS_G_P1,
+                         ss_c, ss_groups, ss_l)
 from .xlstyle import (ALIGN_C, ALIGN_L, BORDER_THIN, FAIL_RED, FILL_GREY, FILL_NAVY,
     FILL_PANEL, FMT_DATE, FMT_DATE_S, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT,
     FMT_PTS_SIGNED, F_LABEL, F_SMALL_IT, GREY_DARK, NAVY, PASS_GREEN, STEEL_LIGHT,
@@ -40,6 +42,18 @@ from .xlstyle import (ALIGN_C, ALIGN_L, BORDER_THIN, FAIL_RED, FILL_GREY, FILL_N
 from .xlstyle import FMT_PCT_SIGNED as PCT_S   # one definition, seven readers
 from .xlstyle import FMT_PTS_COL as PTS  # points in a column already headed (pts)
 ALL = "All"
+
+
+def _ss_chain(r) -> str:
+    """The visible bridge product, in the shared column order."""
+    return "*".join(f'${ss_l(k)}{r}'
+                    for k in ("lrcur", "arate", "amod", "aother"))
+
+
+def _ss_chain1(r) -> str:
+    return (f'${ss_l("lrcur")}{r}*(1+${ss_l("trend")}{r})'
+            f'*${ss_l("arate1")}{r}*${ss_l("amod1")}{r}'
+            f'*${ss_l("aother")}{r}')
 
 BOOK = "_book"
 SHEET_ORDER = ["Read Me", "Control", "State Summary", "Portfolio", "Roll-ups",
@@ -346,50 +360,52 @@ def build_state_summary(ctx: BookCtx, n: int):
             '&IF(bkf_state="All",""," | (state filter does not apply here)")')
     ws["A5"].font = font(GREY_DARK, italic=True)
 
-    groups = [(1, 1, ""), (2, 2, "Volume"), (3, 5, "Schedule mods"),
-              (6, 19, "Rate change history — single-combo views only. "
-                      "T = taken, P = planned, * = not in the indication"),
-              (20, 22, "Engine levels"),
-              (23, 28, f"CY {d.plan_year} plan — the bridge, left to right"),
-              (29, 32, f"CY {d.plan_year + 1} indicative"),
-              (33, 35, "Net selection — asserted vs the logged program")]
-    for c1, c2, text in groups:
+    # The layout is SHARED with the per-LOB exhibit (SS_COLS): this sheet is
+    # its mirror, and the two used to be two hand-maintained copies of the same
+    # 35-column order — the exact arrangement that lets one drift from the
+    # other. Only the captions differ, because the book has no live plan year to
+    # interpolate and its honesty rule is one dimension deeper (D90).
+    book_caption = {
+        SS_G_BRIDGE: f"CY {d.plan_year} plan — the bridge, left to right",
+        SS_G_HIST: ("Rate change history — single-combo views only. "
+                    "T = taken, P = planned, * = not in the indication"),
+        SS_G_P1: f"CY {d.plan_year + 1} indicative",
+    }
+    for c1, c2, cap in ss_groups():
+        text = book_caption.get(cap, cap)
         for cc in range(c1, c2 + 1):
             cell = ws.cell(row=6, column=cc, value=text if cc == c1 else None)
             cell.font = font(NAVY, bold=True, size=9)
             cell.fill = FILL_PANEL
-    heads = ["State", "Adj plan EP", "Mod in indication", "Current mod",
-             "Proj. mod, plan-yr end",
-             "Chg 1 date", "Chg 1", "T/P", "Chg 2 date", "Chg 2", "T/P",
-             "Chg 3 date", "Chg 3", "T/P", "Chg 4 date", "Chg 4", "T/P",
-             "# taken", "# planned",
-             "Indication rate level", f"{d.plan_year} earned rate level",
-             f"{d.plan_year} earned mod",
-             "Projected LR (current level)", "x  Rate earn-in (A_rate)",
-             "x  Mod drift (A_mod)", "x  Other adj (A_other)",
-             f"CY {d.plan_year} plan LR", "Mix (pts)",
-             "Net trend", "Rate earn-in +1", "Mod drift +1",
-             f"CY {d.plan_year + 1} plan LR",
-             "Net rate sel", "Plan LR — program basis", "Program vs asserted (pts)"]
-    header_row(ws, SS_HDR, 1, heads,
-               widths=[7, 12, 9, 8.5, 9, 9, 7, 4, 9, 7, 4, 9, 7, 4, 9, 7, 4, 7, 8,
-                       9.5, 9.5, 9, 11, 9.5, 9.5, 8.5, 10, 7, 8.5, 9.5, 9.5, 10,
-                       8.5, 11, 12])
+    book_header = {
+        "ecy": f"{d.plan_year} earned rate level",
+        "mbar": f"{d.plan_year} earned mod",
+        "planlr": f"CY {d.plan_year} plan LR",
+        "trend": "Net trend",
+        "arate1": "Rate earn-in +1",
+        "amod1": "Mod drift +1",
+        "planlr1": f"CY {d.plan_year + 1} plan LR",
+        "ep": "Adj plan EP",
+    }
+    header_row(ws, SS_HDR, 1,
+               [book_header.get(c.key, c.header) for c in SS_COLS],
+               widths=[c.width for c in SS_COLS])
     ws.row_dimensions[SS_HDR].height = 42
     # the bridge's "=" prefix has to be a FORMULA producing text: a literal
     # cell value starting with "=" is stored as a formula by openpyxl, and an
     # invalid one makes Excel refuse the entire workbook (D41, again)
-    ws.cell(row=SS_HDR, column=27).value = f'="=  CY {d.plan_year} plan LR"'
+    ws.cell(row=SS_HDR, column=ss_c("planlr")).value = f'="=  CY {d.plan_year} plan LR"'
 
     # per-state aggregates honour the LOB and BU filters (an exhibit keyed by a
     # dimension never filters on its own — see the module docstring)
     dims = ("lob", "bu")
-    wide = [(3, "w_mind", FMT_MOD), (4, "w_m0", FMT_MOD), (5, "w_m1", FMT_MOD),
-            (20, "w_crl", FMT_IDX), (21, "w_ecy", FMT_IDX), (22, "w_mbar", FMT_MOD),
-            (23, "w_lrcur", FMT_PCT), (24, "w_arate", FMT_IDX),
-            (25, "w_amod", FMT_IDX), (26, "w_aother", FMT_IDX),
-            (29, "w_trend", PCT_S), (30, "w_arate1", FMT_IDX),
-            (31, "w_amod1", FMT_IDX)]
+    wide = [("mind", "w_mind", FMT_MOD), ("m0", "w_m0", FMT_MOD),
+            ("m1", "w_m1", FMT_MOD), ("crl", "w_crl", FMT_IDX),
+            ("ecy", "w_ecy", FMT_IDX), ("mbar", "w_mbar", FMT_MOD),
+            ("lrcur", "w_lrcur", FMT_PCT), ("arate", "w_arate", FMT_IDX),
+            ("amod", "w_amod", FMT_IDX), ("aother", "w_aother", FMT_IDX),
+            ("trend", "w_trend", PCT_S), ("arate1", "w_arate1", FMT_IDX),
+            ("amod1", "w_amod1", FMT_IDX)]
     for i, st in enumerate(states):
         r = SS_FIRST + i
         band = FILL_PANEL if i % 2 else None
@@ -406,39 +422,41 @@ def build_state_summary(ctx: BookCtx, n: int):
 
         formula(ws, f"B{r}", f"={ep}", fmt="#,##0", align=ALIGN_C, fill=band,
                 border=BORDER_THIN)
-        for cc, fld, fmt in wide:
-            formula(ws, ws.cell(row=r, column=cc).coordinate, f"={w(fld)}", fmt=fmt,
+        for key, fld, fmt in wide:
+            formula(ws, f"{ss_l(key)}{r}", f"={w(fld)}", fmt=fmt,
                     align=ALIGN_C, fill=band, border=BORDER_THIN)
         # rate-change slots: only when the filters resolve to exactly one combo
         uk = f'bkf_lob&"|"&bkf_bu&"|"&$A{r}'
         for j in range(SLOTS):
             for k, (part, fmt) in enumerate((("date", FMT_DATE_S), ("pct", PCT_S),
                                              ("tok", None))):
-                formula(ws, ws.cell(row=r, column=6 + j * 3 + k).coordinate,
+                formula(ws, f'{ss_l(f"chg{j + 1}_{part}")}{r}',
                         f'=IF({cnt}<>1,"—",'
                         f'INDEX({rng("slot" + str(j) + "_" + part, n)},'
                         f'MATCH({uk},{rng("ukey", n)},0)))',
                         fmt=fmt or "General", align=ALIGN_C, fill=band,
                         border=BORDER_THIN)
-        for cc, fld in ((18, "ntaken"), (19, "nplanned")):
-            formula(ws, ws.cell(row=r, column=cc).coordinate,
-                    f'=SUMIFS({rng(fld, n)}{st_c}{crit(*dims)})', fmt=FMT_INT,
+        for key in ("ntaken", "nplanned"):
+            formula(ws, f"{ss_l(key)}{r}",
+                    f'=SUMIFS({rng(key, n)}{st_c}{crit(*dims)})', fmt=FMT_INT,
                     align=ALIGN_C, fill=band, border=BORDER_THIN)
-        chain = f"$W{r}*$X{r}*$Y{r}*$Z{r}"
-        chain1 = f"$W{r}*(1+$AC{r})*$AD{r}*$AE{r}*$Z{r}"
-        formula(ws, f"AA{r}", f'=IF({cnt}=0,"",IF({cnt}=1,{chain},{w("w_cylr")}))',
+        chain = _ss_chain(r)
+        chain1 = _ss_chain1(r)
+        formula(ws, f'{ss_l("planlr")}{r}', f'=IF({cnt}=0,"",IF({cnt}=1,{chain},{w("w_cylr")}))',
                 fmt=FMT_PCT, align=ALIGN_C, fill=band, border=BORDER_THIN, bold=True)
-        formula(ws, f"AB{r}", f'=IF({cnt}<=1,"",($AA{r}-{chain})*100)', fmt=PTS,
+        formula(ws, f'{ss_l("mix")}{r}',
+                f'=IF({cnt}<=1,"",(${ss_l("planlr")}{r}-{chain})*100)', fmt=PTS,
                 align=ALIGN_C, fill=band, border=BORDER_THIN)
-        formula(ws, f"AF{r}", f'=IF({cnt}=0,"",IF({cnt}=1,{chain1},{w("w_cylr1")}))',
+        formula(ws, f'{ss_l("planlr1")}{r}', f'=IF({cnt}=0,"",IF({cnt}=1,{chain1},{w("w_cylr1")}))',
                 fmt=FMT_PCT, align=ALIGN_C, fill=band, border=BORDER_THIN, bold=True)
-        formula(ws, f"AG{r}",
+        formula(ws, f'{ss_l("netsel")}{r}',
                 f'=IF({cnt}=0,"",IF({nm}=0,"—",'
                 f'SUMIFS({rng("netx", n)}{st_c}{crit(*dims)})/{nm}))',
                 fmt=PCT_S, align=ALIGN_C, fill=band, border=BORDER_THIN)
-        formula(ws, f"AH{r}", f'=IF({nm}=0,"—",{w("w_prog")})', fmt=FMT_PCT,
+        formula(ws, f'{ss_l("progbasis")}{r}', f'=IF({nm}=0,"—",{w("w_prog")})', fmt=FMT_PCT,
                 align=ALIGN_C, fill=band, border=BORDER_THIN)
-        formula(ws, f"AI{r}", f'=IF({nm}=0,"—",($AH{r}-$AA{r})*100)', fmt=PTS,
+        formula(ws, f'{ss_l("proggap")}{r}',
+                f'=IF({nm}=0,"—",(${ss_l("progbasis")}{r}-${ss_l("planlr")}{r})*100)', fmt=PTS,
                 align=ALIGN_C, fill=band, border=BORDER_THIN, bold=True)
 
     tot = SS_FIRST + len(states) + 1
@@ -447,23 +465,27 @@ def build_state_summary(ctx: BookCtx, n: int):
     ep_t = f'SUMIFS({rng("ep", n)}{crit(*dims)})'
     formula(ws, f"B{tot}", f"={ep_t}", fmt="#,##0", align=ALIGN_C, bold=True,
             fill=steel_fill())
-    for cc, fld, fmt in wide + [(27, "w_cylr", FMT_PCT), (32, "w_cylr1", FMT_PCT),
-                                (34, "w_prog", FMT_PCT)]:
-        formula(ws, ws.cell(row=tot, column=cc).coordinate,
+    for key, fld, fmt in wide + [("planlr", "w_cylr", FMT_PCT),
+                                 ("planlr1", "w_cylr1", FMT_PCT),
+                                 ("progbasis", "w_prog", FMT_PCT)]:
+        formula(ws, f"{ss_l(key)}{tot}",
                 f'=IF({ep_t}=0,"n/a",SUMIFS({rng(fld, n)}{crit(*dims)})/{ep_t})',
-                fmt=fmt, align=ALIGN_C, bold=(cc in (27, 32)), fill=steel_fill())
-    for cc, fld in ((18, "ntaken"), (19, "nplanned")):
-        formula(ws, ws.cell(row=tot, column=cc).coordinate,
-                f'=SUMIFS({rng(fld, n)}{crit(*dims)})', fmt=FMT_INT, align=ALIGN_C,
+                fmt=fmt, align=ALIGN_C, bold=(key in ("planlr", "planlr1")),
                 fill=steel_fill())
-    formula(ws, f"AB{tot}",
-            f'=IF($B${tot}=0,"",($AA{tot}-$W{tot}*$X{tot}*$Y{tot}*$Z{tot})*100)',
+    for key in ("ntaken", "nplanned"):
+        formula(ws, f"{ss_l(key)}{tot}",
+                f'=SUMIFS({rng(key, n)}{crit(*dims)})', fmt=FMT_INT, align=ALIGN_C,
+                fill=steel_fill())
+    formula(ws, f'{ss_l("mix")}{tot}',
+            f'=IF($B${tot}=0,"",(${ss_l("planlr")}{tot}-{_ss_chain(tot)})*100)',
             fmt=PTS, align=ALIGN_C, fill=steel_fill())
-    formula(ws, f"AI{tot}", f'=IF($B${tot}=0,"",($AH{tot}-$AA{tot})*100)', fmt=PTS,
-            align=ALIGN_C, bold=True, fill=steel_fill())
+    formula(ws, f'{ss_l("proggap")}{tot}',
+            f'=IF($B${tot}=0,"",(${ss_l("progbasis")}{tot}-${ss_l("planlr")}{tot})*100)',
+            fmt=PTS, align=ALIGN_C, bold=True, fill=steel_fill())
     ctx.define("bk_ss_ep", "State Summary", f"$B${tot}", "State Summary total EP in view")
-    ctx.define("bk_ss_lr", "State Summary", f"$AA${tot}", "State Summary total plan LR")
-    ctx.define("bk_ss_prog", "State Summary", f"$AH${tot}",
+    ctx.define("bk_ss_lr", "State Summary", f'${ss_l("planlr")}${tot}',
+               "State Summary total plan LR")
+    ctx.define("bk_ss_prog", "State Summary", f'${ss_l("progbasis")}${tot}',
                "State Summary total program-basis plan LR")
 
     notes = [

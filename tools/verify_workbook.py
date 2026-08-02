@@ -37,6 +37,7 @@ import openpyxl
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src import engine  # noqa: E402
+from src.sheets_main import ss_c, ss_l  # noqa: E402
 from src.build_workbook import (  # noqa: E402
     Layout as L, SHEETS, _bu, degenerate_combo, load_config, output_path,
     sample_lr_rows, sample_mod_rows, sample_rate_rows, sample_seasonality_rows,
@@ -95,6 +96,16 @@ def name_cell(wb, name: str):
 
 def nval(wb, name: str):
     return name_cell(wb, name).value
+
+
+def _ss_chain(ss, r):
+    """The State Summary's VISIBLE bridge product for row r.
+
+    Read through the shared column map (D90) rather than by letter: the
+    exhibit reordered once, and a hard-coded W:Z would have gone on
+    multiplying four cells that were no longer the bridge."""
+    return (ss[f"{ss_l('lrcur')}{r}"].value * ss[f"{ss_l('arate')}{r}"].value
+            * ss[f"{ss_l('amod')}{r}"].value * ss[f"{ss_l('aother')}{r}"].value)
 
 
 def checks_pass(wb, name: str = "ck_overall") -> bool:
@@ -368,7 +379,9 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
         wcrl = sum(ep * om.crl_ind for ep, om in rows_) / eps
         wecy = sum(ep * om.e_cy[p] for ep, om in rows_) / eps
         r = 8 + si
-        for colL, exp in (("B", eps), ("T", wcrl), ("U", wecy), ("AA", w27), ("AF", w28)):
+        for key, exp in (("ep", eps), ("crl", wcrl), ("ecy", wecy),
+                         ("planlr", w27), ("planlr1", w28)):
+            colL = ss_l(key)
             if not approx(ss[f"{colL}{r}"].value, exp, 1e-6):
                 bad += 1
                 if bad <= 4:
@@ -381,20 +394,19 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
           f"{bad} mismatches")
     tot_row = 8 + len(cfg.states) + 3 + 1   # 3 live-roster spare rows (D42)
     check("State Summary (All): total row EP-weighted correctly",
-          approx(ss[f"AA{tot_row}"].value, tot_l27 / tot_ep, 1e-9)
-          and approx(ss[f"AF{tot_row}"].value, tot_l28 / tot_ep, 1e-9)
+          approx(ss[f"{ss_l('planlr')}{tot_row}"].value, tot_l27 / tot_ep, 1e-9)
+          and approx(ss[f"{ss_l('planlr1')}{tot_row}"].value, tot_l28 / tot_ep, 1e-9)
           and approx(ss[f"B{tot_row}"].value, tot_ep, 1e-6))
     # D61: the visible bridge chain reproduces the engine on single-combo rows
     bad = 0
     for si, state in enumerate(_states(cfg)):
         r = 8 + si
         rows_ = [(ep, om) for (bu, s), (ep, om) in results.items() if s == state]
-        prod = (ss[f"W{r}"].value * ss[f"X{r}"].value * ss[f"Y{r}"].value
-                * ss[f"Z{r}"].value)
+        prod = _ss_chain(ss, r)
         exact = (sum(ep * om.cy_lr_p for ep, om in rows_)
                  / sum(ep for ep, _ in rows_))
         # more than one BU per state in the All view -> mix is real and shown
-        mix = ss[f"AB{r}"].value
+        mix = ss[f"{ss_l('mix')}{r}"].value
         if len(rows_) > 1:
             if not approx(mix, (exact - prod) * 100.0, 1e-9):
                 bad += 1
@@ -732,9 +744,10 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
                   for x in lr_rows if x["state"] == net_combo["state"]]
         exp_prog = (sum(ep * engine.program_basis_plan_lr(p, c)[0] for ep, c in rows_s)
                     / sum(ep for ep, _ in rows_s))
+        got_prog = ss[f"{ss_l('progbasis')}{sr}"].value
         check("[program basis] State Summary shows the EP-weighted program LR",
-              approx(ss[f"AH{sr}"].value, exp_prog, 1e-9),
-              f"wb={ss[f'AH{sr}'].value} oracle={exp_prog}")
+              approx(got_prog, exp_prog, 1e-9),
+              f"wb={got_prog} oracle={exp_prog}")
 
     # live dimension lists (D42): _lists uniques match the seeded roster
     ls = wb["_lists"]
@@ -1081,23 +1094,24 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
             r = 8 + si
             om = engine.run_bridge(p, combo_of(fbu, state), "monthly")
             row_lr = next(x for x in lr_rows if x["bu"] == fbu and x["state"] == state)
-            for colL, exp in (("B", row_lr["ep"]), ("AA", om.cy_lr_p),
-                              ("AF", om.cy_lr_p1), ("T", om.crl_ind),
-                              ("U", om.e_cy[p])):
+            for key, exp in (("ep", row_lr["ep"]), ("planlr", om.cy_lr_p),
+                             ("planlr1", om.cy_lr_p1), ("crl", om.crl_ind),
+                             ("ecy", om.e_cy[p])):
+                colL = ss_l(key)
                 if not approx(ss[f"{colL}{r}"].value, exp, 1e-6):
                     bad += 1
             log = sorted([rr for rr in rate_rows
                           if rr["bu"] == fbu and rr["state"] == state],
                          key=lambda rr: rr["eff"])
             n_tk = sum(1 for rr in log if rr["status"] == "taken")
-            if (ss[f"R{r}"].value or 0) != n_tk:
+            if (ss[f"{ss_l('ntaken')}{r}"].value or 0) != n_tk:
                 bad += 1
-            if (ss[f"S{r}"].value or 0) != len(log) - n_tk:
+            if (ss[f"{ss_l('nplanned')}{r}"].value or 0) != len(log) - n_tk:
                 bad += 1
             for j, rr in enumerate(log[:4]):
-                d = ss.cell(row=r, column=6 + j * 3).value
-                v = ss.cell(row=r, column=7 + j * 3).value
-                tok = ss.cell(row=r, column=8 + j * 3).value
+                d = ss.cell(row=r, column=ss_c(f"chg{j + 1}_date")).value
+                v = ss.cell(row=r, column=ss_c(f"chg{j + 1}_pct")).value
+                tok = ss.cell(row=r, column=ss_c(f"chg{j + 1}_tok")).value
                 eff_pct = rr["filed"] * ((1.0 if rr["achievement"] is None
                                           else rr["achievement"])
                                          if rr["status"] == "planned" else 1.0)
@@ -1111,8 +1125,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
                 if tok != exp_tok:
                     bad += 1
             # single-BU rows are single-combo: the plan LR must BE the product
-            prod = (ss[f"W{r}"].value * ss[f"X{r}"].value * ss[f"Y{r}"].value
-                    * ss[f"Z{r}"].value)
+            prod = _ss_chain(ss, r)
             if not approx(prod, om.cy_lr_p, 1e-9):
                 bad += 1
         check(f"[State Summary {fbu}] rows, totals, rate slots, and status tokens tie",
@@ -1195,8 +1208,9 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
         if zz_row:
             check("[rename] ZZ row EP and CY LR tie the renamed combo",
                   approx(ss[f"B{zz_row}"].value, ren_row["ep"], 1e-6)
-                  and approx(ss[f"AA{zz_row}"].value, ren_m.cy_lr_p, 1e-9),
-                  f"EP={ss[f'B{zz_row}'].value} LR={ss[f'AA{zz_row}'].value}")
+                  and approx(ss[f"{ss_l('planlr')}{zz_row}"].value,
+                             ren_m.cy_lr_p, 1e-9),
+                  f"EP={ss[f'B{zz_row}'].value}")
     run("in-book rename BU/state", muts, a9f)
 
     # 9g. Net Delivery exercises (D57)
@@ -1715,7 +1729,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
               f"wb={nval(wb, 'nr_CYLR_P')} oracle={m_pm1.cy_lr_p}")
         check(f"[plan year {pm1}] E_CY ties oracle",
               approx(nval(wb, "nr_ECY_P"), m_pm1.e_cy[pm1], 1e-9))
-        ss_hdr = wb["State Summary"].cell(row=7, column=27).value
+        ss_hdr = wb["State Summary"].cell(row=7, column=ss_c("planlr")).value
         check(f"[plan year {pm1}] State Summary header relabels live",
               ss_hdr == f"=  CY {pm1} plan LR", str(ss_hdr))
         pf_hdr = wb["Portfolio"].cell(row=L.PF_HDR, column=7).value

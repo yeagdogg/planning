@@ -12,10 +12,12 @@ simultaneously on the Portfolio sheet. The policy term is a workbook-level param
 Marine ships as the 6-month-term example).
 
 **Key exhibits and options:**
-- **State Summary** — the leadership exhibit: one row per state (adjusted EP, mods, chronological
-  rate-change history, engine results, CY P and P+1 plan LR) with a BU filter whose "All" view
-  combines business units on **adjusted-plan-EP weights** (the EP column is the weight behind
-  every aggregate in the book — enter adjusted EP there).
+- **State Summary** — the leadership exhibit: one row per state, ordered so it answers before it
+  documents (D90). Adjusted EP, mods and engine levels, then the bridge read left to right —
+  Projected LR × rate earn-in × mod drift × other adj **= Plan LR** — all inside the first screen;
+  the chronological rate-change history, the P+1 view and the net-selection block follow. A BU
+  filter whose "All" view combines business units on **adjusted-plan-EP weights** (the EP column
+  is the weight behind every aggregate in the book — enter adjusted EP there).
 - **Default net trend for P+1** on Control, inherited wherever a combo's trend cell is blank;
   per-state entries override.
 - **Optional net rate selection** per BU × state (DECISIONS.md D39): declare the year-over-year
