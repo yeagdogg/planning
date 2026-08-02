@@ -1631,8 +1631,18 @@ def build_readme(ctx: Ctx):
     notes_ = [
         "Percentages are stored as decimal fractions (5.0% = 0.05) and formatted as percents.",
         "No VBA or macros anywhere. No merged cells. No external links. No volatile "
-        "functions. Automatic calculation. Classic formula mode: only Excel-2007-era "
-        "functions, so the file recalculates in LibreOffice and any corporate Excel build.",
+        "functions. Classic formula mode: only Excel-2007-era functions, so the file "
+        "recalculates in LibreOffice and any corporate Excel build.",
+        # Excel's calculation mode is a SESSION property taken from the first
+        # workbook opened, so this file cannot fully guarantee its own. It ships
+        # with fullCalcOnLoad set, which forces a rebuild on open regardless —
+        # but a reader who opens it in a manual-mode session and sees something
+        # implausible deserves to know the escape hatch (D88).
+        "This workbook is set to recalculate fully when it opens. If figures ever look "
+        "frozen — you change an input and nothing moves — check Formulas > Calculation "
+        "Options is on Automatic, and press Ctrl+Alt+F9 to force a full rebuild. Excel "
+        "takes its calculation mode from the FIRST workbook opened in a session, not "
+        "from this one.",
         "Sheets are NOT protected (an intentional choice — the Checks panel is the integrity "
         "mechanism; protection without passwords would add friction without security).",
         # (3) quotes the figure at the precision the Bridge actually DISPLAYS

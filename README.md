@@ -69,11 +69,14 @@ tests/test_mod_solve.py    inverting the mod step for a target plan LR (D73)
 tests/test_harvest.py      harvester refusals and provenance parsing (D66)
 tests/test_layout.py       Layout geometry (incl. the D56 dual-module guard)
 tests/test_style.py        prose row-height calibration (nothing may clip)
+tests/test_carry.py        carry-forward round trip + the sample-data detector (D82)
+tests/test_recalc.py       date serials and the calc-settings patch (D86/D88)
 tools/recalc.py            headless recalculation (Excel COM, LibreOffice fallback)
 tools/verify_workbook.py   verification harness: static scans, oracle ties, toggle exercises
 tools/harvest.py           reads the six recalculated workbooks' published per-combo rows
 tools/build_book.py        harvest -> the combined book workbook
 tools/verify_book.py       book harness: harvest ties, aggregation ties, filter exercises
+tools/release.py           the whole pipeline in one tiered, parallel command (D87)
 output/Plan_LR_Workbook_2027_<LOB>.xlsx   one generated workbook per LOB (values cached)
 output/Plan_LR_Book_2027.xlsx             the combined book, harvested from all six
 DECISIONS.md               every judgment call and why
@@ -111,6 +114,34 @@ LibreOffice was not installed on the build machine; Excel 16.0 via COM was used 
 verification. Classic formula mode (Excel-2007-era functions only) is used throughout, so the
 workbook also recalculates in LibreOffice and any corporate Excel build.
 
+## The whole pipeline, one command
+
+A full regeneration used to be nine manual invocations — build, six recalcs, build the book,
+recalculate it — with both builders ending by telling you to go run the next one. Skipping the
+book rebuild fails *silently*: it keeps showing last month's numbers. So there is a driver
+(D87):
+
+```bash
+python tools/release.py --quick
+```
+
+Three tiers, because verification cost is wildly uneven:
+
+| tier | does | cost |
+|---|---|---|
+| `--smoke` | pytest only | seconds |
+| `--quick` | build + recalc + book + harness phases A–C | ~1 min per line |
+| `--full` | adds phase D (mutate → recalc → tie to oracle) | ~7 min per line |
+
+Lines run as parallel subprocesses, each with its own Excel instance and scratch directory. The
+width is capped by tier and the caps are low on purpose — 2 for `--full`, 4 for `--quick` —
+because phase D loads a whole recalculated workbook (865k cells) into memory per exercise on
+top of an Excel instance per line. Over-committing does not fail cleanly: at six concurrent
+lines COM returned "the interface is unknown" and, once, a line whose mutation had *silently
+not been applied*. The harness now re-reads every mutated cell before asserting anything. It
+refuses to start if `~$*.xlsx` lock files show a
+workbook is open in Excel, and takes `--carry-forward` to rebuild around your existing inputs.
+
 ## Verify
 
 ```bash
@@ -126,10 +157,12 @@ tied to a per-combo oracle run (9 metrics each); solver round-trip (+5.0% at 4/1
 intact and no legend overlapping its plot after the Excel resave; scenario, attribution,
 seasonality, basis, mod-toggle,
 degenerate-input, stepped-mod, and plan-year-change exercises each tied to fresh oracle runs. At last run:
-Property **277 checks / 0 failed** (full), the other five LOB files 94 (or 92 for the
-6-month-term Inland Marine) / 0 failed each (phases A–C), the combined book **56 / 0**
-(`tools/verify_book.py` — including the source-freshness phase), pytest 274/274. Each verify
-run now works in its own temporary scratch directory, so LOBs can be verified in parallel.
+**every line at full phase D**: Property, General Liability, Commercial Auto, Workers Comp
+and Umbrella **286 checks / 0 failed** each, the 6-month-term Inland Marine **284 / 0**, and
+the combined book **56 / 0** (`tools/verify_book.py`, including the source-freshness phase).
+pytest 282/282. Each verify run works in its own temporary scratch directory, so lines can be
+verified in parallel — see the release driver above for the concurrency caps and why they are
+where they are.
 
 **Recalculation cost, measured** (Excel `CalculateFullRebuild`, whole workbook, median of 3):
 **0.36 s**. Worth stating because the shape of the file invites the opposite assumption — the

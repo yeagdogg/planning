@@ -753,13 +753,55 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
 
 
 def _mutate(src: Path, scratch: Path, mutations: dict[tuple[str, str], object]) -> Path:
+    """Copy, apply the mutations with openpyxl, recalculate in Excel (D86a).
+
+    The mutations were briefly written through COM during Excel's own open,
+    which is ~31% faster per exercise. It was reverted: under the parallel
+    release driver (six Excel instances at once) COM destabilises, and the
+    failure mode is not always an exception — one line came back with a full set
+    of assertion failures whose "actual" values were the workbook's DEFAULT
+    state, i.e. the mutation had silently not been applied. A verification
+    harness that can quietly fail to set up its own exercise could just as
+    easily report a false PASS, so this path is deterministic on purpose:
+    openpyxl writes the cells in-process, and only the recalculation crosses
+    into COM, where a failure raises rather than lies.
+
+    ``_assert_applied`` closes the remaining gap for both paths.
+    """
     shutil.copy2(src, scratch)
     wb = openpyxl.load_workbook(scratch, data_only=False)
     for (sheet, addr), value in mutations.items():
         wb[sheet][addr] = value
     wb.save(scratch)
-    recalc(scratch)
+    recalc(scratch, keep_calc_settings=False)
+    _assert_applied(scratch, mutations)
     return scratch
+
+
+def _assert_applied(scratch: Path, mutations: dict[tuple[str, str], object]) -> None:
+    """Fail loudly if a mutation did not survive into the recalculated file.
+
+    Cheap insurance against the whole class of setup failures — a swallowed COM
+    error, a read-only save, a stale handle — where the exercise proceeds to
+    assert against a workbook that is not in the state it thinks it is.
+    """
+    wb = openpyxl.load_workbook(scratch, data_only=True)
+    try:
+        for (sheet, addr), want in mutations.items():
+            got = wb[sheet][addr].value
+            if isinstance(want, dt.date) and isinstance(got, dt.datetime):
+                got = got.date()
+            if isinstance(want, (int, float)) and isinstance(got, (int, float)):
+                ok = abs(float(got) - float(want)) <= 1e-9
+            else:
+                ok = got == want
+            if not ok:
+                raise RuntimeError(
+                    f"mutation did not take: {sheet}!{addr} is {got!r}, expected "
+                    f"{want!r} — the exercise would have asserted against the wrong "
+                    f"workbook state")
+    finally:
+        wb.close()
 
 
 def _read(scratch: Path):
@@ -784,11 +826,27 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
         row = next(r for r in lr_rows if r["bu"] == bu and r["state"] == state)
         return sample_to_combo(cfg, lob, row, rate_rows, mod_rows, **kw)
 
+    # Each distinct mutation STATE is built once and kept (D87). Several
+    # exercises apply byte-identical mutation dicts — the master mod toggle is
+    # switched off by three of them, the net-selection showcase by two, the
+    # degenerate combo by both the selector loop and its own exercise — and each
+    # was paying a full copy + Excel round trip to rebuild a file it already had.
+    # Assertions are unchanged and all still run; only the rebuilding is shared.
+    # The error scan rides with the build because a repeated state scans the same.
+    states: dict[tuple, Path] = {}
+
     def run(label_, mutations, assertions):
-        _mutate(path, scratch, mutations)
-        wb = _read(scratch)
-        errs = scan_errors(wb)
-        check(f"[{label_}] zero formula errors", not errs, "; ".join(errs[:5]))
+        sig = tuple(sorted((s, a, repr(v)) for (s, a), v in mutations.items()))
+        cached = states.get(sig)
+        if cached is None:
+            cached = scratch_dir / f"ex{len(states):02d}.xlsx"
+            _mutate(path, cached, mutations)
+            states[sig] = cached
+            wb = _read(cached)
+            errs = scan_errors(wb)
+            check(f"[{label_}] zero formula errors", not errs, "; ".join(errs[:5]))
+        else:
+            wb = _read(cached)
         assertions(wb)
 
     # 1. master mod toggle OFF
@@ -843,23 +901,45 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
                   approx(nval(wb, "nr_CYLR_P"), se_off_m.cy_lr_p, 1e-9))
         run(f"{se_state} seasonality OFF", {("Control", "C8"): se_state}, a4b)
 
-    # 5. selector subsample: every BU x first 3 states + every showcase combo
-    picks = {(bu, s) for bu in cfg.business_units for s in st[:3]}
-    for special in [(_bu(cfg, 1), st[1] if len(st) > 1 else st[0]),
-                    (_bu(cfg, 1), st[2] if len(st) > 2 else st[0]),
-                    (_bu(cfg, 0), st[3] if len(st) > 3 else st[0]),
-                    (_bu(cfg, 0), st[5] if len(st) > 5 else st[0]),
-                    (_bu(cfg, 2), st[6] if len(st) > 6 else st[0]),
-                    (_bu(cfg, 2), st[8] if len(st) > 8 else st[0]),  # net-selection showcase
-                    degenerate_combo(cfg)]:
-        picks.add(special)
-    for bu, state in sorted(picks):
+    # 5. selector subsample.
+    #
+    # Phase C already ties EVERY combo (9 metrics each) through the _calc results
+    # table, so what is left to prove here is the LIVE wiring — Control -> the
+    # nr_* INDEX/MATCH resolvers -> the Bridge — which is written independently
+    # of _calc's per-row formulas. That is a property of the resolver, not of the
+    # key, so 14 picks of the same shape re-proved one path 14 times at ~12s
+    # each. Pick by what actually makes a combo DIFFERENT to the resolver, and
+    # spend the saved round trips on depth instead: every pick now ties the whole
+    # factor chain rather than the headline alone (D87).
+    def _find(pred):
+        return next(((r["bu"], r["state"]) for r in lr_rows if pred(r)), None)
+
+    deg = degenerate_combo(cfg)
+    picks, why = [], {}
+    for reason, got in (
+            ("plain", (_bu(cfg, 0), st[1] if len(st) > 1 else st[0])),
+            ("other-adj", _find(lambda r: (r["a_other"] or 1) != 1)),
+            ("mod anchors", _find(lambda r: r["m_prior"] is not None or r["m2"] is not None)),
+            ("net selection", _find(lambda r: r.get("netp") is not None)),
+            ("mod actions", _find(lambda r: any(
+                m["bu"] == r["bu"] and m["state"] == r["state"] for m in mod_rows))),
+            ("proposed basis", _find(lambda r: r["basis"] == "proposed")),
+            ("mod adj OFF", _find(lambda r: r["modadj"] == "OFF")),
+    ):
+        # the degenerate combo has exercise 6 to itself, with a stronger assertion
+        if got and got != deg and got not in picks:
+            picks.append(got)
+            why[got] = reason
+    for bu, state in picks:
         om = engine.run_bridge(p, combo_of(bu, state), "monthly")
 
-        def a5(wb, om=om, bu=bu, state=state):
-            check(f"[selector {bu}|{state}] Bridge ties oracle",
-                  approx(nval(wb, "nr_CYLR_P"), om.cy_lr_p, 1e-9),
-                  f"wb={nval(wb, 'nr_CYLR_P')} oracle={om.cy_lr_p}")
+        def a5(wb, om=om, bu=bu, state=state, reason=why[(bu, state)]):
+            tag = f"selector {bu}|{state} ({reason})"
+            for name, want in (("nr_CYLR_P", om.cy_lr_p), ("nr_CYLR_P1", om.cy_lr_p1),
+                               ("nr_Arate_P", om.a_rate_p), ("nr_Amod_P", om.a_mod_p),
+                               ("nr_ECY_P", om.e_cy[p]), ("nr_MEarned_P", om.m_earned[p])):
+                check(f"[{tag}] {name} ties oracle", approx(nval(wb, name), want, 1e-9),
+                      f"wb={nval(wb, name)} oracle={want}")
         run(f"selector {bu}|{state}",
             {("Control", "C7"): bu, ("Control", "C8"): state}, a5)
 

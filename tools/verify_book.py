@@ -202,7 +202,7 @@ def phase_d(path: Path, cfg, book, scratch_dir: Path):
         ctl = wb["Control"]
         ctl["B7"], ctl["B8"], ctl["B9"] = lob, bu, state
         wb.save(scratch)
-        recalc(scratch)
+        recalc(scratch, keep_calc_settings=False)   # throwaway copy (D88)
         got = openpyxl.load_workbook(scratch, data_only=True)
         errs = scan_errors(got)
         check(f"[{label_}] zero formula errors", not errs, "; ".join(errs[:3]))
