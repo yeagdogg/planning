@@ -31,7 +31,8 @@ import openpyxl
 
 from src.build_workbook import (GENERATOR_VERSION, Layout as L, load_config,
                                 output_path)
-from src.sheets_calc import BOOK_PUB, BOOK_SLOTS, FLOW_PUB, PROG_LR, W_AOTHER_COL
+from src.sheets_calc import (BOOK_PUB, BOOK_SLOTS, FLOW_PUB, PROG_LR,
+                             TARGET_PUB, W_AOTHER_COL)
 
 # scalar per-combo fields: field name -> column index on the results table
 SCALARS = {
@@ -39,7 +40,7 @@ SCALARS = {
     "mbar_p": 7, "mbar_p1": 8, "arate_p": 9, "arate_p1": 10, "amod_p": 11,
     "amod_p1": 12, "lrcur": 13, "cylr_p": 14, "cylr_p1": 15, "echg": 16,
     "carry": 17, "aother": 18, "trend": 19, "state": 20, "bu": 21, "ep": 22,
-    "m_ind_w": 23, "m0_w": 24, "m1_w": 25,
+    "m_ind_w": 23, "m0_w": 24, "m1_w": 25, "target_w": 152,
     "netmode": 37, "netx": 38,
     "modeff": FLOW_PUB["modeff"], "avg_rate": FLOW_PUB["avg_rate"],
     "avg_mod": FLOW_PUB["avg_mod"], "avg_del": FLOW_PUB["avg_del"],
@@ -51,7 +52,12 @@ SCALARS = {
 # 12-month families: field name -> first column index
 MONTHLY = {"delivered": FLOW_PUB["delivered"], "rate": FLOW_PUB["rate"],
            "mod": FLOW_PUB["mod"], "epw": FLOW_PUB["epw"]}
-LAST_COL = BOOK_PUB["slot"] + BOOK_SLOTS * 3 - 1
+# The widest published column this harvester reads. It used to be exactly the
+# end of the Book's slot block; D96 appended the EP-weighted target beyond the
+# prior-year block, so take the max rather than assuming the last block added is
+# the rightmost one. Reading a few dozen extra cells per row costs nothing; a
+# silent IndexError on a column that IS published costs a release.
+LAST_COL = max(BOOK_PUB["slot"] + BOOK_SLOTS * 3 - 1, *TARGET_PUB.values())
 
 # A row is only usable if these carry cached values. None means one of two
 # things, and both must stop the harvest: the workbook was never recalculated,

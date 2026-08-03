@@ -30,6 +30,11 @@ Marine ships as the 6-month-term example).
   trend step. The walk's weighted mean sits a few basis points from the CY headline and the
   tab **discloses that gap rather than forcing a tie**, decomposed into rate×price covariance,
   Jensen convexity, and a centre-of-gravity tilt that is zero for an annual term (D93).
+- **Target loss ratio** per BU × state — the LR that earns the profit provision. Deliberately
+  **reference-only**: no engine formula reads it and no check passes or fails on it, because
+  whether a combo makes target depends on expenses and mix this workbook does not carry. What
+  it gets is the gap in points on the Bridge, and the dashed reference line on the LR Flow
+  chart, which defaults to the selected combo's own target (D96).
 - **Default net trend for P+1** on Control, inherited wherever a combo's trend cell is blank;
   per-state entries override.
 - **Optional net rate selection** per BU × state (DECISIONS.md D39): declare the year-over-year
@@ -173,11 +178,14 @@ tied to a per-combo oracle run (9 metrics each); solver round-trip (+5.0% at 4/1
 intact and no legend overlapping its plot after the Excel resave; every month of the LR Flow
 walk tied to a fresh oracle run, with its residual decomposition required to reproduce its
 own weighted mean; scenario, attribution, seasonality, basis, mod-toggle,
-degenerate-input, stepped-mod, and plan-year-change exercises each tied to fresh oracle runs. At last run:
-**every line at full phase D**: Property, General Liability, Commercial Auto, Workers Comp
-and Umbrella **308 checks / 0 failed** each, the 6-month-term Inland Marine **306 / 0**, and
-the combined book **56 / 0** (`tools/verify_book.py`, including the source-freshness phase).
-pytest 304/304. Excel's COM layer is intermittently flaky under this load and no in-process
+degenerate-input, stepped-mod, and plan-year-change exercises each tied to fresh oracle runs.
+
+At v3.5.3, verification is PARTIAL and this line says so rather than inheriting the last
+green claim: **Property at full phase D, 314 checks / 0 failed**, and the combined book
+**56 / 0** (`tools/verify_book.py`, including the source-freshness phase). The other five
+lines are built and recalculated from the same source but their phase D has not been re-run
+since the D98 fix — run `python tools/release.py --full --skip-build` to close that gap.
+pytest 310/310. Excel's COM layer is intermittently flaky under this load and no in-process
 retry clears it, so the driver retries the book steps in FRESH processes and re-runs serially
 any line that was killed outright rather than failing an assertion (D92); the book is also
 verified BEFORE the fan-out rather than in its exhaust (D94).
@@ -307,7 +315,7 @@ a timestamped `.bak.xlsx` is written before anything is overwritten.
    --carry-forward` (bare, so each LOB carries from its own file), then run the recalc tool.
 3. Update what actually changed for the new year — projected LRs, the rate program, mod
    actions — rather than re-keying the whole book. Each dataset is one contiguous paste
-   block (`tbl_LR` columns A:S, `tbl_RateLog` A:H, `tbl_ModLog` A:G; keys and engine helpers
+   block (`tbl_LR` columns A:T, `tbl_RateLog` A:H, `tbl_ModLog` A:G; keys and engine helpers
    sit to the right, behind a blank spacer column, and recalculate on their own — so
    Ctrl+Shift+Right stops at the edge of what you may edit and a paste one column too wide
    lands in dead space rather than on the key formulas). Default capacities per workbook:
@@ -364,12 +372,12 @@ is honest and shows you what a warning looks like.
   nothing downstream contradicts it. Date bounds follow `nr_PlanYear` rather than the year
   the file was generated in, so rolling the plan year forward does not leave a validation
   rejecting dates the engine accepts.
-- **Charts are framed on their data, not on zero** (D91). Excel's automatic axis minimum is
-  zero, which is right for premium and wrong for levels: a bridge walking 65% to 63% drew five
-  columns of identical height with the whole story in the top 2% of the plot. An Excel axis
-  bound is a static number, so the window is computed at build time across **every combo the
-  exhibit can be switched to** — and two Checks advisories say so when a paste moves the book
-  outside it, because an off-the-edge chart looks broken rather than stale.
+- **Chart axes are Excel's automatic ones** (D99, reverting D91). v3.4.3 framed the loss-ratio
+  and index charts on their data instead of on zero, because a bridge walking 65% to 63% draws
+  five columns of near-identical height. The argument still holds, but a baked window read worse
+  in practice and an Excel axis bound is a static number that cannot follow a paste — so the
+  charts are back on the automatic axis and are adjusted by hand where it matters. Nothing in
+  the generator sets an axis bound.
 - **The build refuses to emit a malformed formula** (D89). One unbalanced parenthesis makes
   the entire file unopenable, and Excel reports it only from the recalculation step, minutes
   later, as `Open method of Workbooks class failed` — naming no sheet and no cell.

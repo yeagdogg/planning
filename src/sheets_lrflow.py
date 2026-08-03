@@ -34,7 +34,7 @@ from .xlstyle import (
     FMT_IDX, FMT_MOD, FMT_PCT, FMT_PTS_COL, F_LABEL, F_SMALL_IT, GREY_DARK,
     NAVY, STEEL, chart_legend, col, dv_decimal, font, formula, header_row,
     input_cell, jump, label, link, nav_bar, presentation_setup, print_setup,
-    put, quote_sheet, section, set_widths, title, zoom_axis,
+    put, quote_sheet, section, set_widths, title,
 )
 
 RE = quote_sheet(SHEETS.RATE_ENGINE)
@@ -110,9 +110,14 @@ def build_lr_flow(ctx: Ctx):
          f'=IF(NOT(ISNUMBER(lrf_tstar)),"n/a",(nr_Trend-lrf_tstar)*100)',
          FMT_PTS_COL, None,
          "Negative = earn-in is ahead. Positive = trend is ahead."),
-        ("Target loss ratio to plot (optional)", None, FMT_PCT, "lrf_target",
-         "Draws a reference line on the chart and fills the 'vs target' column. Blank = "
-         "no line."),
+        ("Target loss ratio to plot (blank = this combo's own target)", None,
+         FMT_PCT, "lrf_target_in",
+         "Defaults to the combo's Target loss ratio from tbl_LR (D96). Type a value "
+         "here only to plot something else — a stretch target, or a book-level "
+         "benchmark."),
+        ("…in force", "=IF(N(lrf_target_in)=0,N(nr_TargetLR),lrf_target_in)",
+         FMT_PCT, "lrf_target",
+         "The line the chart draws and the 'vs target' column measures against."),
     ]
     for i, (lbl, f, fmt, name, note_) in enumerate(rows):
         r = 9 + i
@@ -126,21 +131,21 @@ def build_lr_flow(ctx: Ctx):
         if name:
             ctx.define(name, SHEETS.LR_FLOW, f"$C${r}", lbl)
         put(ws, f"E{r}", note_, fnt=F_SMALL_IT)
-    dv_decimal(ws, [f"C{9 + 3}"], 0, 3,
+    dv_decimal(ws, [ws[f"C{9 + 3}"].coordinate], 0, 3,
                "Enter the target as a decimal fraction — 0.65 for a 65% loss ratio.")
 
-    put(ws, "A13",
+    put(ws, "A14",
         f"Trend is anchored at 7/1 of the plan year (month {LR_FLOW_ANCHOR} of 12), which is "
         "the only anchor at which the plan-year walk averages to the headline AND next "
         "year's walk averages to the headline's single trend step. The mod leg is "
         "suspended under a net selection — the net path already combines rate and price.",
         fnt=F_SMALL_IT)
-    formula(ws, "A14",
+    formula(ws, "A15",
             '=IF(nr_NetMode,"NET SELECTION ACTIVE: the rate column carries the combined '
             'rate x price path and the mod column is pinned at 1.000 (D39).",'
             'IF(nr_ModAdjEff<>"ON","MOD ADJUSTMENT OFF: the mod column is pinned at 1.000 '
             '— the walk is rate and trend only.",""))')
-    ws["A14"].font = font(FAIL_RED, size=9, italic=True)
+    ws["A15"].font = font(FAIL_RED, size=9, italic=True)
 
     # ---- the walk -----------------------------------------------------------
     section(ws, 16, "A", "Month by month — the plan year and the one after it")
@@ -316,10 +321,6 @@ def build_lr_flow(ctx: Ctx):
     t.graphicalProperties.line.dashStyle = "dash"
     t.marker = Marker(symbol="none")
     t.smooth = False
-    # framed on the walk itself, not on zero — this is a LEVELS chart and the
-    # whole point is the slope (D91)
-    lo, hi = ctx.lay_dyn["axis"]["lr"]
-    zoom_axis(lc, lo, hi, step=0.05)
     chart_legend(lc)
     ws.add_chart(lc, "O5")
 

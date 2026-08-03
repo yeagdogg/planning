@@ -53,22 +53,112 @@ def _com_init() -> None:
         _COM_READY = True
 
 
-def _excel():
-    """The shared Excel application object, started on first use."""
+# Excel says "I am busy" with these, and they mean exactly that: the instance is
+# HEALTHY and has not finished the last thing it was asked to do (D100).
+RPC_E_CALL_REJECTED = -2147418111        # 0x80010001
+RPC_E_SERVERCALL_RETRYLATER = -2147417846  # 0x8001010A
+_BUSY = (RPC_E_CALL_REJECTED, RPC_E_SERVERCALL_RETRYLATER)
+
+
+def _is_busy(exc) -> bool:
+    """True for a COM 'callee is busy' rejection, false for every real fault."""
+    import pywintypes
+    return (isinstance(exc, pywintypes.com_error)
+            and exc.args and exc.args[0] in _BUSY)
+
+
+def _set_cell(wb, sheet: str, addr: str, value) -> None:
+    """One mutation, as a single callable so busy_retry can wrap the whole
+    chain — Worksheets() and Range() can each be rejected, not just the write."""
+    wb.Worksheets(sheet).Range(addr).Value = value
+
+
+def busy_retry(fn, *a, tries: int = 120, delay: float = 0.25, **kw):
+    """Make one COM call, waiting out Excel's busy rejections (D100).
+
+    Without this, a busy signal reaches ``recalc_with_excel``'s except clause,
+    which responds by DISCARDING the instance — the one response guaranteed to
+    make things worse. Excel's teardown outlasts its Quit() (D92), so the
+    replacement initialises while the predecessor is still dying, which is
+    precisely when the next call gets rejected too. The retry fed the failure it
+    was meant to absorb, and phase D failed the same way at 1, 2 and 4 workers.
+
+    Pumping the message queue matters as much as the sleep: a rejection is
+    delivered to this apartment as a window message, and a thread that only
+    sleeps never lets COM deliver the reply it is waiting for.
+    """
+    import time
+
+    import pythoncom
+
+    for i in range(tries):
+        try:
+            return fn(*a, **kw)
+        except Exception as e:  # noqa: BLE001 - re-raised unless it is a busy signal
+            if not _is_busy(e) or i == tries - 1:
+                raise
+            pythoncom.PumpWaitingMessages()
+            time.sleep(delay)
+
+
+def _excel(attempts: int = 6):
+    """The shared Excel application object, started on first use.
+
+    DispatchEx can return an object with NO TYPE INFO (D97). pywin32's dynamic
+    dispatch builds its method map from Excel's type library at Dispatch time;
+    when Excel is still starting, or another instance is unregistering itself
+    after a fan-out, that lookup can fail without raising — and the result is a
+    live COM object whose every attribute lookup is degraded. It answers some
+    names with AttributeError and others with the wrong type, which is why one
+    fault produced both `AttributeError: Excel.Application.CalculateFullRebuild`
+    and `'bool' object is not callable` and looked like two unrelated bugs.
+
+    The failure is at CREATION, so the check belongs there: probe the handful of
+    members this module actually calls, and if any of them will not resolve to
+    something callable, discard the instance and dispatch again. Cheaper and far
+    more precise than retrying whole subprocesses, which is what this cost
+    before the traceback was preserved and the real line became visible.
+    """
     global _XL
     import atexit
+    import time
 
     import win32com.client
 
     _com_init()
-    if _XL is None:
-        _XL = win32com.client.DispatchEx("Excel.Application")
-        _XL.Visible = False
-        _XL.DisplayAlerts = False
-        _XL.AskToUpdateLinks = False
-        _XL.EnableEvents = False
-        atexit.register(shutdown_excel)
-    return _XL
+    if _XL is not None:
+        return _XL
+    last = None
+    for attempt in range(attempts):
+        xl = None
+        try:
+            xl = win32com.client.DispatchEx("Excel.Application")
+            # the probe itself must not mistake "still starting up" for "no type
+            # info" — a fresh instance rejects calls while it initialises
+            for member in ("CalculateFullRebuild", "Quit", "Workbooks"):
+                got = busy_retry(getattr, xl, member, tries=40)
+                if not callable(got):
+                    raise AttributeError(
+                        f"Excel dispatched without usable type info: {member!r} "
+                        f"resolved to {type(got).__name__}")
+            xl.Visible = False
+            xl.DisplayAlerts = False
+            xl.AskToUpdateLinks = False
+            xl.EnableEvents = False
+            _XL = xl
+            atexit.register(shutdown_excel)
+            return _XL
+        except Exception as e:  # noqa: BLE001 - a half-built instance is no use
+            last = e
+            try:
+                if xl is not None:
+                    xl.Quit()
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(2.0 * (attempt + 1))
+    raise RuntimeError(
+        f"Excel dispatched {attempts} times without usable type info; the last "
+        f"attempt failed with: {last}") from last
 
 
 def shutdown_excel() -> None:
@@ -106,21 +196,22 @@ def recalc_with_excel(path: Path, attempts: int = 3) -> None:
         wb = None
         try:
             xl = _excel()
-            wb = xl.Workbooks.Open(str(path.resolve()), UpdateLinks=0)
-            xl.CalculateFullRebuild()
+            wb = busy_retry(lambda: xl.Workbooks.Open(str(path.resolve()),
+                                                      UpdateLinks=0))
+            busy_retry(xl.CalculateFullRebuild)
             # Excel recalculates asynchronously; wait for done (xlDone = 0).
             # Deadline-based, not a bare spin: a spin of N property reads can
             # exhaust in milliseconds and say nothing about whether the
             # calculation finished.
             deadline = time.monotonic() + 300.0
-            while xl.CalculationState != 0:
+            while busy_retry(lambda: xl.CalculationState) != 0:
                 if time.monotonic() > deadline:
                     raise RuntimeError(
                         f"Excel still calculating after 300s on {path.name}")
                 pythoncom.PumpWaitingMessages()
                 time.sleep(0.01)
-            wb.Save()
-            wb.Close(SaveChanges=False)
+            busy_retry(wb.Save)
+            busy_retry(wb.Close, SaveChanges=False)
             return
         except Exception as e:  # noqa: BLE001 - retry transient COM errors
             last_exc = e
@@ -239,22 +330,23 @@ def mutate_and_recalc(path: Path, mutations, attempts: int = 3) -> None:
         wb = None
         try:
             xl = _excel()
-            wb = xl.Workbooks.Open(str(path.resolve()), UpdateLinks=0)
+            wb = busy_retry(lambda: xl.Workbooks.Open(str(path.resolve()),
+                                                      UpdateLinks=0))
             for (sheet, addr), value in mutations.items():
-                wb.Worksheets(sheet).Range(addr).Value = com_value(value)
+                busy_retry(_set_cell, wb, sheet, addr, com_value(value))
             # Explicit full rebuild: this file descends from an Excel-saved
             # artifact, whose save clears fullCalcOnLoad, so opening it is not
             # itself a guarantee that anything recalculated.
-            xl.CalculateFullRebuild()
+            busy_retry(xl.CalculateFullRebuild)
             deadline = time.monotonic() + 300.0
-            while xl.CalculationState != 0:
+            while busy_retry(lambda: xl.CalculationState) != 0:
                 if time.monotonic() > deadline:
                     raise RuntimeError(
                         f"Excel still calculating after 300s on {path.name}")
                 pythoncom.PumpWaitingMessages()
                 time.sleep(0.01)
-            wb.Save()
-            wb.Close(SaveChanges=False)
+            busy_retry(wb.Save)
+            busy_retry(wb.Close, SaveChanges=False)
             return
         except Exception as e:  # noqa: BLE001 - retry transient COM errors
             last_exc = e
@@ -326,10 +418,21 @@ def recalc(path: str | Path, engine: str = "auto", keep_calc_settings=True) -> s
             errors["libreoffice"] = e
             if engine == "libreoffice":
                 raise
+    # Keep the TRACEBACK, not just str(e) (D97). This message has been the only
+    # evidence for four separate COM failures in one session, and str(e) on a
+    # COM error names neither the call that raised nor the line — which is how a
+    # TypeError reading "'bool' object is not callable" got diagnosed three
+    # different wrong ways. A few extra lines of output cost nothing; guessing
+    # from a bare error string cost several 40-minute runs.
+    import traceback as _tb
+    detail = []
+    for k, e in errors.items():
+        tb = "".join(_tb.format_exception(type(e), e, e.__traceback__))
+        detail.append("--- " + k + " ---\n" + tb.rstrip())
     raise RuntimeError(
-        "No recalculation engine available. Tried: "
-        + "; ".join(f"{k}: {v}" for k, v in errors.items())
-        + ". Open the file once in Excel manually, save, and re-run verification."
+        f"No recalculation engine available for {path.name}. "
+        "Open the file once in Excel manually, save, and re-run verification.\n"
+        + "\n".join(detail)
     )
 
 

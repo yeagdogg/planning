@@ -93,7 +93,8 @@ WEIGHTED = [("w_crl", "crl"), ("w_ecy", "ecy_p"), ("w_mbar", "mbar_p"),
             ("w_amod1", "amod_p1"), ("w_prog", "cylr_prog"),
             ("w_prog1", "cylr1_prog")]
 # harvested EP-weighted mods (the raw per-combo mods are not published)
-WEIGHTED_DIRECT = [("w_mind", "m_ind_w"), ("w_m0", "m0_w"), ("w_m1", "m1_w")]
+WEIGHTED_DIRECT = [("w_mind", "m_ind_w"), ("w_m0", "m0_w"), ("w_m1", "m1_w"),
+                   ("w_target", "target_w")]                     # D96
 # monthly families: EP x weight, and the same times each leg (mod legs are
 # additionally gated by the combo's mod-adjustment flag)
 MONTHLY = ["epw", "epw_del", "epw_rate", "epwm", "epwm_mod"]
@@ -403,6 +404,7 @@ def build_state_summary(ctx: BookCtx, n: int):
             ("m1", "w_m1", FMT_MOD), ("crl", "w_crl", FMT_IDX),
             ("ecy", "w_ecy", FMT_IDX), ("mbar", "w_mbar", FMT_MOD),
             ("lrcur", "w_lrcur", FMT_PCT), ("arate", "w_arate", FMT_IDX),
+            ("target", "w_target", FMT_PCT),
             ("amod", "w_amod", FMT_IDX), ("aother", "w_aother", FMT_IDX),
             ("trend", "w_trend", PCT_S), ("arate1", "w_arate1", FMT_IDX),
             ("amod1", "w_amod1", FMT_IDX)]

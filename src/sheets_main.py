@@ -18,7 +18,7 @@ from .xlstyle import (ALIGN_C, ALIGN_WRAP, BORDER_THIN, DOWN_BAR, FAIL_RED, FILL
     F_HEADER, F_LABEL, F_SMALL_IT, GREY_DARK, NAVY, STEEL, STEEL_LIGHT, TOTAL_BAR,
     UP_BAR, WARN_AMBER, add_dv, chart_legend, col, dv_decimal, dv_plan_year_date,
     font, formula, header_row, input_cell, jump, label, link, nav_bar, note,
-    presentation_setup, print_setup, prose, put, section, set_widths, title, zoom_axis,
+    presentation_setup, print_setup, prose, put, section, set_widths, title,
 )
 
 PTS_Z = '+0.00 "pts";-0.00 "pts";""'
@@ -129,6 +129,10 @@ def build_bridge(ctx: Ctx):
         ("Projected mod, end plan yr+1 (M_2; 0 = use M_1)",
          f"=IF({R}=0,0,N(INDEX(lr_m2,{R})))", FMT_MOD,
          "nr_M2", "Projected written mod at 12/31/(P+1); 0/blank = M_1", False),
+        ("Target loss ratio (profit provision; 0 = not set)",
+         f"=IF({R}=0,0,N(INDEX(lr_target,{R})))", FMT_PCT,
+         "nr_TargetLR", "Target loss ratio for this combo — reference only, no "
+         "engine formula reads it (D96)", False),
         ("Net trend (P+1 view)",
          f"=IF({R}=0,N(nr_TrendDefault),IF(ISBLANK(INDEX(lr_trend,{R})),N(nr_TrendDefault),"
          f"INDEX(lr_trend,{R})))", FMT_PCT,
@@ -177,19 +181,41 @@ def build_bridge(ctx: Ctx):
             ctx.define(name, "Bridge", f"$C${r}", desc)
         r += 1
     # companion notes render the sentinel semantics as text WITHOUT touching the
-    # numeric cells the engines consume
+    # numeric cells the engines consume.
+    #
+    # Keyed by the row's NAME, never by its position in `rows` (D98). These used
+    # to be keyed by index, so inserting the target loss ratio at index 12 slid
+    # every later note one row off its label: the A_other warning printed beside
+    # "Net trend", and the net-selection note landed on "Mod adjustment
+    # effective" — whose cell holds the TEXT "ON"/"OFF", making IF($C{r},...)
+    # a permanent #VALUE!. It shipped in all six workbooks and the Checks panel
+    # still said PASS, because a stray error in an advisory cell is exactly what
+    # no check was watching. A name cannot drift when a row is inserted.
     companions = {
-        10: '=IF(N($C{r})=0,"blank -> backward anchor sits on the M_0 -> M_1 line","")',
-        11: '=IF(N($C{r})=0,"blank -> M_1 carried flat beyond the plan year","")',
-        13: '=IF(AND(nr_AOther<>1,nr_AOtherLbl=""),'
-            '"WARNING: A_other <> 1 requires a label","")',
-        17: '=IF($C{r},"NET SELECTION ACTIVE — supersedes planned rows from 1/1",'
-            '"explicit rate program")',
+        "nr_MPrior": '=IF(N($C{r})=0,"blank -> backward anchor sits on the '
+                     'M_0 -> M_1 line","")',
+        "nr_M2": '=IF(N($C{r})=0,"blank -> M_1 carried flat beyond the plan year","")',
+        "nr_AOther": '=IF(AND(nr_AOther<>1,nr_AOtherLbl=""),'
+                     '"WARNING: A_other <> 1 requires a label","")',
+        "nr_NetMode": '=IF($C{r},"NET SELECTION ACTIVE — supersedes planned rows '
+                      'from 1/1","explicit rate program")',
     }
-    for idx, tmpl in companions.items():
-        rr_ = L.BR_IN_FIRST + idx
+    row_of = {nm: L.BR_IN_FIRST + i
+              for i, (_l, _f, _fm, nm, _d, _il) in enumerate(rows) if nm}
+    for nm, tmpl in companions.items():
+        rr_ = row_of[nm]        # KeyError here beats a silently misplaced note
         put(ws, f"D{rr_}", tmpl.format(r=rr_),
-            fnt=font(FAIL_RED if idx == 13 else GREY_DARK, size=9, italic=True))
+            fnt=font(FAIL_RED if nm == "nr_AOther" else GREY_DARK, size=9, italic=True))
+    # The resolver block is fixed-origin and the chart staging block below it is
+    # too, so the block can only grow into it. It has no slack left after the
+    # target row, and silently overwriting the waterfall's data is not a failure
+    # anyone would read as one.
+    if L.BR_IN_FIRST + len(rows) > L.BR_CHART_DATA - 1:
+        raise AssertionError(
+            f"Bridge resolver block needs rows {L.BR_IN_FIRST}.."
+            f"{L.BR_IN_FIRST + len(rows) - 1} but the waterfall chart data starts at "
+            f"{L.BR_CHART_DATA - 1}. Raise Layout.BR_CHART_DATA (and the chart "
+            f"ranges that follow it) before adding another resolver input.")
     for rr_ in range(res_sec + 1, L.BR_IN_FIRST + len(rows)):
         ws.row_dimensions[rr_].outlineLevel = 1
         ws.row_dimensions[rr_].hidden = True
@@ -253,9 +279,26 @@ def build_bridge(ctx: Ctx):
           "forecast).", size=9, width=34)
     ws[f"B{tot + 2}"].font = F_SMALL_IT
 
+    # ---- against target (D96) ----
+    # Reference only: nothing upstream reads it, and the gap is stated in points
+    # rather than dressed up as a verdict — whether a combo "makes" its target
+    # depends on expenses and mix this workbook does not carry.
+    formula(ws, f"B{tot + 3}",
+            '=IF(N(nr_TargetLR)=0,"",'
+            '"Target loss ratio "&TEXT(nr_TargetLR,"0.0%")&"  —  the plan is "'
+            '&TEXT(ABS(nr_CYLR_P-nr_TargetLR)*100,"0.00")&" pts "'
+            '&IF(nr_CYLR_P>nr_TargetLR,"ABOVE","below")&" it.")')
+    ws[f"B{tot + 3}"].font = font(NAVY, bold=True, size=11)
+    ws[f"B{tot + 3}"].fill = FILL_PANEL
+    for cc in range(3, 9):
+        ws.cell(row=tot + 3, column=cc).fill = FILL_PANEL
+
     # ---- communication metrics (live year labels, D44) ----
     section(ws, tot + 4, "B", "Communication metrics")
     for i, (lbl, f, fmt) in enumerate([
+        ('="Target loss ratio (profit provision)"', "=nr_TargetLR", FMT_PCT),
+        ('="Plan LR vs target"',
+         '=IF(N(nr_TargetLR)=0,"",(nr_CYLR_P-nr_TargetLR)*100)', FMT_PTS_COL),
         ('="CY earned rate chg vs indication level"', "=nr_EChgVsInd", PCT_SIGNED_Z),
         ('="Earned rate chg "&(nr_PlanYear-1)&" -> "&nr_PlanYear', "=nr_YoY_P", PCT_SIGNED_Z),
         ('="Earned rate chg "&nr_PlanYear&" -> "&(nr_PlanYear+1)&" (carryover + new actions)"',
@@ -266,7 +309,9 @@ def build_bridge(ctx: Ctx):
         link(ws, f"D{tot + 5 + i}", f, fmt=fmt, align=ALIGN_C)
 
     # ---- rate changes for this combo (chronological slots via rl_seq) ----
-    act = tot + 9
+    # the metrics block above now runs tot+5 .. tot+9 (two more since D96), so
+    # the chronology starts two rows lower than it used to
+    act = tot + 11
     section(ws, act, "B", "Rate changes for this combo — chronological")
     jump(ws, f"F{act}", "'Rate Log'!A1", "edit these on the Rate Log >", size=9)
     header_row(ws, act + 1, 2,
@@ -354,12 +399,8 @@ def build_bridge(ctx: Ctx):
     chart.series[3].graphicalProperties.solidFill = TOTAL_BAR
     chart.legend = None
     chart.y_axis.number_format = "0%"
-    # A waterfall stacks on an invisible base, so Excel's automatic zero floor
-    # draws five columns of near-identical height with the whole walk inside the
-    # top 2% of the plot. The window covers every combo the selector can reach,
-    # because this chart is live (D91).
-    lo, hi = ctx.lay_dyn["axis"]["lr"]
-    zoom_axis(chart, lo, hi, step=0.05)
+    # Automatic axis (D99): a waterfall on a zero floor does compress the walk,
+    # but a baked window cannot follow a paste and read worse in practice.
     _style_chart(chart, "Projected LR -> CY plan loss ratio (stacked-column waterfall)",
                  y_title="Loss ratio", height=9, width=15)
     ws.add_chart(chart, "J5")
@@ -639,6 +680,9 @@ SS_COLS: tuple[SsCol, ...] = (
     SsCol("aother", "x  Other adj (A_other)", 8.5, SS_G_BRIDGE),
     SsCol("planlr", "=  Plan LR", 10, SS_G_BRIDGE,
           '="=  CY "&nr_PlanYear&" plan LR"'),
+    # the benchmark, immediately beside the answer (D96) — reference only, so it
+    # sits in the bridge band without joining the product
+    SsCol("target", "Target LR", 9, SS_G_BRIDGE),
     SsCol("mix", "Mix (pts)", 7, SS_G_BRIDGE),
     *_ss_slots(),
     SsCol("ntaken", "# taken", 7, SS_G_HIST),
@@ -784,6 +828,7 @@ def build_state_summary(ctx: Ctx):
         ("arate", "calc_w_arate", "calc_arate_p", None, FMT_IDX),
         ("amod", "calc_w_amod", "calc_amod_p", None, FMT_IDX),
         ("aother", "calc_w_aother", "calc_aother", None, FMT_IDX),
+        ("target", "calc_w_target", "lr_target", ("lr_state", "lr_bu"), FMT_PCT),
         ("trend", "calc_w_trend", "calc_trend", None, FMT_PCT_SIGNED),
         ("arate1", "calc_w_arate1", "calc_arate_p1", None, FMT_IDX),
         ("amod1", "calc_w_amod1", "calc_amod_p1", None, FMT_IDX),

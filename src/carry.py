@@ -122,7 +122,8 @@ def read_inputs(path: Path | str) -> CarriedInputs:
         # ---- tbl_LR ----------------------------------------------------
         lr_cols = {
             "bu": "lr_bu", "state": "lr_state", "lr_proj": "lr_lrproj",
-            "basis": "lr_basis", "s": "lr_s", "m_ind": "lr_mind",
+            "basis": "lr_basis", "s": "lr_s", "target": "lr_target",
+            "m_ind": "lr_mind",
             "m_prior": "lr_mprior", "m0": "lr_m0", "m0_asof": "lr_m0asof",
             "m_end_prior": "lr_mendprior", "m1": "lr_m1", "m2": "lr_m2",
             "ep": "lr_ep", "trend": "lr_trend", "a_other": "lr_aother",

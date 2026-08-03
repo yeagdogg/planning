@@ -37,7 +37,7 @@ from . import engine
 from .engine import ComboInputs, ModInputs, RateChange
 from .xlstyle import quote_sheet
 
-GENERATOR_VERSION = "3.5.1"
+GENERATOR_VERSION = "3.5.3"
 
 # Leads every seeded Mod Log comment so the Checks tripwire can spot a sample
 # action left in a real book (D80). Kept short and unmistakable — a real
@@ -285,6 +285,9 @@ def sample_lr_rows(cfg: Config, lob: LobCfg) -> list[dict]:
             ep=base["ep"] * (8 + (i * 13) % 17) * 100,  # ADJUSTED plan EP in 000s
             trend=None,  # blank inherits the Control default trend (D38)
             a_other=1.0, a_other_label="", modadj="ON",
+            # reference-only benchmark (D96); varied a little so the exhibits
+            # show combos on both sides of their target
+            target=round(0.615 + ((i * 7) % 5) * 0.01, 3),
             netp=None, netp1=None,  # blank = explicit rate program (D39)
         )
         # showcase combos (state indices are positions in the configured list)
@@ -767,8 +770,6 @@ def build(cfg: Config, lob_name: str, carried=None) -> Workbook:
         oracle_solver_r=solver_res.required_change, we_key=we_key, we_row=we_row,
         carried=carried,
     )
-    ctx.lay_dyn["axis"] = chart_axis_windows(cfg, lob, lr_rows, rate_rows, mod_rows)
-
     # Build order: reference data first, then engines, then presentation.
     sheets_inputs.build_lists(ctx)
     sheets_inputs.build_inputs(ctx)
@@ -809,48 +810,6 @@ def build(cfg: Config, lob_name: str, carried=None) -> Workbook:
     wb.calculation.calcMode = "auto"
     wb.calculation.fullCalcOnLoad = True
     return wb
-
-
-def chart_axis_windows(cfg: Config, lob: LobCfg, lr_rows, rate_rows, mod_rows) -> dict:
-    """Data ranges for the charts whose axes are framed rather than zero-based.
-
-    Every one of these exhibits is LIVE for the Control selection, so the window
-    has to cover what the reader can switch to — not just the worked example.
-    That means one oracle run per combo, which costs a few tens of milliseconds
-    against a build that already takes about a third of a second.
-
-    Returns ``{name: (lo, hi)}`` of the actual plotted extremes; ``zoom_axis``
-    turns each into a padded, rounded window. NaN months (a term short enough
-    that some month earns nothing) are skipped — they plot as gaps, not zeros.
-    """
-    def finite(xs):
-        return [x for x in xs if x is not None and x == x]
-
-    lr, idx, mod, price = [], [], [], []
-    for row in lr_rows:
-        if not (row.get("bu") and row.get("state")):
-            continue
-        c = sample_to_combo(cfg, lob, row, rate_rows, mod_rows)
-        r = engine.run_bridge(cfg.plan_year, c, "monthly")
-        # the Bridge waterfall's nodes, in the order it walks them
-        lr += finite([row.get("lr_proj"), r.lr_current,
-                      r.lr_current * r.a_rate_p,
-                      r.lr_current * r.a_rate_p * r.a_mod_p,
-                      r.cy_lr_p, r.cy_lr_p1])
-        idx += finite(r.written_index) + finite(r.earned_index_m)
-        mod += finite(r.written_mod) + finite(r.earned_mod_m)
-        m_ind = c.mods.m_ind or 1.0
-        wi, wm = finite(r.written_index), finite(r.written_mod)
-        ei, em = finite(r.earned_index_m), finite(r.earned_mod_m)
-        if c.net_mode:                       # the net path already combines both
-            price += wi + ei
-        else:
-            price += ([a * b / m_ind for a, b in zip(wi, wm)]
-                      + [a * b / m_ind for a, b in zip(ei, em)])
-    out = {}
-    for name, vals in (("lr", lr), ("idx", idx), ("mod", mod), ("price", price)):
-        out[name] = (min(vals), max(vals)) if vals else (0.0, 1.0)
-    return out
 
 
 def output_path(cfg: Config, out_dir: Path, lob_name: str) -> Path:

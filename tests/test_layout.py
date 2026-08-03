@@ -90,7 +90,7 @@ def test_ss_column_map_is_well_formed():
     from src.sheets_main import SS_COLS, SS_COL, SS_HELP, SS_LAST
     keys = [c.key for c in SS_COLS]
     assert len(keys) == len(set(keys)), "duplicate State Summary column key"
-    assert SS_LAST == len(SS_COLS) == 35
+    assert SS_LAST == len(SS_COLS) == 36
     assert sorted(SS_COL.values()) == list(range(1, SS_LAST + 1))
     # helpers live strictly to the RIGHT of the exhibit, never inside it
     assert min(SS_HELP.values()) > SS_LAST
@@ -120,11 +120,18 @@ def test_the_bridge_and_its_headline_fit_the_first_screen():
     from src.sheets_main import SS_COLS, ss_c
     px = sum(7 * c.width + 5 for c in SS_COLS[:ss_c("planlr")]) + 30
     assert px < 1100, f"plan LR sits {px:.0f}px in — off screen again"
-    # and the bridge must read left to right, ending in the number it produces
-    order = [ss_c(k) for k in ("lrcur", "arate", "amod", "aother", "planlr", "mix")]
-    assert order == sorted(order) and order == list(range(order[0], order[0] + 6))
+    # the bridge itself reads left to right, ending in the number it produces
+    chain = [ss_c(k) for k in ("lrcur", "arate", "amod", "aother", "planlr")]
+    assert chain == list(range(chain[0], chain[0] + 5))
+    # then the benchmark, immediately beside the answer (D96), then the mix
+    # residual — target is NOT part of the product, only read against it
+    assert ss_c("target") == ss_c("planlr") + 1
+    assert ss_c("mix") == ss_c("target") + 1
+    # the whole comparison still fits on screen with the roster frozen
+    px_t = sum(7 * c.width + 5 for c in SS_COLS[:ss_c("target")]) + 30
+    assert px_t < 1100, f"plan LR vs target sits {px_t:.0f}px in"
     # the chronology is reference, and follows the answer
-    assert ss_c("chg1_date") > ss_c("planlr")
+    assert ss_c("chg1_date") > ss_c("target")
 
 
 def test_book_mirror_shares_the_column_map():

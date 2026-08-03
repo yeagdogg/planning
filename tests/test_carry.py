@@ -15,6 +15,7 @@ import pytest
 
 from src.build_workbook import build, load_config, output_path
 from src.carry import CarryError, holds_sample_data, read_inputs
+from src.sheets_inputs import LR_COLS
 
 
 @pytest.fixture(scope="module")
@@ -128,6 +129,16 @@ def test_round_trip_preserves_edits(tmp_path, cfg, seeded):
 
     assert any(r["lr_proj"] == pytest.approx(0.7777) for r in got.lr_rows)
     assert any(r["comment"] == "my own filing" for r in got.rate_rows)
+    # Every tbl_LR column has to survive the round trip, including the ones no
+    # engine formula reads (D96). A reference column is the easiest to forget in
+    # carry.py's explicit map, and losing it is silent — the rebuild just comes
+    # back blank where the user had typed a number.
+    for spec in LR_COLS:
+        if spec.key is None:
+            continue
+        before = {(r["bu"], r["state"]): r[spec.key] for r in carried.lr_rows}
+        after = {(r["bu"], r["state"]): r[spec.key] for r in got.lr_rows}
+        assert after == before, f"{spec.name} did not survive carry-forward"
     assert len(got.rate_rows) == len(carried.rate_rows)
     assert len(got.mod_rows) == len(carried.mod_rows)
     assert len(got.lr_rows) == len(carried.lr_rows)

@@ -23,7 +23,6 @@ from .xlstyle import (ALIGN_C, BORDER_THIN, DOWN_BAR, FAIL_RED, FILL_GREEN, FILL
     F_SMALL_IT, GREY_DARK, NAVY, PASS_GREEN, STEEL, TOTAL_BAR, UP_BAR, col, font,
     formula, header_row, input_cell, jump, label, link, nav_bar, presentation_setup,
     print_setup, put, quote_sheet, section, set_widths, status_banner_cf, title,
-    zoom_axis,
 )
 
 from .xlstyle import FMT_PCT_SIGNED as PCT_S   # one definition, seven readers
@@ -157,9 +156,6 @@ def build_one_pager(ctx: Ctx):
     wf.series[3].graphicalProperties.solidFill = TOTAL_BAR
     wf.legend = None
     wf.y_axis.number_format = "0%"
-    # the same window as the Bridge's own copy of this chart (D91) — the
-    # One-Pager reads the Bridge's staging cells, so it must read its axis too
-    zoom_axis(wf, *ctx.lay_dyn["axis"]["lr"], step=0.05)
     # source staging rows on the Bridge are outline-hidden — without this the
     # chart plots nothing (openpyxl attr is visible_cells_only, NOT plotVisOnly)
     wf.visible_cells_only = False

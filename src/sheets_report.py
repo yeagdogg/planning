@@ -15,8 +15,7 @@ from .xlstyle import (ALIGN_C, ALIGN_WRAP, BAND_FILL, BORDER_THIN, FAIL_RED,
     FMT_DATE, FMT_DATE_S, FMT_GEN, FMT_IDX, FMT_INT, FMT_MOD, FMT_MONTH, FMT_PCT,
     FMT_PCT_SIGNED, F_HEADER, F_INPUT, F_LABEL, F_LINK, F_SMALL_IT, GREY_DARK,
     LINK_GREEN, NAVY, PASS_GREEN, STEEL, chart_legend, col, font, formula, header_row,
-    axis_window, jump, label, link, nav_bar, note, presentation_setup, print_setup,
-    prose, put, zoom_axis,
+    jump, label, link, nav_bar, note, presentation_setup, print_setup, prose, put,
     quote_sheet as _q, section, set_widths, status_banner_cf, text_height, title,
 )
 
@@ -141,15 +140,6 @@ def build_flow_dashboard(ctx: Ctx):
         for cL in ("BCDEFGHIJKLMNOPQRSTUV" if j >= 12 else "BCDEFGHIJKL"):
             ws[f"{cL}{r}"].font = font(GREY_DARK, size=8)
 
-    # the plotted series, named so the Checks panel can ask whether they still
-    # fit the axis windows the charts were framed with (D91)
-    for cL, nm, desc in (("C", "fd_widx", "Flow Dashboard written rate index, by month"),
-                         ("D", "fd_eidx", "Flow Dashboard earned rate index, by month"),
-                         ("E", "fd_wmod", "Flow Dashboard written schedule mod, by month"),
-                         ("F", "fd_emod", "Flow Dashboard earned schedule mod, by month")):
-        ctx.define(nm, "Flow Dashboard",
-                   f"${cL}${CD0 + 1}:${cL}${CD0 + L.N_MONTHS}", desc)
-
     cats = Reference(ws, min_col=2, min_row=CD0 + 1, max_row=CD0 + L.N_MONTHS)
 
     # (a) written vs earned index + plan-year band
@@ -174,11 +164,6 @@ def build_flow_dashboard(ctx: Ctx):
     lines.y_axis.delete = False   # secondary axis must stay visible (D36)
     lines.x_axis.delete = False
     lines.y_axis.title = "Rate index"
-    # zoom the SECONDARY axis (the lines), not the hidden 0..1 band axis: a rate
-    # index living between 1.00 and 1.22 against a zero floor is 80% empty plot,
-    # and the gap between written and earned — the whole point of the chart — is
-    # the part that disappears (D91)
-    zoom_axis(lines, *ctx.lay_dyn["axis"]["idx"], step=0.05)
     band.set_categories(cats)
     band += lines
     _chart(band, "Cumulative written vs earned rate index (plan year shaded)", height=8.5, width=16)
@@ -192,8 +177,6 @@ def build_flow_dashboard(ctx: Ctx):
     _line(mods.series[0], STEEL)
     _line(mods.series[1], NAVY)
     mods.y_axis.number_format = "0.000"
-    # mods live in a narrow band well away from zero, so the finer step (D91)
-    zoom_axis(mods, *ctx.lay_dyn["axis"]["mod"], step=0.01)
     _chart(mods, "Written vs earned schedule mod path", height=8.5, width=16,
            y_title="Avg schedule mod")
     ws.add_chart(mods, "B22")
@@ -206,7 +189,6 @@ def build_flow_dashboard(ctx: Ctx):
     _line(price.series[0], STEEL)
     _line(price.series[1], NAVY)
     price.y_axis.number_format = "0.00"
-    zoom_axis(price, *ctx.lay_dyn["axis"]["price"], step=0.05)
     _chart(price, "Combined price index = rate index x (mod / M_ind)", height=8.5, width=16,
            y_title="Price index")
     ws.add_chart(price, "K22")
@@ -448,14 +430,9 @@ def build_oracle_sheet(ctx: Ctx):
         ("orc_ecy_p_cont", c.e_cy[p], "Oracle E_CY(P), continuous closed form"),
         ("orc_solver_r", ctx.oracle_solver_r, "Oracle solver required change (worked example)"),
     ]
-    # D91: the chart axis windows, baked. An Excel axis bound is a static
-    # number, so these cannot follow a paste — which is exactly why they are
-    # named and checked rather than buried in the chart XML where a clipped
-    # plot would be the only symptom.
-    for key, step in (("lr", 0.05), ("idx", 0.05), ("mod", 0.01), ("price", 0.05)):
-        lo, hi = axis_window(*ctx.lay_dyn["axis"][key], step=step)
-        consts += [(f"axw_{key}_lo", lo, f"Charted axis floor for the {key} charts (D91)"),
-                   (f"axw_{key}_hi", hi, f"Charted axis ceiling for the {key} charts (D91)")]
+    # D99 removed the eight baked axw_* axis bounds from this list: the charts
+    # are back on Excel's automatic axis, so there is no static window left to
+    # bake, name, or check against.
     label(ws, "A3", "Baked oracle constants", bold=True)
     for i, (name, val, desc) in enumerate(consts):
         r = 4 + i
@@ -795,24 +772,12 @@ def build_checks(ctx: Ctx):
     # orc_fp so a pristine sample book (where the seeds belong) stays quiet.
     A(("Advisory", "Seeded SAMPLE mod actions still present (clear them before planning)",
        "=0", f'=IF(orc_fp,0,COUNTIF(ml_comment,"{SAMPLE_MOD_TAG}*"))', 0, "WARN"))
-    # ---- appended v3.5 checks: charted axis windows (D91) ------------------
-    # The Bridge / One-Pager waterfall and the Flow Dashboard index charts are
-    # framed on their data instead of on zero, which makes them readable and
-    # makes them BAKED: an Excel axis bound is a static number, so it cannot
-    # follow a paste. A book that moves outside the window plots off the edge —
-    # which looks like an empty chart, not like a stale one. These rows say it.
-    A(("Advisory", "Loss ratios have moved outside the Bridge / One-Pager chart's axis "
-       "window — the waterfall will plot off the edge (regenerate with "
-       "--carry-forward to re-frame it)", "=0",
-       "=SUMPRODUCT((calc_key<>\"\")*((calc_lrcur<axw_lr_lo)+(calc_lrcur>axw_lr_hi)"
-       "+(calc_cylr_p<axw_lr_lo)+(calc_cylr_p>axw_lr_hi)"
-       "+(calc_cylr_p1<axw_lr_lo)+(calc_cylr_p1>axw_lr_hi)))", 0, "WARN"))
-    A(("Advisory", "The selected combo's rate / mod / price series have moved outside the "
-       "Flow Dashboard chart axis windows (regenerate with --carry-forward)", "=0",
-       f'=SUMPRODUCT((ISNUMBER(fd_widx))*((fd_widx<axw_idx_lo)+(fd_widx>axw_idx_hi)))'
-       f'+SUMPRODUCT((ISNUMBER(fd_eidx))*((fd_eidx<axw_idx_lo)+(fd_eidx>axw_idx_hi)))'
-       f'+SUMPRODUCT((ISNUMBER(fd_wmod))*((fd_wmod<axw_mod_lo)+(fd_wmod>axw_mod_hi)))',
-       0, "WARN"))
+    # The two v3.5 axis-window rows that stood here are gone with D99. They are
+    # REMOVED rather than left permanently green: the append-only rule protects
+    # a reader's row references while a check still means something, and a row
+    # asserting a book has not left a window that no longer exists means
+    # nothing. The D93 rows below shift up two, which the harness does not pin
+    # (it reads Checks!G16, well above this) and a regenerated panel restates.
     # ---- appended v3.5 checks: the LR flow walk (D93) ----------------------
     # The exhibit shows a residual instead of forcing a tie, which is only
     # honest if the residual is ACCOUNTED FOR. This is that account closing.

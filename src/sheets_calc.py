@@ -90,6 +90,12 @@ BOOK_SLOTS = 4
 # prior year correctly. Pinned by tests/test_program_flow.py
 # (test_prior_weights_equal_plan_year_weights_by_calendar_month) and by the
 # phase-C All-view tie, which would fail if the reuse were ever wrong.
+# D96: the reference-only target loss ratio, EP-weighted so the State Summary
+# and the Book can show a state's average target beside its plan LR. Appended
+# after every existing block for the same reason PRIOR_PUB was — no published
+# index moves, and tools/harvest.py keeps every position it maps.
+TARGET_PUB = dict(w_target=152)   # EV  target LR x EP
+
 PRIOR_PUB = dict(
     rate=113,       # DI..DT  YoY written rate leg, Jan..Dec P-1
     mod=125,        # DU..EF  YoY written mod leg (raw path, ungated)
@@ -259,6 +265,8 @@ def build_calc(ctx: Ctx):
         f_grey(ws, f"U{r}", f"=INDEX(lr_bu,{n})")
         f_grey(ws, f"V{r}", f"=N(INDEX(lr_ep,{n}))", "#,##0")
         f_grey(ws, f"W{r}", f"=N(INDEX(lr_mind,{n}))*$V{r}", FMT_IDX)
+        f_grey(ws, f"{col(TARGET_PUB['w_target'])}{r}",
+               f"=N(INDEX(lr_target,{n}))*$V{r}", FMT_IDX)
         f_grey(ws, f"X{r}", f"=N(INDEX(lr_m0,{n}))*$V{r}", FMT_IDX)
         f_grey(ws, f"Y{r}", f"=N(INDEX(lr_m1,{n}))*$V{r}", FMT_IDX)
         f_grey(ws, f"Z{r}", f"=$C{r}*$V{r}", FMT_IDX)
@@ -369,6 +377,7 @@ def build_calc(ctx: Ctx):
         "calc_w_cylr": ("AF", "CY plan LR(P) x EP"), "calc_w_trend": ("AG", "Net trend x EP"),
         "calc_w_arate1": ("AH", "A_rate(P+1) x EP"), "calc_w_amod1": ("AI", "A_mod(P+1) x EP"),
         "calc_w_cylr1": ("AJ", "CY LR(P+1) x EP"),
+        "calc_w_target": ("EV", "Target LR x EP (State Summary weighting, D96)"),
         "calc_netmode": ("AK", "1 when the combo carries a net rate selection (D39)"),
         "calc_netx": ("AL", "Net selection x(P) by combo (0 when off)"),
     }

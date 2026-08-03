@@ -174,6 +174,13 @@ LR_COLS: tuple[LrCol, ...] = (
           "LR basis: current | proposed", True, "basis"),
     LrCol("lr_s", "Indication selected chg (s)", "s", FMT_PCT, 12,
           "Selected/indicated change s (used when basis = proposed)", False, "pct"),
+    # Reference only, by design (D96): the loss ratio that carries the profit
+    # provision. Nothing computes from it — it is the benchmark you read the
+    # plan LR against, and the line the loss-ratio charts plot.
+    LrCol("lr_target", "Target loss ratio (profit provision)", "target", FMT_PCT, 12,
+          "Target loss ratio — the LR that earns the profit provision. Reference "
+          "only: no engine formula reads it; the exhibits show the gap and the "
+          "charts plot it", False, "lr"),
     LrCol("lr_mind", "Mod assumed in indication (M_ind)", "m_ind", FMT_MOD, 13,
           "M_ind: avg schedule mod assumed in the indication", True, "mod"),
     LrCol("lr_mprior", "Mod ~1 yr before as-of (M_prior, opt)", "m_prior", FMT_MOD, 13,

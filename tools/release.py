@@ -168,7 +168,8 @@ def _save_state(out_dir: Path, state: dict) -> None:
         pass
 
 
-def _run(args: list[str], label: str, retries: int = 0) -> tuple[str, int, str]:
+def _run(args: list[str], label: str, retries: int = 0,
+         stagger_s: float = 0.0) -> tuple[str, int, str]:
     """Run a subprocess, returning (label, returncode, tail of output).
 
     A failure with NO output is a real outcome — a killed process, an
@@ -183,6 +184,13 @@ def _run(args: list[str], label: str, retries: int = 0) -> tuple[str, int, str]:
     on a new Excel instance inside the same one. Whatever state goes bad lives
     in the interpreter's COM apartment, not in Excel.
     """
+    # Excel instances must not INITIALISE at the same instant (D97). Each one
+    # loads the type library on startup, and simultaneous loads are exactly when
+    # a Dispatch comes back without usable type info. Staggering the launches is
+    # nearly free — the runs overlap anyway — and removes the contention rather
+    # than retrying through it.
+    if stagger_s:
+        time.sleep(stagger_s)
     for attempt in range(retries + 1):
         r = subprocess.run([PY, *args], cwd=ROOT, capture_output=True, text=True)
         if r.returncode == 0 or attempt == retries:
@@ -251,6 +259,10 @@ def _await_excel_drain(timeout_s: float = 45.0) -> int:
     while time.monotonic() < deadline:
         ours = _excel_pids() - _EXCEL_BASELINE
         if not ours:
+            # Reaching zero PROCESSES is not the same as the OLE subsystem being
+            # ready: after six concurrent Excel servers unregister, a fresh
+            # DispatchEx can still come back wedged. Settle briefly (D97).
+            time.sleep(3.0)
             return 0
         time.sleep(1.0)
     for pid in ours:
@@ -367,8 +379,10 @@ def main(argv=None) -> int:
         stage("recalculate")
         n = args.jobs or _max_jobs(args.full, len(lobs))
         with cf.ThreadPoolExecutor(max_workers=n) as pool:
-            futs = {pool.submit(_run, ["tools/recalc.py", str(output_path(cfg, out_dir, name))],
-                                name): name for name in lobs}
+            futs = {pool.submit(_run,
+                                ["tools/recalc.py", str(output_path(cfg, out_dir, name))],
+                                name, 0, i * 2.0): name
+                    for i, name in enumerate(lobs)}
             for f in cf.as_completed(futs):
                 label, rc, tail = f.result()
                 print(f"  {'ok  ' if not rc else 'FAIL'} {label}")
@@ -447,7 +461,8 @@ def main(argv=None) -> int:
     n = args.jobs or _max_jobs(args.full and len(skip_d) < len(lobs), len(lobs))
     print(f"  ({n} parallel worker{'s' if n != 1 else ''})")
     with cf.ThreadPoolExecutor(max_workers=n) as pool:
-        futs = {pool.submit(_run, _argv(name), name): name for name in lobs}
+        futs = {pool.submit(_run, _argv(name), name, 0, i * 2.0): name
+                for i, name in enumerate(lobs)}
         for f in cf.as_completed(futs):
             label, rc, tail = f.result()
             print(f"  {'ok  ' if not rc else 'FAIL'} {label:<20} {tail.splitlines()[-1] if tail else ''}")
