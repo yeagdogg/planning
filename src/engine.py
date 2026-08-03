@@ -1770,6 +1770,49 @@ def net_delivery_by_month(
     return rows
 
 
+def net_delivery_by_month_p1(
+    plan_year: int, combo: ComboInputs, eff_date: dt.date, r: float
+) -> list[dict]:
+    """The 12-row delivery decomposition for the FOLLOWING year (D102).
+
+    Carryover only: no second filing is assumed in P+1. Nobody plans a rate
+    change two years out, so the question this answers is what THIS year's
+    decision leaves for next year — the rate the plan-year program is still
+    delivering as its anniversaries roll through, and the pricing gap that
+    remains against the P+1 target.
+
+    The arithmetic falls out of the plan-year decomposition rather than needing
+    its own: every P+1 month lies after D, so ``W_new(m) = W(m) x (1 + r)`` with
+    no blend, and the year-ago denominator is the same month of P — which is
+    exactly the affine ``a + b*r`` that ``net_delivery_components`` already
+    carries. The mod base is likewise the plan-year written mod, ``mproj``.
+
+    The target is ``combo.net_x1``, which falls back to the P selection when the
+    P+1 cell is left blank — so this always answers, and the exhibit says which
+    of the two it used.
+    """
+    comp = net_delivery_components(plan_year, combo, eff_date)
+    live = _live_changes(plan_year, combo)
+    eng = MonthlyEngine(plan_year, combo, changes_override=live)
+    x1 = combo.net_x1
+    jan_p1 = month_index(plan_year + 1, 1)
+    rows = []
+    for j in range(12):
+        mi = jan_p1 + j
+        w_new = eng.written_index(mi) * (1.0 + r)
+        w_prev = comp.a[j] + comp.b[j] * r          # the same month of P
+        rate_leg = w_new / w_prev - 1.0
+        price_req = (1.0 + x1) / (1.0 + rate_leg) - 1.0 if comp.mod_on else None
+        m_req = (comp.mproj[j] * (1.0 + x1) / (1.0 + rate_leg)
+                 if comp.mod_on else None)
+        rows.append(dict(
+            mi=mi, w=eng.written_index(mi), rate_leg=rate_leg,
+            price_leg_required=price_req, m_required=m_req, x=x1,
+            m_base=comp.mproj[j],
+        ))
+    return rows
+
+
 def net_program_plan_lr(
     plan_year: int, combo: ComboInputs, eff_date: dt.date, r: float,
     m1_prime: float | None,

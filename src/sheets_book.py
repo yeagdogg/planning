@@ -22,6 +22,7 @@ six-month term combines safely. Earning fractions are never aggregated.
 
 from __future__ import annotations
 
+import datetime as dt
 from dataclasses import dataclass, field
 
 from openpyxl import Workbook
@@ -32,7 +33,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from .sheets_main import (SS_COLS, SS_G_BRIDGE, SS_G_HIST, SS_G_P1,
                          ss_c, ss_groups, ss_l, ss_outline)
 from .xlstyle import (ALIGN_C, ALIGN_L, BORDER_THIN, FAIL_RED, FILL_GREY, FILL_NAVY,
-    FILL_PANEL, FMT_DATE, FMT_DATE_S, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT,
+    FILL_PANEL, FMT_DATE, FMT_DATE_S, FMT_IDX, FMT_INT, FMT_MOD, FMT_MONTH, FMT_PCT,
     FMT_PTS_SIGNED, F_LABEL, F_SMALL_IT, GREY_DARK, NAVY, PASS_GREEN, STEEL_LIGHT,
     assert_formulas_balanced, col, font, formula, header_row, input_cell, jump,
     label, link, nav_bar, presentation_setup, print_setup, put, quote_sheet,
@@ -56,8 +57,9 @@ def _ss_chain1(r) -> str:
             f'*${ss_l("aother")}{r}')
 
 BOOK = "_book"
+PIVOT = "Pivot Data"
 SHEET_ORDER = ["Read Me", "Control", "State Summary", "Portfolio", "Roll-ups",
-               "Program Flow", "Checks", BOOK]
+               "Program Flow", PIVOT, "Checks", BOOK]
 
 # ---- _book layout ---------------------------------------------------------
 BK_HDR = 1
@@ -95,6 +97,37 @@ WEIGHTED = [("w_crl", "crl"), ("w_ecy", "ecy_p"), ("w_mbar", "mbar_p"),
 # harvested EP-weighted mods (the raw per-combo mods are not published)
 WEIGHTED_DIRECT = [("w_mind", "m_ind_w"), ("w_m0", "m0_w"), ("w_m1", "m1_w"),
                    ("w_target", "target_w")]                     # D96
+
+# ---- D103: the long (tidy) pivot dataset ----------------------------------
+# (Measure, Category, harvested field, the field is ALREADY x EP)
+PIVOT_ANNUAL = [
+    ("Projected LR (current level)", "Bridge", "lrcur", False),
+    ("Rate earn-in (A_rate)", "Bridge", "arate_p", False),
+    ("Mod drift (A_mod)", "Bridge", "amod_p", False),
+    ("Other adjustment (A_other)", "Bridge", "aother", False),
+    ("Plan LR", "Bridge", "cylr_p", False),
+    ("Target LR", "Bridge", "target_w", True),
+    ("Plan LR — program basis", "Bridge", "cylr_prog", False),
+    ("Plan LR +1", "Next year", "cylr_p1", False),
+    ("Rate earn-in +1", "Next year", "arate_p1", False),
+    ("Mod drift +1", "Next year", "amod_p1", False),
+    ("Net trend", "Next year", "trend", False),
+    ("Plan LR +1 — program basis", "Next year", "cylr1_prog", False),
+    ("Indication rate level (CRL)", "Levels", "crl", False),
+    ("Earned rate level", "Levels", "ecy_p", False),
+    ("Earned mod", "Levels", "mbar_p", False),
+    ("Mod in indication (M_ind)", "Mods", "m_ind_w", True),
+    ("Current mod (M_0)", "Mods", "m0_w", True),
+    ("Projected mod (M_1)", "Mods", "m1_w", True),
+]
+# (Measure, harvested monthly leg, the mass is gated by the mod adjustment)
+PIVOT_MONTHLY = [
+    ("Delivered YoY", "delivered", False),
+    ("Rate YoY", "rate", False),
+    ("Mod YoY", "mod", True),
+]
+PIVOT_HEADERS = ["LOB", "BU", "State", "Category", "Measure", "Month",
+                 "Weight", "Weighted value"]
 # monthly families: EP x weight, and the same times each leg (mod legs are
 # additionally gated by the combo's mod-adjustment flag)
 MONTHLY = ["epw", "epw_del", "epw_rate", "epwm", "epwm_mod"]
@@ -154,6 +187,93 @@ def rng(field_: str, n: int) -> str:
 # ---------------------------------------------------------------------------
 # hidden data sheet
 # ---------------------------------------------------------------------------
+
+
+def pivot_rows(data, plan_year: int) -> list[tuple]:
+    """The long dataset: one row per combo x measure, x month for the legs (D103).
+
+    Long rather than wide for a reason that is not taste. The three monthly legs
+    do NOT share a denominator — rate and delivered weight by ``epw`` (EP x the
+    seasonality weight), the mod leg by ``epwm``, which is additionally gated by
+    the combo's mod-adjustment flag so combos with it OFF drop out rather than
+    entering as zeros. In a wide table nothing stops a reader pairing the wrong
+    numerator and denominator, and the result is a plausible number that is
+    quietly wrong. Here each row carries its OWN weight, so one calculated field
+
+        Weighted = SUM([Weighted value]) / SUM([Weight])
+
+    is correct for every measure, every slice, every subtotal — and for a single
+    row too, which is why there is no raw value column: it would be redundant
+    and it is the one field that could be dragged in and averaged.
+
+    Rows with no weight are OMITTED rather than written as zeros. A combo with
+    no premium, or a month whose mod adjustment is off, has no answer — not an
+    answer of zero — and an absent row cannot drag an average toward it.
+    """
+    out = []
+    for rec in data.rows:
+        ep = rec["ep"] or 0.0
+        dims = (rec["lob"], rec["bu"], rec["state"])
+        if ep > 0:
+            for measure, cat, src, pre in PIVOT_ANNUAL:
+                v = rec[src] or 0.0
+                out.append((*dims, cat, measure, None, ep, v if pre else ep * v))
+        modeff = 1.0 if (rec["modeff"] or 0) == 1 else 0.0
+        for j in range(12):
+            epw = rec["epw"][j] or 0.0
+            if epw <= 0:
+                continue
+            month = dt.date(plan_year, j + 1, 1)
+            # /12 so Weight means PREMIUM in every row of this table. The
+            # seasonality weight averages 1 over the year (12 x se(m)/sum(se)),
+            # so raw epw sums to 12 x EP — a fine relative mass, and a
+            # confusing thing to call "Weight" beside annual rows that carry EP
+            # itself. Rescaled, a month's Weight is that month's written
+            # premium and the twelve sum to EP. Every ratio is unchanged.
+            for measure, leg, gated in PIVOT_MONTHLY:
+                mass = (epw * modeff if gated else epw) / 12.0
+                if mass <= 0:
+                    continue
+                out.append((*dims, "Monthly", measure, month,
+                            mass, mass * (rec[leg][j] or 0.0)))
+    return out
+
+
+def build_pivot_data(ctx: BookCtx, plan_year: int) -> int:
+    """Write the long dataset as an Excel TABLE, so a pivot built on it grows
+    with the roster instead of pointing at a stale rectangle (D103).
+
+    Nothing else goes on this sheet — no title, no notes. A pivot source has to
+    start at A1 or the table reference and the header row stop agreeing; the
+    guidance lives on Read Me, where someone will actually look for it.
+    """
+    from openpyxl.worksheet.table import Table, TableStyleInfo
+
+    ws = ctx.wb[PIVOT]
+    rows = pivot_rows(ctx.data, plan_year)
+    for i, h in enumerate(PIVOT_HEADERS):
+        put(ws, f"{col(1 + i)}1", h, fnt=font(GREY_DARK, bold=True, size=9))
+    for i, rec in enumerate(rows):
+        r = 2 + i
+        lob, bu, state, cat, measure, month, weight, wv = rec
+        put(ws, f"A{r}", lob)
+        put(ws, f"B{r}", bu)
+        put(ws, f"C{r}", state)
+        put(ws, f"D{r}", cat)
+        put(ws, f"E{r}", measure)
+        if month is not None:
+            put(ws, f"F{r}", month, fmt=FMT_MONTH)
+        put(ws, f"G{r}", weight, fmt="#,##0.000")
+        put(ws, f"H{r}", wv, fmt="#,##0.000")
+    tab = Table(displayName="tbl_Pivot", ref=f"A1:H{1 + len(rows)}")
+    tab.tableStyleInfo = TableStyleInfo(
+        name="TableStyleLight9", showRowStripes=True, showColumnStripes=False)
+    ws.add_table(tab)
+    set_widths(ws, {"A": 17, "B": 8, "C": 7, "D": 11, "E": 30, "F": 10,
+                    "G": 14, "H": 15})
+    ws.freeze_panes = "A2"
+    print_setup(ws)
+    return len(rows)
 
 
 def build_book_data(ctx: BookCtx):
@@ -855,6 +975,8 @@ def build_readme(ctx: BookCtx, n: int):
                          "with its mix residual."),
             ("Program Flow", "Month-by-month YoY rate, pricing and delivered legs "
                              "across the book."),
+            (PIVOT, "Build your own view: the whole book as one long table "
+                    "(tbl_Pivot), ready for a PivotTable. Recipe below."),
             ("Checks", "Harvest and reconciliation checks — must read ALL CHECKS PASS.")):
         jump(ws, f"B{r}", f"{quote_sheet(name)}!A1", name, bold=True)
         put(ws, f"C{r}", desc, fnt=font(GREY_DARK, size=10))
@@ -876,6 +998,42 @@ def build_readme(ctx: BookCtx, n: int):
               "Mixing lines with different loss economics into one headline is a "
               "judgment, not an arithmetic fact — every roll-up keeps its member lines "
               "visible beside the total for that reason."):
+        put(ws, f"B{r}", t, fnt=font(GREY_DARK, size=10))
+        r += 1
+    r += 1
+    section(ws, r, "B", f"Building your own pivot on '{PIVOT}'")
+    r += 1
+    for t in ("The sheet is one long table, tbl_Pivot: LOB | BU | State | Category | "
+              "Measure | Month | Weight | Weighted value. One row per combo per "
+              "measure, and per month for the three monthly legs.",
+              "Insert > PivotTable on any cell in the table. Then add ONE calculated "
+              "field — Analyze > Fields, Items & Sets > Calculated Field — named "
+              "whatever you like, with the formula:      = 'Weighted value' / Weight",
+              "That one field is the correct premium-weighted answer for EVERY "
+              "measure, at every subtotal, under any combination of filters. Put "
+              "Measure on Rows or in the Filter; put LOB, BU, State, Month wherever "
+              "you want them.",
+              "Do not use Sum or Average on 'Weighted value' or 'Weight' by "
+              "themselves as a result — they are the numerator and denominator, not "
+              "answers. (Summing Weight alone IS meaningful for one measure at a "
+              "time: it is premium.)",
+              "Why there is no plain 'Value' column: the calculated field is exact "
+              "even for a single row, so a raw value would add nothing except the "
+              "one field that could be averaged into a wrong number. Averaging loss "
+              "ratios across states is the mistake this table is shaped to prevent.",
+              "Each row carries its OWN weight, which is why one formula works "
+              "everywhere: annual rows weight by adjusted plan EP, the rate and "
+              "delivered legs by that month's written premium, and the mod leg by "
+              "the same premium restricted to combos whose mod adjustment is on. "
+              "Combos with no premium, and months with no applicable weight, are "
+              "absent rather than zero.",
+              "Monthly premium comes from tbl_Seasonality (per state, on each LOB "
+              "workbook's Inputs). A blank seasonality row means UNIFORM writing, so "
+              "if you have not filled it in, month-to-month shape here is coming "
+              "from rate and mod anniversaries, not from volume.",
+              "Weighted factors still do not compound: a pivot showing weighted "
+              "A_rate, A_mod and A_other beside weighted Plan LR will not reconcile "
+              "by multiplication. That gap is the mix residual — see Roll-ups."):
         put(ws, f"B{r}", t, fnt=font(GREY_DARK, size=10))
         r += 1
     r += 1
@@ -911,6 +1069,7 @@ def build_book(data) -> Workbook:
     build_portfolio(ctx, n)
     build_rollups(ctx, n)
     build_program_flow(ctx, n)
+    build_pivot_data(ctx, data.plan_year)
     build_checks(ctx, n)
     build_readme(ctx, n)
     ctx.flush_names()

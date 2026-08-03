@@ -180,15 +180,15 @@ walk tied to a fresh oracle run, with its residual decomposition required to rep
 own weighted mean; scenario, attribution, seasonality, basis, mod-toggle,
 degenerate-input, stepped-mod, and plan-year-change exercises each tied to fresh oracle runs.
 
-At v3.6.0 every artifact is green at **phases A-C**: the five 12-month lines **105 checks /
-0 failed** each, the 6-month-term Inland Marine **103 / 0**, and the combined book **26 / 0**
-(`tools/verify_book.py`, including the source-freshness phase). pytest 311/311. The whole
-sweep takes about 8 minutes.
+At v3.7.0 every artifact is green at **phases A-C**: the five 12-month lines **108 checks /
+0 failed** each, the 6-month-term Inland Marine **106 / 0**, and the combined book **30 / 0**
+(`tools/verify_book.py`, including the source-freshness phase and the Pivot Data ties).
+pytest 319/319. The whole sweep takes about 4 minutes.
 
-**Phase D has not been run against this tree.** v3.6.0 is a column reorder on one exhibit —
-no formula computes anything different — so phases A-C, which tie every State Summary value
-to a per-combo oracle run, are the tier that can actually say something here. The last full
-phase D was Property at **314 / 0** on the v3.5.3 build. To close it out:
+**Phase D has not been run against this tree.** v3.7.0 changes what Net Delivery displays and
+adds the P+1 delivery decomposition, both of which phase C ties directly to fresh oracle runs
+(`net_delivery_by_month_p1`, all 12 months × 3 measures, plus the tab's own bands). The last
+full phase D was Property at **314 / 0** on the v3.5.3 build. To close it out:
 `python tools/release.py --full --skip-build`. Excel's COM layer is intermittently flaky under this load and no in-process
 retry clears it, so the driver retries the book steps in FRESH processes and re-runs serially
 any line that was killed outright rather than failing an assertion (D92); the book is also
@@ -216,22 +216,59 @@ units and states in `config/config.yaml` are addressed positionally, so renaming
 your own book keeps every seeded example working (a repeated BU or state is rejected at
 load time).
 
-## Two years on the flow tabs
+## Two years on the flow tabs — but not the same two
 
-Program Flow and Net Delivery show **the year now flowing beside the plan year** — steel
-band on the left (Jan P−1 … Dec P−1, measured against P−2), navy on the right (Jan P …
-Dec P). Reading across the seam is the point: a filing shows up in the left band while it
+**Program Flow is descriptive**, so it shows the year now flowing beside the plan year:
+steel on the left (Jan P−1 … Dec P−1, measured against P−2), navy on the right (Jan P …
+Dec P). Reading across the seam is the point — a filing appears in the left band while it
 is still earning through, and in the right band only for the months before its anniversary,
-so the two blocks together say how much of today's momentum survives into the plan.
+so the two together say how much of today's momentum survives into the plan. Those
+prior-year columns are an **outline group**: the `[−]` above column N collapses the whole
+left band, summary columns included, leaving exactly the plan-year-only tab.
 
-On Program Flow the prior-year columns are an **outline group** — the `[−]` button above
-column N collapses the whole left band, summary columns included, leaving exactly the
-plan-year-only tab. Net Delivery has no group (its summary keeps input columns under those
-letters) and carries the prior year on the rate leg only: there is no target in P−1, so a
-required pricing walk is undefined there and that block is deliberately empty.
+**Net Delivery is prescriptive** — here is a target, here is how to reach it — so it shows
+the two years you can SET a target for: navy for the plan year, steel for P+1 (D102). The
+P+1 block is **carryover only**: no second filing is assumed, because nobody plans a rate
+change two years out, so it answers what this year's decision leaves behind. Leaving the
+P+1 input blank is not the same as having no target — it carries the plan-year selection
+forward, and the grid solves against whatever it carries.
+
+Net Delivery has no outline group: its summary table spans A..Q, so collapsing either year
+block would hide part of it.
 
 Nothing new is modelled — the cohort blocks always spanned Jan P−2 … Dec P+1, so this is
 data that was computed and never shown.
+
+## Build your own view: the book's long dataset
+
+The book carries a visible **Pivot Data** sheet (D103) — the whole book as one long table,
+`tbl_Pivot`: `LOB | BU | State | Category | Measure | Month | Weight | Weighted value`. One
+row per combo per measure, plus per month for the delivered / rate / mod legs.
+
+Insert a PivotTable on it and add **one** calculated field:
+
+```
+= 'Weighted value' / Weight
+```
+
+That is the correct premium-weighted answer for every measure, at every subtotal, under any
+combination of filters. Long rather than wide because the monthly legs **do not share a
+denominator** — rate and delivered weight by written premium, the mod leg by that premium
+restricted to combos whose mod adjustment is on. Wide, nothing stops you pairing the wrong
+numerator and denominator; long, each row carries its own weight and one formula is right
+everywhere. For the same reason there is no raw value column: the calculated field is exact
+even for one row, so a value column would only add a field that could be averaged into a
+wrong number.
+
+Two limits worth knowing. Monthly premium comes from `tbl_Seasonality` (per state, on each
+LOB workbook's Inputs) and **a blank row means uniform** — so unless you populate it,
+month-to-month shape is coming from rate and mod anniversaries, not volume. And weighted
+factors still do not compound: weighted `A_rate × A_mod × A_other` will not reconcile to
+weighted Plan LR. That gap is the mix residual.
+
+No pivot table ships in the file. openpyxl can preserve an existing pivot but cannot create
+one, and cannot do calculated fields at all; driving Excel by COM to build one was possible
+and rejected as machinery to maintain for something you assemble in half a minute.
 
 ## Schedule mods you can act on
 

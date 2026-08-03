@@ -20,6 +20,7 @@ from src.engine import (
     _live_changes,
     month_index,
     net_delivery_by_month,
+    net_delivery_by_month_p1,
     net_delivery_components,
     net_program_plan_lr,
     required_m1,
@@ -277,6 +278,74 @@ def test_by_month_rows_are_coherent():
     oct_row, mar_row = rows[9], rows[2]
     assert oct_row["rate_leg"] < mar_row["rate_leg"] - 0.05
     assert oct_row["price_leg_required"] > mar_row["price_leg_required"] + 0.05
+
+
+# ---------------------------------------------------------------------------
+# D102: the FOLLOWING year, carryover only. No second filing is assumed in P+1
+# — nobody plans a rate change two years out — so the exhibit answers what THIS
+# year's decision leaves for next year.
+# ---------------------------------------------------------------------------
+
+
+def test_p1_rows_close_exactly_to_the_p1_target():
+    combo = _combo(SHOWCASE, net=0.10, net_sel_p1=0.04)
+    r, _ = suggest_net_rate(P, combo, dt.date(P, 4, 1))
+    rows = net_delivery_by_month_p1(P, combo, dt.date(P, 4, 1), r)
+    assert len(rows) == 12
+    for row in rows:
+        # the defining property: rate x pricing lands on the P+1 target, not P's
+        assert (1.0 + row["rate_leg"]) * (1.0 + row["price_leg_required"]) == \
+            pytest.approx(1.04, abs=1e-12)
+        assert row["x"] == 0.04
+
+
+def test_p1_target_falls_back_to_the_p_selection_when_blank():
+    r, _ = suggest_net_rate(P, _combo(SHOWCASE), dt.date(P, 4, 1))
+    blank = net_delivery_by_month_p1(P, _combo(SHOWCASE), dt.date(P, 4, 1), r)
+    assert all(row["x"] == 0.10 for row in blank)
+    for row in blank:
+        assert (1.0 + row["rate_leg"]) * (1.0 + row["price_leg_required"]) == \
+            pytest.approx(1.10, abs=1e-12)
+    # and an explicit P+1 selection overrides it
+    setp1 = net_delivery_by_month_p1(
+        P, _combo(SHOWCASE, net_sel_p1=0.0), dt.date(P, 4, 1), r)
+    assert all(row["x"] == 0.0 for row in setp1)
+
+
+def test_p1_rate_leg_is_the_plan_year_filing_rolling_through():
+    """With a clean log and one filing on 1 July P, the P+1 months before the
+    anniversary still compare against a pre-filing base and carry the whole
+    step; from July the filing sits on both sides and the leg goes to zero.
+    That IS the carryover the exhibit exists to show."""
+    combo = _combo(net=0.10)                       # no rate changes at all
+    r = 0.08
+    rows = net_delivery_by_month_p1(P, combo, dt.date(P, 7, 1), r)
+    for row in rows[:6]:                           # Jan..Jun P+1
+        assert row["rate_leg"] == pytest.approx(r, abs=1e-12)
+    for row in rows[6:]:                           # Jul..Dec P+1
+        assert row["rate_leg"] == pytest.approx(0.0, abs=1e-12)
+    # so the pricing burden is entirely in the back half of the year
+    assert rows[0]["price_leg_required"] < rows[11]["price_leg_required"]
+
+
+def test_p1_reports_no_pricing_leg_when_the_mod_adjustment_is_off():
+    combo = _combo(SHOWCASE, mod_adjustment_enabled=False)
+    r, _ = suggest_net_rate(P, combo, dt.date(P, 4, 1))
+    rows = net_delivery_by_month_p1(P, combo, dt.date(P, 4, 1), r)
+    assert all(row["price_leg_required"] is None for row in rows)
+    assert all(row["m_required"] is None for row in rows)
+
+
+def test_p1_mod_base_is_the_plan_year_written_mod():
+    """m_required is stated against the year-ago mod, which for a P+1 month is
+    the plan-year written mod — the same mproj the P decomposition carries."""
+    combo = _combo(SHOWCASE)
+    r, comp = suggest_net_rate(P, combo, dt.date(P, 4, 1))
+    rows = net_delivery_by_month_p1(P, combo, dt.date(P, 4, 1), r)
+    for j, row in enumerate(rows):
+        assert row["m_base"] == pytest.approx(comp.mproj[j], abs=1e-15)
+        assert row["m_required"] == pytest.approx(
+            comp.mproj[j] * (1.0 + row["x"]) / (1.0 + row["rate_leg"]), abs=1e-15)
 
 
 # ---------------------------------------------------------------------------

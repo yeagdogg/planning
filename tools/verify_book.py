@@ -25,7 +25,7 @@ from src import engine  # noqa: E402
 from src.build_workbook import (load_config, sample_lr_rows, sample_mod_rows,  # noqa: E402
                                 sample_rate_rows,
                                 sample_to_combo)
-from src.sheets_book import COLS, PF_FIRST, SS_FIRST  # noqa: E402
+from src.sheets_book import COLS, PF_FIRST, PIVOT, SS_FIRST  # noqa: E402
 from src.sheets_main import ss_l  # noqa: E402  (shared column order, D90)
 from tools.build_book import book_path  # noqa: E402
 from tools.harvest import harvest  # noqa: E402
@@ -187,6 +187,46 @@ def phase_bc(path: Path, cfg, do_recalc=True):
               else 1 for i, rec in enumerate(rows))
     check("Portfolio grid mirrors every harvested row", bad == 0,
           f"{bad} mismatched rows")
+    # ---- D103: the long pivot dataset ------------------------------------
+    # The whole design rests on ONE property: SUM(weighted)/SUM(weight) over
+    # any slice is the premium-weighted answer for that slice. Check it the way
+    # a pivot would — group the sheet's own cells, then recompute in Python.
+    pv = wb[PIVOT]
+    agg: dict = {}
+    for r in range(2, pv.max_row + 1):
+        lob = pv.cell(row=r, column=1).value
+        if lob is None:
+            break
+        measure = pv.cell(row=r, column=5).value
+        w = pv.cell(row=r, column=7).value or 0.0
+        wv = pv.cell(row=r, column=8).value or 0.0
+        for key in ((measure, None), (measure, lob)):     # book-wide and by line
+            a = agg.setdefault(key, [0.0, 0.0])
+            a[0] += wv
+            a[1] += w
+    check("Pivot Data: no row carries a zero weight (a slice could go 0/0)",
+          all(a[1] > 0 for a in agg.values()))
+    bad = 0
+    for measure, src in (("Plan LR", "cylr_p"), ("Plan LR +1", "cylr_p1"),
+                         ("Rate earn-in (A_rate)", "arate_p"),
+                         ("Mod drift (A_mod)", "amod_p"),
+                         ("Projected LR (current level)", "lrcur"),
+                         ("Plan LR — program basis", "cylr_prog")):
+        for lob in (None, *sorted({r["lob"] for r in rows})):
+            sub = [r for r in rows if lob is None or r["lob"] == lob]
+            d = sum(r["ep"] or 0.0 for r in sub)
+            want = sum((r["ep"] or 0.0) * (r[src] or 0.0) for r in sub) / d
+            got = agg[(measure, lob)]
+            if not approx(got[0] / got[1], want, 1e-9):
+                bad += 1
+    check("Pivot Data: weighted/weight reproduces the EP-weighted book and each "
+          "line, for six measures", bad == 0, f"{bad} mismatched slices")
+    # premium must survive the monthly split — the /12 rescale, checked whole
+    ep_month = agg[("Rate YoY", None)][1]
+    check("Pivot Data: monthly weights sum back to book premium",
+          approx(ep_month, ep_all, 1e-6), f"monthly={ep_month} annual={ep_all}")
+    check("Pivot Data is an Excel Table (a pivot source that grows with the roster)",
+          "tbl_Pivot" in pv.tables, str(list(pv.tables)))
     return wb, book
 
 

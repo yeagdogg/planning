@@ -82,8 +82,8 @@ ND_FIRST = 32
 # two never collide rather than letting a longer band overwrite the summary.
 GRID_GAP = 5                            # rows from the IN VIEW row to the first grid
                                         # section (the notes under the table live here)
-ND_PRIOR_COL = 2                        # B  — Jan P-1 on the rate-leg grid (D68)
-ND_PLAN_COL = 14                        # N  — Jan P on both grids
+ND_PLAN_COL = 2                         # B  — Jan P, on both grids (D102)
+ND_NEXT_COL = 14                        # N  — Jan P+1, on both grids (D102)
 ND_FLAG_COL = 26                        # Z  — flags, parked right of both bands so
                                         #      the wide text is never clipped by a
                                         #      month column
@@ -194,6 +194,15 @@ def build_netcalc(ctx: Ctx):
         formula(ws, f"D{t}", f"=IF($C{t}=0,0,IF(ISBLANK(INDEX(lr_netp,$C{t})),0,1))",
                 fmt=FMT_INT)
         formula(ws, f"E{t}", f"=IF($D{t}=0,0,N(INDEX(lr_netp,$C{t})))", fmt="0.0%")
+        # D102: the P+1 target, with the engine's own fallback (ComboInputs.net_x1)
+        # — a blank P+1 cell carries the P selection forward. AB records WHICH of
+        # the two it is, so the exhibit can say "carried" rather than let a
+        # default read as a decision someone made.
+        formula(ws, f"AA{t}",
+                f"=IF($D{t}=0,0,IF(ISBLANK(INDEX(lr_netp1,$C{t})),"
+                f"N(INDEX(lr_netp,$C{t})),N(INDEX(lr_netp1,$C{t}))))", fmt="0.0%")
+        formula(ws, f"AB{t}",
+                f"=IF($C{t}=0,0,IF(ISBLANK(INDEX(lr_netp1,$C{t})),0,1))", fmt=FMT_INT)
         formula(ws, f"F{t}", f"=IF($C{t}=0,0,IF({mod_adj_on(f'$C{t}')},1,0))",
                 fmt=FMT_INT)
         formula(ws, f"G{t}", f"=IF($C{t}=0,1,IF(N(INDEX(lr_mind,$C{t}))=0,1,"
@@ -342,6 +351,25 @@ def build_netcalc(ctx: Ctx):
                     f'=IF(OR($AG{r}="",$F${t}=0),"",(1+$E${t})/(1+$AG{r})-1)', fmt=PCT_S)
             formula(ws, f"AI{r}",
                     f'=IF($AH{r}="","",$O{y}*(1+$E${t})/(1+$AG{r}))', fmt=FMT_MOD)
+        # ---- D102: the SAME three columns for P+1, carryover only -----------
+        # No second filing is assumed next year, so every P+1 month sits after D
+        # and carries the filing in full: W_new = N x (1 + r), no blend. Its
+        # year-ago denominator is the plan-year month, which is the affine
+        # W + X*r the loop above already wrote — so this reads the plan rows
+        # rather than recomputing them, and cannot drift from them. The mod base
+        # is likewise the plan-year written mod (column O of the P row).
+        for j in range(12):
+            r1 = t + 3 + 36 + j
+            y = r1 - 12                        # the same month of the plan year
+            fr = f"IF(ISNUMBER($F${rr}),$F${rr},0)"
+            formula(ws, f"AG{r1}",
+                    f'=IF(OR($D${t}=0,$P${t}=0,($W{y}+$X{y}*{fr})=0),"",'
+                    f"$N{r1}*(1+{fr})/($W{y}+$X{y}*{fr})-1)", fmt=PCT_S)
+            formula(ws, f"AH{r1}",
+                    f'=IF(OR($AG{r1}="",$F${t}=0),"",(1+$AA${t})/(1+$AG{r1})-1)',
+                    fmt=PCT_S)
+            formula(ws, f"AI{r1}",
+                    f'=IF($AH{r1}="","",$O{y}*(1+$AA${t})/(1+$AG{r1}))', fmt=FMT_MOD)
         # ---- D75: the mod ask as a dated ACTION, not a level ----------------
         # Along the stepped path the plan-year written mod is affine in (1 + c),
         # M_w(m) = A(m) + B(m)*(1 + c), so the required step solves in one sum
@@ -386,11 +414,15 @@ def build_netcalc(ctx: Ctx):
                     f"($W{r}+$X{r}*IF(ISNUMBER($F${rr}),$F${rr},0))"
                     f"*IF($F${t}=1,($AC{r}+$AB{r}*IF(ISNUMBER($H${rr}),$H${rr},"
                     f"$J${t}))/$G${t},1))", fmt=FMT_IDX)
-        # D68: the rate leg one year back — the year now flowing. The tab's new
-        # change is always dated INSIDE the plan year (the input carries a
-        # date validation to it), so it can never touch a P-1 month: the prior
-        # year is the live log measured against its own P-2 base, with no
-        # affine term and nothing to solve.
+        # D68: the rate leg one year back — the live log measured against its
+        # own P-2 base, with no affine term (the tab's change is date-validated
+        # into the plan year, so it can never touch a P-1 month).
+        #
+        # D102 stopped DISPLAYING this: the tab is for future decisions, and a
+        # year with no target in it was taking twelve columns per state. The
+        # cells stay because the harness ties them to program_flow_by_month —
+        # a cheap, independent check that the cohort offsets have not slipped,
+        # which is exactly the failure D64 hit silently.
         for j in range(12):
             r = t + 15 + j
             formula(ws, f"AG{r}", f'=IF($D${t}=0,"",$N{r}/$N{r - 12}-1)', fmt=PCT_S)
@@ -707,29 +739,37 @@ def build_net_delivery(ctx: Ctx):
         "is the column to read: it is the further action your logged plan still leaves "
         "for the target to find, dated at the same filing.", fnt=F_SMALL_IT)
 
-    # ---- twin state x month grids, the rate leg two years wide (D68) ----
-    # Same seam and the same colours as Program Flow — steel for the year now
-    # flowing at B..M, navy for the plan year at N..Y — so the two tabs read
-    # identically. Unlike Program Flow the prior block carries no outline
-    # group: this tab's summary keeps its INPUT columns (D, E) under B..M, and
-    # collapsing would hide them.
+    # ---- twin state x month grids, both target years wide (D102) ----
+    # This tab is for FUTURE decisions — here is a target, here is how to reach
+    # it — so it shows the two years you can set a target for: the plan year in
+    # navy at B..M, the following year in steel at N..Y. It used to show P-1
+    # instead of P+1, which meant the rate grid opened on a year with no target
+    # and the pricing grid could not populate that half at all: twelve columns
+    # per state of nothing but a caption explaining the nothing.
+    #
+    # No outline group here. The summary table above spans A..Q, so collapsing
+    # either year block would hide part of it; fixing that means moving the
+    # grids clear of the summary, which is a separate change.
     g1 = tot + GRID_GAP
     section(ws, g1, "A", "How the target is delivered, month by month — the rate leg")
     put(ws, f"A{g1 + 1}",
         "YoY change on renewals from the rate side: history plus the change in force at "
         "each state's date. Steps mark anniversaries of past changes and the new filing. "
-        "The steel block is the year now flowing — what the book is already delivering "
-        "before this filing lands.", fnt=F_SMALL_IT)
+        "The steel block is the following year — CARRYOVER of the same filing, with no "
+        "second change assumed, so it shows what this year's decision leaves behind.",
+        fnt=F_SMALL_IT)
     g2 = g1 + 3 + nd + 3
     section(ws, g2, "A", "…and the pricing change that satisfies the target")
     put(ws, f"A{g2 + 1}",
         "Required YoY pricing (schedule-mod) change on renewals so that rate x pricing "
-        "averages the target. Red = the months where the burden bites. Plan year only: "
-        "there is no target in a prior year, so a required walk is undefined there — the "
-        "steel block is deliberately empty.", fnt=F_SMALL_IT)
-    years = ((ND_PRIOR_COL, 15, FILL_STEEL, "nr_PlanYear-1"),
-             (ND_PLAN_COL, 27, FILL_NAVY, "nr_PlanYear"))
-    for g0, colL, two_year in ((g1 + 2, "AG", True), (g2 + 2, "AH", False)):
+        "averages the target. Red = the months where the burden bites. Both years answer "
+        "now: the plan year against the net target, the steel block against the P+1 "
+        "target. Leaving the P+1 cell blank on Inputs is not the same as having no "
+        "target — it CARRIES the plan-year selection forward, and this grid solves "
+        "against whatever it carries.", fnt=F_SMALL_IT)
+    years = ((ND_PLAN_COL, 27, FILL_NAVY, "nr_PlanYear"),
+             (ND_NEXT_COL, 39, FILL_STEEL, "nr_PlanYear+1"))
+    for g0, colL in ((g1 + 2, "AG"), (g2 + 2, "AH")):
         put(ws, f"A{g0}", "State", fnt=font("FFFFFF", bold=True), fill=FILL_NAVY,
             align=ALIGN_C)
         for c0, off, fill_, yexpr in years:
@@ -738,20 +778,13 @@ def build_net_delivery(ctx: Ctx):
                 cell.font = font("FFFFFF", bold=True, size=9)
                 cell.fill = fill_
                 cell.alignment = ALIGN_C
-                if two_year or c0 == ND_PLAN_COL:
-                    cell.value = (f'=TEXT(DATE({yexpr},{j + 1},1),"mmm")'
-                                  f'&" "&({yexpr})')
-            if not two_year and c0 == ND_PRIOR_COL:
-                c = ws.cell(row=g0, column=c0)
-                c.value = '="  no target in "&(nr_PlanYear-1)&" — nothing to solve"'
-                c.alignment = ALIGN_L
+                cell.value = (f'=TEXT(DATE({yexpr},{j + 1},1),"mmm")'
+                              f'&" "&({yexpr})')
         for i in range(nd):
             r = g0 + 1 + i
             t = block_top(i)
             link(ws, f"A{r}", f"=_lists!$B${3 + i}", align=ALIGN_C, bold=True)
             for c0, off, _f, _y in years:
-                if not two_year and c0 == ND_PRIOR_COL:
-                    continue
                 for j in range(12):
                     cc = ws.cell(row=r, column=c0 + j)
                     formula(ws, cc.coordinate,
@@ -939,7 +972,7 @@ def build_net_delivery(ctx: Ctx):
     # month columns share them, and 10 fits every value on this tab
     set_widths(ws, {"A": 26})
     for j in range(24):
-        ws.column_dimensions[col(ND_PRIOR_COL + j)].width = 10
+        ws.column_dimensions[col(ND_PLAN_COL + j)].width = 10
     set_widths(ws, {col(ND_FLAG_COL): 24})
     # Column A plus the CONTROL band (rows 1-7). The tab has three stacked
     # sections with different headers, and pinning one section's header while

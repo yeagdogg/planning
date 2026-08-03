@@ -518,8 +518,24 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
                         for j in range(12))
             check("[net delivery] D68 prior-year rate leg ties the program-flow oracle",
                   bad_y == 0, f"{bad_y} mismatched months")
+            # D102: the P+1 half of both grids — carryover only, solved against
+            # the P+1 target (which falls back to the P selection when blank)
+            months_p1 = engine.net_delivery_by_month_p1(p, ncmb, d0, r_force)
+            bad_1 = sum(
+                0 if (approx(ncs[f"AG{t + 39 + j}"].value, mr["rate_leg"], 1e-9)
+                      and approx(ncs[f"AH{t + 39 + j}"].value,
+                                 mr["price_leg_required"], 1e-9)
+                      and approx(ncs[f"AI{t + 39 + j}"].value, mr["m_required"], 1e-9))
+                else 1
+                for j, mr in enumerate(months_p1))
+            check("[net delivery] D102 all 12 P+1 months tie oracle (3 measures each)",
+                  bad_1 == 0, f"{bad_1} mismatched months")
+            check("[net delivery] D102 the P+1 target is the engine's net_x1",
+                  approx(ncs[f"AA{t}"].value, ncmb.net_x1, 1e-12),
+                  f"wb={ncs[f'AA{t}'].value} oracle={ncmb.net_x1}")
             from src.sheets_netdelivery import (ND_FLAG_COL as NDFC, ND_HDR as NDH,
-                                                ND_PRIOR_COL as NDYC)
+                                                ND_NEXT_COL as NDN,
+                                                ND_PLAN_COL as NDYC)
             nd_ws = wb[SHEETS.NET_DELIVERY]
             nd_nd = len(cfg.states) + 3
             # rate grid: section row g1, header g1+2, first data row g1+3;
@@ -529,17 +545,31 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
                          if isinstance(rw[0].value, str)
                          and rw[0].value.startswith("How the target is delivered"))
             nd_g2 = nd_g1 + 3 + nd_nd + 3
-            bad_y = sum(0 if approx(nd_ws.cell(row=nd_g1 + 3 + si,
-                                               column=NDYC + j).value,
-                                    npf.prior_rows[j]["rate_leg"], 1e-9) else 1
-                        for j in range(12))
-            check("[net delivery] D68 the TAB's prior-year band ties the oracle",
-                  bad_y == 0, f"{bad_y} mismatched months")
-            empty = all(nd_ws.cell(row=nd_g2 + 3 + si, column=NDYC + j).value
-                        in (None, "") for j in range(12))
-            check("[net delivery] D68 the pricing grid has no prior-year block "
-                  "(no target in P-1, so nothing to solve)", empty,
-                  "prior-year pricing cells must stay empty")
+            # D102: the TAB shows the two years a target can be SET for. Both
+            # grids now populate both blocks — the pricing grid's second block
+            # used to be deliberately empty because it showed P-1, a year with
+            # no target in it.
+            bad_y = sum(
+                0 if (approx(nd_ws.cell(row=nd_g1 + 3 + si, column=NDYC + j).value,
+                             months[j]["rate_leg"], 1e-9)
+                      and approx(nd_ws.cell(row=nd_g2 + 3 + si, column=NDYC + j).value,
+                                 months[j]["price_leg_required"], 1e-9))
+                else 1 for j in range(12))
+            check("[net delivery] D102 the TAB's plan-year bands tie the oracle "
+                  "(rate and pricing)", bad_y == 0, f"{bad_y} mismatched months")
+            bad_n = sum(
+                0 if (approx(nd_ws.cell(row=nd_g1 + 3 + si, column=NDN + j).value,
+                             months_p1[j]["rate_leg"], 1e-9)
+                      and approx(nd_ws.cell(row=nd_g2 + 3 + si, column=NDN + j).value,
+                                 months_p1[j]["price_leg_required"], 1e-9))
+                else 1 for j in range(12))
+            check("[net delivery] D102 the TAB's P+1 bands tie the oracle "
+                  "(rate carryover and pricing)", bad_n == 0, f"{bad_n} mismatched months")
+            filled = all(nd_ws.cell(row=nd_g2 + 3 + si, column=NDN + j).value
+                         not in (None, "") for j in range(12))
+            check("[net delivery] D102 the pricing grid answers for P+1 "
+                  "(the old empty prior-year block is gone)", filled,
+                  "P+1 pricing cells must populate")
             check("[net delivery] D68 flags column sits right of both year bands",
                   nd_ws.cell(row=NDH, column=NDFC).value == "Flags",
                   repr(nd_ws.cell(row=NDH, column=NDFC).value))

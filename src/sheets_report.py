@@ -1498,7 +1498,10 @@ READ_ME_GUIDE = [
                      "the EP-weighted book view."),
     ("Net Delivery", "For net-target combos: the month-by-month rate leg and the pricing "
                      "change that satisfies the target — the filing to make and the mod "
-                     "change to file with it, both dated."),
+                     "change to file with it, both dated. Covers the plan year AND the "
+                     "following year, since a target can be set for both; the P+1 half is "
+                     "carryover of the same filing, so it shows what this year's decision "
+                     "leaves behind."),
     ("Bridge", "The selected combo's answer: projected LR -> CY plan LR, factor by factor."),
     ("LR Flow", "The same bridge evaluated at each MONTH instead of averaged over the "
                 "year — rate and price earning in against trend pushing the other way. "

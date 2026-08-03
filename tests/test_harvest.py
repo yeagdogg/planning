@@ -168,3 +168,79 @@ def test_harvest_of_the_shipped_book():
     for r in book.rows:
         assert all(r[f] is not None for f in REQUIRED)
         assert r["key"] == f"{r['bu']}|{r['state']}"
+
+
+# ---------------------------------------------------------------------------
+# D103: the long pivot dataset. The shape IS the safety property here — one
+# weight per row is what makes a single calculated field correct everywhere.
+# ---------------------------------------------------------------------------
+
+
+def test_pivot_rows_are_long_and_self_weighting():
+    from src.sheets_book import PIVOT_ANNUAL, PIVOT_MONTHLY, pivot_rows
+    try:
+        book = harvest(CFG, now=dt.datetime(2027, 1, 2, 3, 4))
+    except HarvestError as e:
+        pytest.skip(f"LOB workbooks not harvestable: {e}")
+    rows = pivot_rows(book, CFG.plan_year)
+    assert rows, "no pivot rows produced"
+    # every row carries a POSITIVE weight — a zero would make a slice 0/0
+    assert all(w > 0 for *_x, w, _wv in rows), "a row has no weight"
+    # annual rows have no month; monthly rows all sit inside the plan year
+    for *_d, cat, _m, month, _w, _wv in rows:
+        if cat == "Monthly":
+            assert month is not None and month.year == CFG.plan_year
+        else:
+            assert month is None
+    measures = {m for *_d, _c, m, _mo, _w, _wv in rows}
+    assert {m for m, _c, _s, _p in PIVOT_ANNUAL} <= measures
+    assert {m for m, _l, _g in PIVOT_MONTHLY} <= measures
+
+
+def test_pivot_monthly_weights_sum_to_each_combo_s_premium():
+    """The /12 rescale: Weight means PREMIUM in every row, so a combo's twelve
+    monthly weights must add back to the annual EP they were split from."""
+    from src.sheets_book import pivot_rows
+    try:
+        book = harvest(CFG, now=dt.datetime(2027, 1, 2, 3, 4))
+    except HarvestError as e:
+        pytest.skip(f"LOB workbooks not harvestable: {e}")
+    rows = pivot_rows(book, CFG.plan_year)
+    ep, monthly = {}, {}
+    for lob, bu, state, _cat, measure, _mo, w, _wv in rows:
+        k = (lob, bu, state)
+        if measure == "Plan LR":
+            ep[k] = w
+        elif measure == "Rate YoY":
+            monthly[k] = monthly.get(k, 0.0) + w
+    assert ep and monthly
+    for k, e in ep.items():
+        assert monthly[k] == pytest.approx(e, rel=1e-9), f"{k} monthly != annual EP"
+
+
+def test_pivot_plan_lr_reproduces_the_ep_weighted_book():
+    """SUM(Weighted value)/SUM(Weight) over the Plan LR rows must equal the
+    EP-weighted plan LR of the harvest — the property every pivot slice relies
+    on, checked at the one slice we can compute independently."""
+    from src.sheets_book import pivot_rows
+    try:
+        book = harvest(CFG, now=dt.datetime(2027, 1, 2, 3, 4))
+    except HarvestError as e:
+        pytest.skip(f"LOB workbooks not harvestable: {e}")
+    num = den = 0.0
+    for _l, _b, _s, _c, measure, _mo, w, wv in pivot_rows(book, CFG.plan_year):
+        if measure == "Plan LR":
+            num, den = num + wv, den + w
+    direct_n = sum((r["ep"] or 0.0) * (r["cylr_p"] or 0.0) for r in book.rows)
+    direct_d = sum(r["ep"] or 0.0 for r in book.rows)
+    assert num / den == pytest.approx(direct_n / direct_d, abs=1e-12)
+    # and per LOB, since slicing is the whole point
+    for lob in {r["lob"] for r in book.rows}:
+        n = d = 0.0
+        for l_, _b, _s, _c, measure, _mo, w, wv in pivot_rows(book, CFG.plan_year):
+            if measure == "Plan LR" and l_ == lob:
+                n, d = n + wv, d + w
+        dn = sum((r["ep"] or 0.0) * (r["cylr_p"] or 0.0)
+                 for r in book.rows if r["lob"] == lob)
+        dd = sum(r["ep"] or 0.0 for r in book.rows if r["lob"] == lob)
+        assert n / d == pytest.approx(dn / dd, abs=1e-12), lob
