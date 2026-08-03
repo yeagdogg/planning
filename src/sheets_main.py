@@ -650,30 +650,48 @@ class SsCol:
     width: float
     group: str = ""             # two-tier caption; equal ADJACENT values span
     live: str | None = None     # formula header, for year-bearing labels (D44)
+    level: int = 0              # Excel column outline level; 0 = always visible
 
 
 def _ss_slots():
     for j in (1, 2, 3, 4):
-        yield SsCol(f"chg{j}_date", f"Chg {j} date", 9, SS_G_HIST)
-        yield SsCol(f"chg{j}_pct", f"Chg {j}", 7, SS_G_HIST)
-        yield SsCol(f"chg{j}_tok", "T/P", 4, SS_G_HIST)
+        yield SsCol(f"chg{j}_date", f"Chg {j} date", 9, SS_G_HIST, level=SS_LV_HIST)
+        yield SsCol(f"chg{j}_pct", f"Chg {j}", 7, SS_G_HIST, level=SS_LV_HIST)
+        yield SsCol(f"chg{j}_tok", "T/P", 4, SS_G_HIST, level=SS_LV_HIST)
 
 
-# ORDER IS THE POINT (D90). The bridge and the plan LR it produces now sit
-# inside the first screen; the chronology, which is reference rather than the
-# answer, follows. Plan LR moves from column 27 (~1,600px in — off-screen on a
-# 1080p display, so the flagship exhibit did not show its own headline) to
-# column 13, about 915px, which is on screen with the roster frozen.
+# The exhibit reads as a DERIVATION, not as a dashboard (D101, user direction):
+# what we filed, what we assumed, what that earns — therefore this loss ratio.
+# The inputs sit to the LEFT of the bridge because the bridge chain is itself a
+# left-to-right product and its inputs belong on the same axis.
+#
+# D90 put the bridge first instead, to rescue a headline stranded at ~1,600px.
+# That problem is real but reordering was the wrong cure: COLLAPSING the inputs
+# solves it without breaking the argument's order. Two nested outline levels, so
+# the toggles are independent — contiguous columns at one level would merge into
+# a single group:
+#   level 2  the rate-change chronology (12 columns), collapsed by default
+#   level 1  the whole input region, so one more click leaves State | EP | Plan LR
+# Plan LR lands at ~949px as shipped (unchanged), ~537px with inputs collapsed.
+SS_LV_HIST = 2       # inner group: the chronology alone
+SS_LV_INPUT = 1      # outer group: every input feeding the bridge
+
 SS_COLS: tuple[SsCol, ...] = (
     SsCol("state", "State", 7),
     SsCol("ep", "Adj plan EP (000s)", 12, "Volume"),
-    SsCol("mind", "Mod in indication", 9, "Schedule mods"),
-    SsCol("m0", "Current mod", 8.5, "Schedule mods"),
-    SsCol("m1", "Proj. mod, plan-yr end", 9, "Schedule mods"),
-    SsCol("crl", "Indication rate level", 9.5, "Engine levels"),
+    # ---- inputs, in the order the engine consumes them --------------------
+    *_ss_slots(),
+    SsCol("ntaken", "# taken", 7, SS_G_HIST, level=SS_LV_HIST),
+    SsCol("nplanned", "# planned", 8, SS_G_HIST, level=SS_LV_HIST),
+    SsCol("mind", "Mod in indication", 9, "Schedule mods", level=SS_LV_INPUT),
+    SsCol("m0", "Current mod", 8.5, "Schedule mods", level=SS_LV_INPUT),
+    SsCol("m1", "Proj. mod, plan-yr end", 9, "Schedule mods", level=SS_LV_INPUT),
+    SsCol("crl", "Indication rate level", 9.5, "Engine levels", level=SS_LV_INPUT),
     SsCol("ecy", "Earned rate level", 9.5, "Engine levels",
-          '=nr_PlanYear&" earned rate level"'),
-    SsCol("mbar", "Earned mod", 9, "Engine levels", '=nr_PlanYear&" earned mod"'),
+          '=nr_PlanYear&" earned rate level"', level=SS_LV_INPUT),
+    SsCol("mbar", "Earned mod", 9, "Engine levels", '=nr_PlanYear&" earned mod"',
+          level=SS_LV_INPUT),
+    # ---- the answer -------------------------------------------------------
     SsCol("lrcur", "Projected LR (current level)", 11, SS_G_BRIDGE),
     SsCol("arate", "x  Rate earn-in (A_rate)", 9.5, SS_G_BRIDGE),
     SsCol("amod", "x  Mod drift (A_mod)", 9.5, SS_G_BRIDGE),
@@ -684,9 +702,7 @@ SS_COLS: tuple[SsCol, ...] = (
     # sits in the bridge band without joining the product
     SsCol("target", "Target LR", 9, SS_G_BRIDGE),
     SsCol("mix", "Mix (pts)", 7, SS_G_BRIDGE),
-    *_ss_slots(),
-    SsCol("ntaken", "# taken", 7, SS_G_HIST),
-    SsCol("nplanned", "# planned", 8, SS_G_HIST),
+    # ---- and the same answer for the following year, beside it (D101) -----
     SsCol("trend", "Net trend", 8.5, SS_G_P1, '="Net trend ("&(nr_PlanYear+1)&")"'),
     SsCol("arate1", "Rate earn-in +1", 9.5, SS_G_P1,
           '=(nr_PlanYear+1)&" rate earn-in"'),
@@ -730,6 +746,26 @@ def ss_groups() -> list[tuple[int, int, str]]:
         else:
             runs.append([i, i, c.group])
     return [tuple(r) for r in runs]
+
+
+def ss_outline(ws, first_col: int = 1) -> None:
+    """Apply the declared column outline levels (D101).
+
+    Shared by the per-LOB exhibit and the Book's mirror so the two cannot drift
+    into different collapse behaviour. ``first_col`` exists because a mirror may
+    start the map at a different column.
+
+    The chronology is hidden as well as grouped: an outline that ships expanded
+    puts Plan LR back off the first screen, which is the whole problem D90 hit.
+    Excel draws the +/- button to the RIGHT of a column group by default, which
+    is where the bridge is — so the control sits against the thing it reveals.
+    """
+    for i, c in enumerate(SS_COLS, first_col):
+        if c.level:
+            dim = ws.column_dimensions[col(i)]
+            dim.outlineLevel = c.level
+            if c.level >= SS_LV_HIST:
+                dim.hidden = True
 
 
 def ss_group_starts() -> set[int]:
@@ -1052,6 +1088,7 @@ def build_state_summary(ctx: Ctx):
     # grouped column still calculates, it just isn't in the way.)
     for k in SS_HELP:
         ws.column_dimensions[ss_h(k)].outlineLevel = 1
+    ss_outline(ws)
     presentation_setup(ws, gridlines_off=True, freeze=f"B{first}", tab_color=NAVY)
     print_setup(ws)
 

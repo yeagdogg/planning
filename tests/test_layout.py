@@ -109,17 +109,38 @@ def test_ss_groups_are_contiguous_and_cover_every_column():
     assert len(caps) == len(set(caps))
 
 
-def test_the_bridge_and_its_headline_fit_the_first_screen():
-    """The reason the exhibit was reordered (D90).
-
-    Plan LR used to sit at column 27, about 1,600px in — off the right edge of
-    a 1080p window, so the flagship leadership exhibit did not show its own
-    headline without scrolling. Excel renders a column of width w at roughly
-    7w + 5 px; the roster column is frozen, so everything up to and including
-    Plan LR must fit."""
+def _ss_px(upto_key: str, collapse_at: int) -> float:
+    """Pixels to the right edge of `upto_key` with every column at outline level
+    >= collapse_at hidden. Excel renders a column of width w at roughly 7w+5px;
+    the roster column is frozen, so this is what a reader actually sees."""
     from src.sheets_main import SS_COLS, ss_c
-    px = sum(7 * c.width + 5 for c in SS_COLS[:ss_c("planlr")]) + 30
-    assert px < 1100, f"plan LR sits {px:.0f}px in — off screen again"
+    return sum(7 * c.width + 5 for c in SS_COLS[:ss_c(upto_key)]
+               if c.level < collapse_at) + 30
+
+
+def test_the_headline_is_on_the_first_screen_in_every_collapse_state():
+    """D90 found Plan LR stranded at ~1,600px and fixed it by moving the bridge
+    ahead of the inputs. D101 puts the inputs back in front — the exhibit reads
+    as a derivation, not a dashboard — and solves the reach problem by COLLAPSING
+    them instead, which is what the outline levels are for. So the property to
+    pin is no longer raw column order; it is that the headline is reachable in
+    the state the file actually SHIPS in, and closer still when collapsed."""
+    from src.sheets_main import SS_LV_HIST, SS_LV_INPUT
+    as_shipped = _ss_px("planlr", SS_LV_HIST)      # chronology collapsed
+    assert as_shipped < 1100, f"plan LR sits {as_shipped:.0f}px in — off screen"
+    assert _ss_px("target", SS_LV_HIST) < 1100     # and the benchmark beside it
+    # collapsing the whole input region has to be worth doing
+    answer_only = _ss_px("planlr", SS_LV_INPUT)
+    assert answer_only < 600, f"inputs collapsed still puts plan LR at {answer_only:.0f}px"
+    assert answer_only < as_shipped - 300
+    # fully expanded it is a wide exhibit, and that is the point of the toggle
+    assert _ss_px("planlr", 99) > 1400
+
+
+def test_the_exhibit_reads_as_a_derivation():
+    """Inputs, then the walk, then the answer — and the following year's answer
+    beside this year's rather than 20 columns away (D101)."""
+    from src.sheets_main import SS_LV_HIST, SS_LV_INPUT, ss_c
     # the bridge itself reads left to right, ending in the number it produces
     chain = [ss_c(k) for k in ("lrcur", "arate", "amod", "aother", "planlr")]
     assert chain == list(range(chain[0], chain[0] + 5))
@@ -127,11 +148,21 @@ def test_the_bridge_and_its_headline_fit_the_first_screen():
     # residual — target is NOT part of the product, only read against it
     assert ss_c("target") == ss_c("planlr") + 1
     assert ss_c("mix") == ss_c("target") + 1
-    # the whole comparison still fits on screen with the roster frozen
-    px_t = sum(7 * c.width + 5 for c in SS_COLS[:ss_c("target")]) + 30
-    assert px_t < 1100, f"plan LR vs target sits {px_t:.0f}px in"
-    # the chronology is reference, and follows the answer
-    assert ss_c("chg1_date") > ss_c("target")
+    # every input feeding the bridge precedes it, and is collapsible
+    from src.sheets_main import SS_COLS
+    lv = {c.key: c.level for c in SS_COLS}
+    for k in ("chg1_date", "ntaken", "mind", "m0", "m1", "crl", "ecy", "mbar"):
+        assert ss_c(k) < ss_c("lrcur"), f"{k} is an input and belongs before the bridge"
+        assert lv[k] >= SS_LV_INPUT, f"{k} is an input and must be collapsible"
+    # the chronology collapses independently of the rest, so it is nested deeper
+    assert lv["chg1_date"] == SS_LV_HIST > SS_LV_INPUT == lv["mind"]
+    # P and P+1 are the same quantity for two years: keep them within one screen
+    assert ss_c("planlr1") - ss_c("planlr") <= 8, "the two years drifted apart again"
+    # nothing the reader came for may be behind a collapse
+    answers = ("lrcur", "arate", "amod", "aother", "planlr", "target", "mix",
+               "trend", "arate1", "amod1", "planlr1")
+    hidden = [k for k in answers if lv[k] != 0]
+    assert not hidden, f"answer columns are behind a collapse: {hidden}"
 
 
 def test_book_mirror_shares_the_column_map():

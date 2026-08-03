@@ -30,7 +30,7 @@ from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
 
 from .sheets_main import (SS_COLS, SS_G_BRIDGE, SS_G_HIST, SS_G_P1,
-                         ss_c, ss_groups, ss_l)
+                         ss_c, ss_groups, ss_l, ss_outline)
 from .xlstyle import (ALIGN_C, ALIGN_L, BORDER_THIN, FAIL_RED, FILL_GREY, FILL_NAVY,
     FILL_PANEL, FMT_DATE, FMT_DATE_S, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT,
     FMT_PTS_SIGNED, F_LABEL, F_SMALL_IT, GREY_DARK, NAVY, PASS_GREEN, STEEL_LIGHT,
@@ -505,6 +505,7 @@ def build_state_summary(ctx: BookCtx, n: int):
     ]
     for i, t in enumerate(notes):
         put(ws, f"A{tot + 2 + i}", t, fnt=F_SMALL_IT)
+    ss_outline(ws)          # same collapse behaviour as the per-LOB exhibit (D101)
     presentation_setup(ws, gridlines_off=True, freeze=f"B{SS_FIRST}", tab_color=NAVY)
     print_setup(ws)
 

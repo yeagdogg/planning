@@ -180,12 +180,16 @@ walk tied to a fresh oracle run, with its residual decomposition required to rep
 own weighted mean; scenario, attribution, seasonality, basis, mod-toggle,
 degenerate-input, stepped-mod, and plan-year-change exercises each tied to fresh oracle runs.
 
-At v3.5.3, verification is PARTIAL and this line says so rather than inheriting the last
-green claim: **Property at full phase D, 314 checks / 0 failed**, and the combined book
-**56 / 0** (`tools/verify_book.py`, including the source-freshness phase). The other five
-lines are built and recalculated from the same source but their phase D has not been re-run
-since the D98 fix — run `python tools/release.py --full --skip-build` to close that gap.
-pytest 310/310. Excel's COM layer is intermittently flaky under this load and no in-process
+At v3.6.0 every artifact is green at **phases A-C**: the five 12-month lines **105 checks /
+0 failed** each, the 6-month-term Inland Marine **103 / 0**, and the combined book **26 / 0**
+(`tools/verify_book.py`, including the source-freshness phase). pytest 311/311. The whole
+sweep takes about 8 minutes.
+
+**Phase D has not been run against this tree.** v3.6.0 is a column reorder on one exhibit —
+no formula computes anything different — so phases A-C, which tie every State Summary value
+to a per-combo oracle run, are the tier that can actually say something here. The last full
+phase D was Property at **314 / 0** on the v3.5.3 build. To close it out:
+`python tools/release.py --full --skip-build`. Excel's COM layer is intermittently flaky under this load and no in-process
 retry clears it, so the driver retries the book steps in FRESH processes and re-runs serially
 any line that was killed outright rather than failing an assertion (D92); the book is also
 verified BEFORE the fan-out rather than in its exhaust (D94).
