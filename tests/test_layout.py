@@ -173,3 +173,60 @@ def test_book_mirror_shares_the_column_map():
     import src.sheets_main as sm
     assert bk.SS_COLS is sm.SS_COLS
     assert bk.ss_l("planlr") == sm.ss_l("planlr")
+
+
+def test_both_state_summaries_get_the_same_conditional_formats():
+    """D104. The Book's mirror had NO conditional formatting for four versions:
+    no plan-LR heatmap, no EP data bar, and no amber on planned rate changes.
+    The two builders had already been unified on the column map (D90), the
+    group captions and the outline levels (D101) — formatting was the last
+    thing still hand-written in one place, so it was the last thing to drift.
+
+    Both now call ss_conditional_formats, so pin what it produces rather than
+    that it was called: the rules must land on the columns the map names, in
+    any collapse state and after any future reorder."""
+    from openpyxl import Workbook
+
+    from src.sheets_main import ss_conditional_formats, ss_l
+
+    ws = Workbook().active
+    ss_conditional_formats(ws, 8, 31, "Calibri")
+    got = {}
+    for rng in ws.conditional_formatting:
+        cols = {"".join(ch for ch in part.split("$")[-2] if ch.isalpha())
+                if "$" in part else "".join(ch for ch in part if ch.isalpha())
+                for part in str(rng.sqref).replace(":", " ").split()}
+        for rule in rng.rules:
+            for c in cols:
+                got.setdefault(c, set()).add(rule.type)
+    assert got.get(ss_l("planlr")) == {"colorScale"}
+    assert got.get(ss_l("planlr1")) == {"colorScale"}
+    assert got.get(ss_l("ep")) == {"dataBar"}
+    for j in range(1, 5):
+        assert got.get(ss_l(f"chg{j}_tok")) == {"expression"}, f"chg{j}_tok unformatted"
+    # nothing lands anywhere else — a stray rule means a literal column letter
+    expected = {ss_l(k) for k in ("planlr", "planlr1", "ep")} | {
+        ss_l(f"chg{j}_tok") for j in range(1, 5)}
+    assert set(got) == expected, f"unexpected columns formatted: {set(got) - expected}"
+
+
+def test_the_token_rule_anchors_on_its_own_range():
+    """The subtle half of the same bug: a formula whose anchor row does not
+    match the range start makes every row test its neighbour's cell."""
+    from openpyxl import Workbook
+
+    from src.sheets_main import ss_conditional_formats
+
+    ws = Workbook().active
+    ss_conditional_formats(ws, 8, 31, "Calibri")
+    n = 0
+    for rng in ws.conditional_formatting:
+        for rule in rng.rules:
+            if rule.type != "expression":
+                continue
+            n += 1
+            ref = str(rng.sqref).split(":")[0]          # e.g. E8
+            col_ = "".join(ch for ch in ref if ch.isalpha())
+            row_ = "".join(ch for ch in ref if ch.isdigit())
+            assert rule.formula == [f'LEFT(${col_}{row_},1)="P"'], rule.formula
+    assert n == 4, f"expected 4 token rules, found {n}"

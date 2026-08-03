@@ -768,6 +768,48 @@ def ss_outline(ws, first_col: int = 1) -> None:
                 dim.hidden = True
 
 
+def ss_conditional_formats(ws, first: int, last: int, font_name: str) -> None:
+    """The State Summary's visual layer, shared with the Book's mirror (D104).
+
+    The Book was built with none of this. Same exhibit, one dimension deeper,
+    and its plan LR had no heatmap, its EP no data bar, and — the one that
+    actually costs a reader something — its planned rate changes were not
+    distinguished from taken ones. Nobody noticed because the two builders had
+    already been unified on everything a test could check: the column map
+    (D90), the group captions, the outline levels (D101). Formatting was the
+    last thing addressed by hand in only one of them, so it was the last thing
+    left to drift.
+
+    Every range comes from ``ss_l``, never a literal column letter, so an
+    inserted column takes its formatting with it — which is how the D96 target
+    column and the D101 reorder both moved the T/P rules without anyone
+    noticing either.
+    """
+    for key in ("planlr", "planlr1"):
+        cL = ss_l(key)
+        ws.conditional_formatting.add(
+            f"{cL}{first}:{cL}{last}",
+            ColorScaleRule(start_type="min", start_color="D6E8D5",
+                           mid_type="percentile", mid_value=50, mid_color="FFF2CC",
+                           end_type="max", end_color="F4B8B8"))
+    ep = ss_l("ep")
+    ws.conditional_formatting.add(
+        f"{ep}{first}:{ep}{last}",
+        DataBarRule(start_type="num", start_value=0, end_type="max",
+                    color="8497B0", showValue=True))
+    # planned changes read amber italic; taken stay plain (the token still
+    # prints in black and white, so colour is reinforcement, not the message).
+    # The formula anchors on `first` because the range starts there — anchor and
+    # range must agree or every row tests its neighbour's cell.
+    for j in range(1, 5):
+        cl = ss_l(f"chg{j}_tok")
+        ws.conditional_formatting.add(
+            f"{cl}{first}:{cl}{last}",
+            FormulaRule(formula=[f'LEFT(${cl}{first},1)="P"'],
+                        font=Font(name=font_name, size=9, bold=True,
+                                  italic=True, color=WARN_AMBER)))
+
+
 def ss_group_starts() -> set[int]:
     """Columns that open a group — where the medium divider rule is drawn.
     The State/Volume boundary is deliberately not one: a state and its premium
@@ -1010,27 +1052,7 @@ def build_state_summary(ctx: Ctx):
             b = cell.border
             cell.border = Border(left=med, right=b.right, top=b.top, bottom=b.bottom)
 
-    # conditional formatting: LR heatmaps + EP data bars
-    for key in ("planlr", "planlr1"):
-        cL = ss_l(key)
-        ws.conditional_formatting.add(
-            f"{cL}{first}:{cL}{last}",
-            ColorScaleRule(start_type="min", start_color="D6E8D5",
-                           mid_type="percentile", mid_value=50, mid_color="FFF2CC",
-                           end_type="max", end_color="F4B8B8"))
-    ws.conditional_formatting.add(
-        f"B{first}:B{last}",
-        DataBarRule(start_type="num", start_value=0, end_type="max",
-                    color="8497B0", showValue=True))
-    # planned changes read amber italic; taken stay plain (the token still
-    # prints in black and white, so colour is reinforcement, not the message)
-    for j in range(1, 5):
-        cl = ss_l(f"chg{j}_tok")
-        ws.conditional_formatting.add(
-            f"{cl}{first}:{cl}{last}",
-            FormulaRule(formula=[f'LEFT(${cl}{first},1)="P"'],
-                        font=Font(name=ctx.cfg.font, size=9, bold=True,
-                                  italic=True, color=WARN_AMBER)))
+    ss_conditional_formats(ws, first, last, ctx.cfg.font)
 
     # Short single-line footnotes (overflow display, never ribbon-wrapped);
     # the deep documentation lives on Read Me (glossary) and Walkthrough

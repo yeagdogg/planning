@@ -180,12 +180,12 @@ walk tied to a fresh oracle run, with its residual decomposition required to rep
 own weighted mean; scenario, attribution, seasonality, basis, mod-toggle,
 degenerate-input, stepped-mod, and plan-year-change exercises each tied to fresh oracle runs.
 
-At v3.7.0 every artifact is green at **phases A-C**: the five 12-month lines **108 checks /
+At v3.7.1 every artifact is green at **phases A-C**: the five 12-month lines **108 checks /
 0 failed** each, the 6-month-term Inland Marine **106 / 0**, and the combined book **30 / 0**
 (`tools/verify_book.py`, including the source-freshness phase and the Pivot Data ties).
-pytest 319/319. The whole sweep takes about 4 minutes.
+pytest 321/321. The whole sweep takes about 4 minutes.
 
-**Phase D has not been run against this tree.** v3.7.0 changes what Net Delivery displays and
+**Phase D has not been run against this tree.** v3.7.x changes what Net Delivery displays and
 adds the P+1 delivery decomposition, both of which phase C ties directly to fresh oracle runs
 (`net_delivery_by_month_p1`, all 12 months × 3 measures, plus the tab's own bands). The last
 full phase D was Property at **314 / 0** on the v3.5.3 build. To close it out:
