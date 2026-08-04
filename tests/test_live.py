@@ -118,6 +118,10 @@ def test_defined_name_refs_split_including_quoted_sheets():
 
 WB = Path("output/Plan_LR_Workbook_2027_Property.xlsx")
 
+if WB.exists():
+    from src.build_workbook import Layout as L, load_config
+    L.configure(load_config("config/config.yaml"))
+
 
 def _excel_available() -> bool:
     try:
@@ -187,6 +191,32 @@ def test_an_exercise_leaves_no_trace_once_it_is_restored(book):
         book.apply(mutation)
     book.restore()
     assert {n: book.nval(n) for n in before} == before
+
+
+@live_only
+def test_blanking_an_input_is_expressible(book):
+    """Excel cannot hold an empty string distinct from empty, so a cleared cell
+    reads back as None. Without treating "" and None as the same end state, an
+    exercise could never say "blank this input" — the write would land and the
+    guard would then call it a failure. Found by trying to model a platform that
+    writes only one business unit."""
+    r = L.LR_FIRST
+    before = book["Inputs"][f"A{r}"].value
+    assert before, "expected a populated first tbl_LR row"
+    book.apply({("Inputs", f"A{r}"): ""})
+    assert book["Inputs"][f"A{r}"].value is None
+    book.restore()
+    assert book["Inputs"][f"A{r}"].value == before
+
+
+@live_only
+def test_a_write_that_does_not_land_still_fails_when_clearing(book, monkeypatch):
+    """The other half: relaxing ""/None must not blind the guard. A dropped
+    write leaves the OLD value, which is neither."""
+    r = L.LR_FIRST
+    monkeypatch.setattr(book, "_write", lambda *a, **kw: None)
+    with pytest.raises(RuntimeError, match="mutation did not take"):
+        book.apply({("Inputs", f"A{r}"): ""})
 
 
 @live_only

@@ -370,6 +370,14 @@ class LiveBook:
         """
         for (sheet, addr), want in mutations.items():
             got = self[sheet][addr].value
+            # Clearing a cell: Excel cannot hold an empty string distinct from
+            # empty, so "" and None are the same end state and must compare
+            # equal. Without this, "blank this input" can never be expressed --
+            # the write lands and the guard then calls it a failure. A write
+            # that silently does NOT land still fails, because the cell keeps
+            # its old value, which is neither.
+            if want == "":
+                want = None
             if isinstance(want, dt.date) and not isinstance(want, dt.datetime):
                 if isinstance(got, dt.datetime):
                     got = got.date()
