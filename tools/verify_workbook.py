@@ -44,6 +44,7 @@ from src.build_workbook import (  # noqa: E402
     sample_to_combo,
 )
 from src.sheets_inputs import lr_letter  # noqa: E402
+from tools.live import LiveBook, scan_errors_live  # noqa: E402
 from tools.recalc import recalc  # noqa: E402
 
 ERR_STRINGS = ("#DIV/0!", "#REF!", "#N/A", "#NAME?", "#VALUE!", "#NUM!", "#NULL!",
@@ -861,18 +862,24 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
 def _mutate(src: Path, scratch: Path, mutations: dict[tuple[str, str], object]) -> Path:
     """Copy, apply the mutations with openpyxl, recalculate in Excel (D86a).
 
-    The mutations were briefly written through COM during Excel's own open,
-    which is ~31% faster per exercise. It was reverted: under the parallel
-    release driver (six Excel instances at once) COM destabilises, and the
-    failure mode is not always an exception — one line came back with a full set
-    of assertion failures whose "actual" values were the workbook's DEFAULT
-    state, i.e. the mutation had silently not been applied. A verification
-    harness that can quietly fail to set up its own exercise could just as
-    easily report a false PASS, so this path is deterministic on purpose:
-    openpyxl writes the cells in-process, and only the recalculation crosses
-    into COM, where a failure raises rather than lies.
+    Superseded as the default by the live session (D105) and kept behind
+    --legacy-phase-d, because it is the one path that touches COM only for the
+    recalculation. When a phase-D result is ever in doubt, this is the second
+    opinion: 568s against 18s on Property, and it produced all 317 assertions
+    identically when the two were diffed.
 
-    ``_assert_applied`` closes the remaining gap for both paths.
+    The history is worth keeping. Mutations were once written through COM here
+    too, which was ~31% faster, and it was reverted: under the parallel release
+    driver (six Excel instances at once) a write could FAIL SILENTLY, and one
+    line came back with a full set of assertion failures whose "actual" values
+    were the workbook's DEFAULT state. A harness that can quietly fail to set up
+    its own exercise can just as quietly report a false PASS.
+
+    D105 returns to COM writes, so it has to answer that: it re-reads every
+    mutated cell after calculating and RAISES, re-reads a canary set after every
+    restore, and is fast enough to run serially, which removes the contention
+    that caused the instability in the first place (D100 — those errors were
+    RPC_E_CALL_REJECTED, i.e. "busy", not broken).
     """
     shutil.copy2(src, scratch)
     wb = openpyxl.load_workbook(scratch, data_only=False)
@@ -914,8 +921,22 @@ def _read(scratch: Path):
     return openpyxl.load_workbook(scratch, data_only=True)
 
 
-def phase_d(path: Path, cfg, lob, scratch_dir: Path):
-    print("Phase D: toggle exercises (mutate -> recalc -> tie to oracle)")
+# Headline values re-read after every restore. If one of these has moved, a
+# mutation did not get put back and every later exercise is being graded against
+# a workbook that is not in the state it thinks it is (D105).
+PHASE_D_CANARY = ("nr_CYLR_P", "nr_CYLR_P1", "nr_Arate_P", "nr_Amod_P",
+                  "nr_LRcur", "ck_overall")
+
+# The open session, reachable from main's finally. phase_d is one long function
+# and an assertion failure part way down would otherwise leave Excel holding the
+# scratch workbook open — which makes the rmtree silently fail and leaves a temp
+# directory behind for the next run to trip over.
+_LIVE = None
+
+
+def phase_d(path: Path, cfg, lob, scratch_dir: Path, legacy: bool = False):
+    print("Phase D: toggle exercises (mutate -> recalc -> tie to oracle)"
+          + ("  [legacy copy-per-state path]" if legacy else ""))
     p = cfg.plan_year
     st = cfg.states
     lr_rows = sample_lr_rows(cfg, lob)
@@ -932,27 +953,42 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
         row = next(r for r in lr_rows if r["bu"] == bu and r["state"] == state)
         return sample_to_combo(cfg, lob, row, rate_rows, mod_rows, **kw)
 
-    # Each distinct mutation STATE is built once and kept (D87). Several
-    # exercises apply byte-identical mutation dicts — the master mod toggle is
-    # switched off by three of them, the net-selection showcase by two, the
-    # degenerate combo by both the selector loop and its own exercise — and each
-    # was paying a full copy + Excel round trip to rebuild a file it already had.
-    # Assertions are unchanged and all still run; only the rebuilding is shared.
-    # The error scan rides with the build because a repeated state scans the same.
+    # D105: ONE workbook, opened once and mutated in place for the whole phase.
+    # The old path copied the 2.7MB file and round-tripped it through openpyxl
+    # and Excel for every distinct state — 3.49s an exercise, of which 0.02s was
+    # the recalculation this phase actually exists to test.
+    #
+    # Each distinct mutation STATE still scans for errors exactly once (D87):
+    # several exercises apply byte-identical mutation dicts — the master mod
+    # toggle is switched off by three of them, the net-selection showcase by
+    # two, the degenerate combo by both the selector loop and its own exercise.
+    # Assertions are unchanged and all still run.
+    global _LIVE
+    live = None if legacy else LiveBook(path, scratch_dir / "live.xlsx",
+                                        canary=PHASE_D_CANARY)
+    _LIVE = live
     states: dict[tuple, Path] = {}
+    scanned: set[tuple] = set()
 
     def run(label_, mutations, assertions):
         sig = tuple(sorted((s, a, repr(v)) for (s, a), v in mutations.items()))
-        cached = states.get(sig)
-        if cached is None:
-            cached = scratch_dir / f"ex{len(states):02d}.xlsx"
-            _mutate(path, cached, mutations)
-            states[sig] = cached
-            wb = _read(cached)
-            errs = scan_errors(wb)
-            check(f"[{label_}] zero formula errors", not errs, "; ".join(errs[:5]))
+        first = sig not in scanned
+        scanned.add(sig)
+        if live is not None:
+            # apply() restores the previous exercise, writes this one, calculates,
+            # and proves both landed — it raises rather than grading the wrong
+            # workbook (the D86a failure mode this design has to answer for)
+            wb = live.apply(mutations)
+            errs = scan_errors_live(live) if first else None
         else:
+            cached = states.get(sig)
+            if cached is None:
+                cached = states[sig] = scratch_dir / f"ex{len(states):02d}.xlsx"
+                _mutate(path, cached, mutations)
             wb = _read(cached)
+            errs = scan_errors(wb) if first else None
+        if errs is not None:
+            check(f"[{label_}] zero formula errors", not errs, "; ".join(errs[:5]))
         assertions(wb)
 
     # 1. master mod toggle OFF
@@ -1916,6 +1952,11 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path):
               checks_pass(wb))
     run(f"plan year back to {pm1}", {("Control", "C6"): pm1}, a10b)
 
+    if live is not None:
+        live.close()
+        _LIVE = None
+        print(f"  ({live.exercises} exercises on one open workbook)")
+
 
 # ---------------------------------------------------------------------------
 
@@ -1929,6 +1970,9 @@ def main(argv=None) -> int:
     ap.add_argument("--quick", action="store_true", help="skip phase D exercises")
     ap.add_argument("--skip-recalc", action="store_true",
                     help="assume the workbook already has cached values")
+    ap.add_argument("--legacy-phase-d", action="store_true",
+                    help="run phase D the slow way — a fresh file copy and Excel "
+                         "round trip per mutated state (D105 escape hatch)")
     args = ap.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -1949,8 +1993,12 @@ def main(argv=None) -> int:
         phase_a(path)
         tie_default_state(path, cfg, lob, do_recalc=not args.skip_recalc)
         if not args.quick:
-            phase_d(path, cfg, lob, scratch_dir)
+            phase_d(path, cfg, lob, scratch_dir, legacy=args.legacy_phase_d)
     finally:
+        # Excel must let go of the scratch workbook BEFORE the directory goes,
+        # or rmtree quietly leaves it behind (ignore_errors) for the next run
+        if _LIVE is not None:
+            _LIVE.close()
         shutil.rmtree(scratch_dir, ignore_errors=True)
 
     print(f"\n{'=' * 60}\nRESULT: {PASS} passed, {FAIL} failed")

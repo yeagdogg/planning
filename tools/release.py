@@ -11,20 +11,21 @@ The tiers exist because verification cost is wildly uneven:
 
     --smoke   pytest only                            seconds
     --quick   build + recalc + phases A-C            ~1 min per line
-    --full    adds phase D (mutate -> recalc -> tie)  several min per line
+    --full    adds phase D (mutate -> recalc -> tie)  ~20s per line
 
-Lines are verified as parallel subprocesses, each owning its own Excel instance
-and its own scratch directory, so the wall clock is a few lines rather than six.
-That only became possible once the harness stopped sharing a single scratch
-file (D84) — before, two concurrent runs deleted each other's working copy.
+Phase D used to be the expensive tier by two orders of magnitude — 568s a line,
+because each of its 42 exercises copied the 2.7MB workbook and round-tripped it
+through openpyxl and Excel. It now holds ONE workbook open and mutates it in
+place (D105), which put a line at ~20s and the whole six-line sweep at ~2
+minutes, running serially.
 
-Width is FITTED to the machine (D94), not hard-coded: a phase-D worker is one
-Python process plus one Excel instance and the pair peaks around 670 MB, so the
-bound is `min(lines, cores - 2, two-thirds of free RAM / 900 MB, cap)`, cap 4 for
---full and 8 for --quick. It used to be 2, which on a 24-core box turned six
-lines into three waves for no reason; six turned out too wide in the other
-direction, because Excel/COM starts killing workers and each kill costs a full
-serial re-run.
+Serially is the point. Lines are still verified as subprocesses, each owning its
+own Excel instance and scratch directory (D84), and --quick still fans out wide
+because phases A-C never start Excel. But --full is capped at one worker now:
+the fan-out only ever existed to amortise a 7.5-minute-per-line phase D, and
+concurrent Excel instances were the one thing that made COM unstable (D86a's
+silent write failures, D94's access-violation kills). There is no wave left
+worth saving. Width is still FITTED to the machine (D94) and `--jobs` overrides.
 
 And phase D does not run when it cannot say anything. It mutates inputs,
 recalculates through Excel and ties the results to the oracle — it tests the
@@ -44,6 +45,7 @@ import concurrent.futures as cf
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -68,15 +70,21 @@ STATE_FILE = "release-state.json"
 # no longer has to absorb that failure by staying small.
 MB_PER_JOB_FULL = 900
 MB_PER_JOB_QUICK = 400
-# The binding constraint on --full is COM STABILITY, not memory. Measured over
-# three runs at six concurrent Excel instances (39 GB free, 24 cores, nowhere
-# near a memory wall): 0, 1 and 2 lines killed by access violation. Each kill
-# costs a full serial re-run of that line — about 7.5 minutes — which more than
-# eats the wave that the sixth worker saved. Two kills took a 26-minute run to
-# 47. Four is the honest setting: two waves instead of one, but a fan-out that
-# usually finishes on the first pass. Phases A-C never start Excel, so they keep
-# the wider cap.
-HARD_JOB_CAP_FULL = 4
+# --full runs SERIALLY now (D105), and that is a speed decision, not a caution.
+#
+# The binding constraint here was always COM stability, not memory: measured
+# over three runs at six concurrent Excel instances (39 GB free, 24 cores,
+# nowhere near a memory wall), 0, 1 and 2 lines were killed by access violation.
+# Four was the honest compromise while a line's phase D cost ~7.5 minutes, since
+# one kill cost a full serial re-run and ate the wave the fan-out had bought.
+#
+# A line's phase D is now ~13s (42 exercises on one open workbook instead of 42
+# file copies), and a whole --full sweep of six lines is ~2 minutes serial. There
+# is no longer a wave worth saving, and every concurrent Excel instance removed
+# is a class of failure removed with it. --jobs still overrides.
+#
+# Phases A-C never start Excel at all, so --quick keeps the wide cap.
+HARD_JOB_CAP_FULL = 1
 HARD_JOB_CAP_QUICK = 8
 
 
@@ -198,17 +206,60 @@ def _run(args: list[str], label: str, retries: int = 0,
         _await_excel_drain()
         print(f"  ..   {label} failed; retrying in a fresh process "
               f"({attempt + 1}/{retries})")
-    out = (r.stdout or "") + (r.stderr or "")
-    tail = "\n".join(l for l in out.splitlines()
-                     if "RESULT" in l or "FAIL" in l or "Error" in l)
-    if not tail:
-        tail = out.strip()[-400:]
+    out, err = (r.stdout or ""), (r.stderr or "")
+    tail = _verdict(out, err)
     if not tail:
         tail = (f"exit code {r.returncode} with no output — the process was very "
                 f"likely killed (memory, or Excel taking the interpreter down). "
                 f"Re-run this line on its own: python tools/verify_workbook.py "
                 f"--lob \"{label}\" --skip-recalc")
     return label, r.returncode, tail
+
+
+# What a step's verdict looks like. Ordered so the most specific wins, because
+# the caller prints only the LAST line of what comes back.
+_VERDICT_RE = re.compile(
+    r"^RESULT:|\d+ (passed|failed|error)|^\s*FAIL\b|^\s*REFUSING|^Traceback|"
+    r"^\s*[\w.]*(Error|error|Exception)(:| occurred)|^\s*assert\b|^E\s",
+    re.MULTILINE)
+
+# Lines that LOOK like failures and are not. faulthandler (which pytest enables)
+# dumps a structured-exception traceback when pywin32 takes a first-chance
+# RPC_E_CALL_REJECTED — Excel saying "busy", which busy_retry then waits out
+# (D100, D105). The run passes; only the dump reaches stderr.
+_NOISE_RE = re.compile(
+    r"C stack|Current thread|Windows fatal exception|^\s*File \"|^\s*<", re.MULTILINE)
+
+
+def _verdict(out: str, err: str) -> str:
+    """The lines from a step worth putting in front of a person.
+
+    Three times now, a real failure has been hidden by this function's ancestor,
+    which joined stdout and stderr and kept every line containing "Error". That
+    reported `LibreOffice (soffice) not found` — the FALLBACK engine complaining
+    about an engine that was never going to run on this machine — while the
+    actual fault sat two frames up (D100, four wrong theories and three lost
+    runs). Most recently it reported `<cannot get C stack on this system>` in
+    place of `346 passed`, because stderr is concatenated last and the caller
+    prints the last line.
+
+    So: search stdout FIRST, because a tool's verdict goes to stdout while
+    stderr carries warnings and dumps; drop the known-benign noise; and fall
+    back to real content rather than to whatever happened to be last.
+    """
+    for stream in (out, err):
+        lines = [l.rstrip() for l in stream.splitlines()
+                 if _VERDICT_RE.search(l) and not _NOISE_RE.search(l)]
+        if lines:
+            return "\n".join(lines)
+    # nothing recognisable: show the last few lines that are not dump noise,
+    # preferring stderr, which is where an unhandled failure ends up
+    for stream in (err, out):
+        lines = [l.rstrip() for l in stream.splitlines()
+                 if l.strip() and not _NOISE_RE.search(l)]
+        if lines:
+            return "\n".join(lines[-6:])
+    return ""
 
 
 def _excel_pids() -> set[int]:
@@ -420,13 +471,18 @@ def main(argv=None) -> int:
     prints = state.get("phase_d_ok", {})
     fps: dict[str, str] = {}
     skip_d: set[str] = set()
-    if args.full and not args.force_full:
+    # Fingerprint on every --full, INCLUDING a forced one. --force-full means
+    # "run phase D even though the fingerprint matches", not "and then forget
+    # you did": the recording block below only stores lines present in `fps`, so
+    # computing these only in the unforced branch meant a forced run saved
+    # nothing and the very next --full re-ran everything it had just proved.
+    if args.full:
         for name in lobs:
             try:
                 fps[name] = _formula_fingerprint(output_path(cfg, out_dir, name))
             except Exception:  # noqa: BLE001 - never let bookkeeping fail a run
                 continue
-            if prints.get(name) == fps[name]:
+            if not args.force_full and prints.get(name) == fps[name]:
                 skip_d.add(name)
         if skip_d:
             print(f"\n(phase D skipped for {', '.join(sorted(skip_d))}: every formula "

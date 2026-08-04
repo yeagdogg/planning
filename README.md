@@ -152,16 +152,21 @@ Three tiers, because verification cost is wildly uneven:
 |---|---|---|
 | `--smoke` | pytest only | seconds |
 | `--quick` | build + recalc + book + harness phases A–C | ~1 min per line |
-| `--full` | adds phase D (mutate → recalc → tie to oracle) | ~7 min per line |
+| `--full` | adds phase D (mutate → recalc → tie to oracle) | ~20 s per line |
 
-Lines run as parallel subprocesses, each with its own Excel instance and scratch directory. The
-width is capped by tier and the caps are low on purpose — 2 for `--full`, 4 for `--quick` —
-because phase D loads a whole recalculated workbook (865k cells) into memory per exercise on
-top of an Excel instance per line. Over-committing does not fail cleanly: at six concurrent
-lines COM returned "the interface is unknown" and, once, a line whose mutation had *silently
-not been applied*. The harness now re-reads every mutated cell before asserting anything. It
-refuses to start if `~$*.xlsx` lock files show a
-workbook is open in Excel, and takes `--carry-forward` to rebuild around your existing inputs.
+`--quick` runs lines as parallel subprocesses, each with its own Excel instance and scratch
+directory, capped at 8 — phases A–C never start Excel.
+
+**`--full` runs serially, and that is now the fast setting.** Phase D used to cost ~7 minutes a
+line because each exercise copied the 2.7MB workbook and round-tripped it through openpyxl and
+Excel; it holds one workbook open and mutates it in place instead (D105), which puts a line at
+~20 s and the whole six-line sweep at about 2 minutes. The fan-out only ever existed to
+amortise that cost, and concurrent Excel instances were the one thing that made COM unstable —
+at six lines it returned "the interface is unknown" and, once, a line whose mutation had
+*silently not been applied*. With no wave left to save, the concurrency goes and that whole
+failure class goes with it. `--jobs` overrides. The driver refuses to start if `~$*.xlsx` lock
+files show a workbook is open in Excel, and takes `--carry-forward` to rebuild around your
+existing inputs.
 
 ## Verify
 
@@ -180,29 +185,29 @@ walk tied to a fresh oracle run, with its residual decomposition required to rep
 own weighted mean; scenario, attribution, seasonality, basis, mod-toggle,
 degenerate-input, stepped-mod, and plan-year-change exercises each tied to fresh oracle runs.
 
-At v3.7.1 every artifact is green at **phases A-C**: the five 12-month lines **108 checks /
-0 failed** each, the 6-month-term Inland Marine **106 / 0**, and the combined book **30 / 0**
+At v3.7.1 every artifact is green through **phase D**, from a single
+`python tools/release.py --full --force-full`: the five 12-month lines **317 checks / 0
+failed** each, the 6-month-term Inland Marine **315 / 0**, and the combined book **60 / 0**
 (`tools/verify_book.py`, including the source-freshness phase and the Pivot Data ties).
-pytest 321/321. The whole sweep takes about 4 minutes.
+pytest 354/354. Build, recalculate, roll up the book and verify all seven — **8.2 minutes**,
+of which 2 is pytest. Verification alone is about 3.
 
-**Phase D has not been run against this tree.** v3.7.x changes what Net Delivery displays and
-adds the P+1 delivery decomposition, both of which phase C ties directly to fresh oracle runs
-(`net_delivery_by_month_p1`, all 12 months × 3 measures, plus the tab's own bands). The last
-full phase D was Property at **314 / 0** on the v3.5.3 build. To close it out:
-`python tools/release.py --full --skip-build`. Excel's COM layer is intermittently flaky under this load and no in-process
-retry clears it, so the driver retries the book steps in FRESH processes and re-runs serially
-any line that was killed outright rather than failing an assertion (D92); the book is also
-verified BEFORE the fan-out rather than in its exhaust (D94).
+That used to be most of an hour, and the reason is D105: phase D now holds **one workbook open
+in Excel and mutates it in place** rather than copying the 2.7MB file and round-tripping it
+through openpyxl and Excel for each of its 42 exercises. Property went **568.4s → 17.8s**, and
+the two paths were diffed assertion by assertion — all 317 identical, same descriptions, same
+order, same verdicts. The old path is still there as a second opinion:
+`--legacy-phase-d`.
 
-**Phase D does not run every time, and it is not capped at two.** It tests the arithmetic, so
-a line that rebuilt to byte-identical formulas and defined names since the last green full run
-cannot produce a different answer — those lines fall back to phases A–C and the run says which
-and why (`--force-full` overrides). Parallel width is fitted to the machine rather than
-hard-coded: `min(lines, cores - 2, ⅔ free RAM / 900 MB, 8)`. On a 24-core box that turned
-three waves into one, taking a full run from **37 minutes to 26**; a presentation-only change
-now finishes in about two (D94). Each verify run works in its own temporary scratch directory, so lines can be
-verified in parallel — see the release driver above for the concurrency caps and why they are
-where they are.
+**Phase D does not run every time.** It tests the arithmetic, so a line that rebuilt to
+byte-identical formulas and defined names since the last green full run cannot produce a
+different answer — those lines fall back to phases A–C and the run says which and why
+(`--force-full` overrides). Each verify run works in its own temporary scratch directory (D84),
+so lines *can* be verified in parallel, and `--quick` still is. `--full` no longer bothers:
+the fan-out existed only to amortise a 7.5-minute-per-line phase D, and concurrent Excel
+instances were the one thing that made COM unstable — silent mutation failures (D86a), access
+violations (D94), and busy rejections misread as breakage (D100). At 20 seconds a line there
+is no wave left to save, so `--full` runs serially and that failure class is gone.
 
 **Recalculation cost, measured** (Excel `CalculateFullRebuild`, whole workbook, median of 3):
 **0.36 s**. Worth stating because the shape of the file invites the opposite assumption — the
