@@ -185,12 +185,23 @@ walk tied to a fresh oracle run, with its residual decomposition required to rep
 own weighted mean; scenario, attribution, seasonality, projected-LR, mod-toggle,
 degenerate-input, stepped-mod, and plan-year-change exercises each tied to fresh oracle runs.
 
-At v3.8.0 every artifact is green through **phase D**, from a single
+**A LIGHT workbook, for a reader rather than an analyst.** Set `profile: light` on any
+line in `config/config.yaml` and that workbook is built without Portfolio, Scenarios,
+Solver, Attribution, Compare and One-Pager — nor the three hidden `_calc` sections that
+exist only to serve them. Everything left is computed identically: same inputs, same
+engines, same exhibits, same Checks panel, and it verifies through phase D like any other
+file (285 checks / 0 failed, with the five exercises that drive the dropped tabs skipped
+by name). Property goes 26 sheets to 20 and 229,650 formulas to 200,471. Bridge, the Rate
+Log and the Mod Log are never candidates however little a light reader opens them — Bridge
+alone hosts 21 named cells that ten surviving sheets read. Excel cannot hide tabs from a
+formula, so this is a build-time choice rather than a switch inside the file.
+
+At v3.9.0 every artifact is green through **phase D**, from a single
 `python tools/release.py --full --force-full`: the five 12-month lines **318 checks / 0
 failed** each, the 6-month-term Inland Marine **316 / 0**, and the combined book **61 / 0**
 (`tools/verify_book.py`, including the source-freshness phase and the Pivot Data ties).
-pytest 361/361. Build, recalculate, roll up the book and verify all seven — **11.6 minutes**,
-of which 2.6 is pytest. Verification alone is about 3.
+pytest 369/369. Build, recalculate, roll up the book and verify all seven — **13.1 minutes**,
+of which 3.7 is pytest. Verification alone is about 3.
 
 The book's 61st check is the D106 regression: where the filters resolve a state row to one
 combo, a rate-change slot that combo never filed must read BLANK. It used to read as the zero

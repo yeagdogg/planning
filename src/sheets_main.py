@@ -11,7 +11,8 @@ from openpyxl.chart.marker import Marker
 from openpyxl.formatting.rule import ColorScaleRule, DataBarRule, FormulaRule
 from openpyxl.styles import Alignment, Border, Font, Side
 
-from .build_workbook import Ctx, Layout as L, SHEETS, mod_adj_on, slot_rank
+from .build_workbook import (Ctx, Layout as L, SHEETS, SOLVER_MAX_MOD_STEP,
+                             mod_adj_on, slot_rank)
 from .xlstyle import (ALIGN_C, ALIGN_WRAP, BORDER_THIN, DOWN_BAR, FAIL_RED, FILL_GREY,
     FILL_NAVY, FILL_PANEL, FMT_DATE, FMT_DATE_S, FMT_EP_Z, FMT_GEN, FMT_IDX,
     FMT_IDX_Z, FMT_INT, FMT_MOD, FMT_PCT, FMT_PCT_SIGNED, FMT_PCT_Z, FMT_PTS_COL,
@@ -854,7 +855,8 @@ def build_state_summary(ctx: Ctx):
           "Plan-year view with the indicative following year. One row per state; choose a "
           "business unit or view all combined (adjusted-EP weighted). Every figure traces to "
           "the hidden _calc engine blocks and the Inputs tables.")
-    nav_bar(ws, 3, 1, ["Control", "Inputs", "Portfolio", "Bridge", "Checks"], step=2)
+    nav_bar(ws, 3, 1, [s for s in ["Control", "Inputs", "Portfolio", "Bridge", "Checks"]
+                       if ctx.has(s)], step=2)
 
     # ---- filter chip ----
     label(ws, "A4", "Business unit view", bold=True)
@@ -1514,7 +1516,7 @@ def build_solver(ctx: Ctx):
     # a mod step needs its OWN bound: the rate bound is far too loose here,
     # because mods live in [0.5, 1.5] and a 15% step already moves 0.85 to 0.98
     put(ws, "F47", "Reasonability bound |step|", fnt=font(GREY_DARK, size=9))
-    input_cell(ws, "G47", 0.15, fmt=FMT_PCT, required=False)
+    input_cell(ws, "G47", SOLVER_MAX_MOD_STEP, fmt=FMT_PCT, required=False)
     ctx.define("nr_SolvMaxMod", "Solver", "$G$47",
                "Mode C reasonability bound on a single mod step (mods are levels in "
                "[0.5, 1.5], so this is much tighter than the rate bound)")

@@ -37,7 +37,7 @@ from . import engine
 from .engine import ComboInputs, ModInputs, RateChange
 from .xlstyle import quote_sheet
 
-GENERATOR_VERSION = "3.8.0"
+GENERATOR_VERSION = "3.9.0"
 
 # Leads every seeded Mod Log comment so the Checks tripwire can spot a sample
 # action left in a real book (D80). Kept short and unmistakable — a real
@@ -119,10 +119,36 @@ class SHEETS:
 # ---------------------------------------------------------------------------
 
 
+# D109: the tabs a LIGHT workbook does not build. Every one of them is a LEAF —
+# nothing else reads a name defined on it — except through the four couplings
+# patched in the builders that reference them (Control's scenario KPI, Net
+# Delivery's D-net note, _netcalc's solver bounds, and six Checks rows).
+#
+# Bridge, Rate Log and Mod Log are NOT candidates however little a light reader
+# uses them: Bridge alone hosts 21 nr_* names that ten surviving sheets read,
+# and the two logs host the rl_*/ml_* families the engines are built on.
+LIGHT_DROPS = ("Portfolio", "Compare", "One-Pager", "Scenarios", "Solver",
+               "Attribution")
+
+# Reasonability bound on a single MOD step. Mods are levels in [0.5, 1.5], so a
+# 15% step already moves 0.85 to 0.98 — much tighter than the rate bound, which
+# is why this is not cfg.solver_max_rate. It seeds an editable cell on the
+# Solver sheet and is baked as a literal into _netcalc's flag column when there
+# is no Solver sheet to read it from (D109), so it lives here where both see it.
+SOLVER_MAX_MOD_STEP = 0.15
+
+
 @dataclass(frozen=True)
 class LobCfg:
     name: str
     term_months: int = 12
+    # "full" (default) or "light" — see LIGHT_DROPS. Per LOB rather than global
+    # so one line can ship trimmed to a reader while the rest stay complete.
+    profile: str = "full"
+
+    @property
+    def light(self) -> bool:
+        return self.profile == "light"
 
 
 @dataclass(frozen=True)
@@ -165,12 +191,16 @@ def _validate_dim_name(kind: str, name: str):
 def load_config(path: str | Path) -> Config:
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     lobs = tuple(
-        LobCfg(name=l["name"], term_months=int(l.get("term_months", 12)))
+        LobCfg(name=l["name"], term_months=int(l.get("term_months", 12)),
+               profile=str(l.get("profile", "full")).strip().lower())
         for l in raw["lobs"]
     )
     for l in lobs:
         if not 1 <= l.term_months <= 12:
             raise ValueError(f"term_months for {l.name} must be 1..12, got {l.term_months}")
+        if l.profile not in ("full", "light"):
+            raise ValueError(
+                f"profile for {l.name} must be 'full' or 'light', got {l.profile!r}")
         _validate_dim_name("LOB", l.name)
     profiles = raw.get("seasonality_profiles") or {}
     for name, weights in profiles.items():
@@ -646,6 +676,15 @@ class Ctx:
     names: dict = field(default_factory=dict)   # name -> (ref, description)
     lay_dyn: dict = field(default_factory=dict)  # dynamic anchors shared between builders
 
+    @property
+    def light(self) -> bool:
+        """True when this workbook omits the LIGHT_DROPS tabs (D109)."""
+        return self.lob.light
+
+    def has(self, sheet: str) -> bool:
+        """Is `sheet` part of THIS workbook? Builders ask before linking to it."""
+        return sheet in self.wb.sheetnames
+
     def define(self, name: str, sheet: str, ref: str, description: str):
         """Register a workbook-level defined name (documented on Methodology).
 
@@ -781,7 +820,13 @@ def build(cfg: Config, lob_name: str, carried=None) -> Workbook:
 
     wb = Workbook()
     wb.remove(wb.active)
+    # A light build filters the sheet list AND the builder calls below. Both,
+    # not one: skipping only the builder leaves an empty visible tab, which
+    # reads as a broken workbook rather than a trimmed one (D109).
+    drop = set(LIGHT_DROPS) if lob.light else set()
     for name in SHEET_ORDER:
+        if name in drop:
+            continue
         ws = wb.create_sheet(name)
         if name in HIDDEN_SHEETS:
             ws.sheet_state = "hidden"
@@ -802,19 +847,25 @@ def build(cfg: Config, lob_name: str, carried=None) -> Workbook:
     sheets_engine.build_mod_engine(ctx)
     sheets_main.build_bridge(ctx)
     sheets_calc.build_calc(ctx)
-    sheets_main.build_portfolio(ctx)
+    if ctx.has(SHEETS.PORTFOLIO):
+        sheets_main.build_portfolio(ctx)
     sheets_main.build_state_summary(ctx)
     sheets_netdelivery.build_netcalc(ctx)
     sheets_netdelivery.build_net_delivery(ctx)
     sheets_programflow.build_program_flow(ctx)
-    sheets_main.build_scenarios(ctx)
-    sheets_main.build_solver(ctx)
-    sheets_main.build_attribution(ctx)
+    if ctx.has(SHEETS.SCENARIOS):
+        sheets_main.build_scenarios(ctx)
+    if ctx.has(SHEETS.SOLVER):
+        sheets_main.build_solver(ctx)
+    if ctx.has(SHEETS.ATTRIBUTION):
+        sheets_main.build_attribution(ctx)
     sheets_report.build_flow_dashboard(ctx)
     sheets_lrflow.build_lr_flow(ctx)
     sheets_walkthrough.build_walkthrough(ctx)
-    sheets_briefs.build_one_pager(ctx)
-    sheets_briefs.build_compare(ctx)
+    if ctx.has(SHEETS.ONE_PAGER):
+        sheets_briefs.build_one_pager(ctx)
+    if ctx.has(SHEETS.COMPARE):
+        sheets_briefs.build_compare(ctx)
     sheets_report.build_oracle_sheet(ctx)
     sheets_report.build_checks(ctx)
     sheets_report.build_methodology(ctx)

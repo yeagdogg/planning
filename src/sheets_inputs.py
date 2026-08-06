@@ -14,7 +14,7 @@ from openpyxl.utils import get_column_letter as col_letter
 from openpyxl.formatting.rule import CellIsRule
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
-from .build_workbook import Ctx, Layout as L
+from .build_workbook import Ctx, Layout as L, SHEETS
 from .xlstyle import (
     ALIGN_C, ALIGN_L, ALIGN_WRAP, BORDER_THIN, F_HEADER, F_LABEL, F_SMALL, F_SMALL_IT,
     F_SUB, FAIL_RED, FILL_GREY, FILL_NAVY, FILL_PANEL, FILL_PANEL_2, FILL_RED,
@@ -499,11 +499,15 @@ def build_control(ctx: Ctx):
     # One-click navigation back to the analysis sheets (D45): change the
     # selection below, then jump straight to the sheet you came from.
     label(ws, "B4", "Jump to:", bold=True)
-    for i, sheet in enumerate(["Inputs", "Rate Log", "Mod Log", "Portfolio", "State Summary",
+    # Filtered to the tabs this workbook HAS: a hyperlink to a missing sheet
+    # does not error, it just does nothing when clicked, which is a worse way to
+    # learn the tab is absent than not offering it (D109).
+    for i, sheet in enumerate(s for s in
+                              ["Inputs", "Rate Log", "Mod Log", "Portfolio", "State Summary",
                                "Program Flow", "Net Delivery", "Bridge", "Walkthrough",
                                "One-Pager", "Flow Dashboard", "Scenarios", "Compare",
                                "Solver", "Attribution", "Rate Engine", "Mod Engine",
-                               "Checks", "Methodology", "Read Me"]):
+                               "Checks", "Methodology", "Read Me"] if ctx.has(s)):
         target = f"'{sheet}'!A1" if " " in sheet else f"{sheet}!A1"
         jump(ws, ws.cell(row=4, column=3 + i).coordinate, target, sheet, size=9)
 
@@ -700,22 +704,26 @@ def build_control(ctx: Ctx):
     _dv(ws, "list", ["G24"], blocking=False, formula1="=lst_bu")
     _dv(ws, "list", ["G25"], blocking=False, formula1="=lst_state")
 
-    # Scenario spotlight
-    section(ws, 32, "B", "Scenario spotlight")
-    label(ws, "B33", "Scenario in focus")
-    link(ws, "C33", "=nr_SelScenario", align=ALIGN_C)
-    label(ws, "B34", "CY plan LR under scenario")
-    link(ws, "C34", "=INDEX(sc_res_cylr,MATCH(nr_SelScenario,sc_res_names,0))", fmt=FMT_PCT,
-         align=ALIGN_C, bold=True)
-    label(ws, "B35", "Delta vs Base")
-    link(ws, "C35", "=(INDEX(sc_res_cylr,MATCH(nr_SelScenario,sc_res_names,0))-nr_CYLR_P)*100",
-         fmt=FMT_PTS_SIGNED, align=ALIGN_C)
-    note(ws, "B37", "Scenario definitions live on the Scenarios sheet; the Bridge and engine "
-                    "sheets always show Base inputs (see Methodology).")
+    # Scenario spotlight — the whole block reads sc_* names off the Scenarios
+    # sheet, so a light workbook leaves the rows blank rather than #NAME? (D109)
+    if ctx.has(SHEETS.SCENARIOS):
+        section(ws, 32, "B", "Scenario spotlight")
+        label(ws, "B33", "Scenario in focus")
+        link(ws, "C33", "=nr_SelScenario", align=ALIGN_C)
+        label(ws, "B34", "CY plan LR under scenario")
+        link(ws, "C34", "=INDEX(sc_res_cylr,MATCH(nr_SelScenario,sc_res_names,0))",
+             fmt=FMT_PCT, align=ALIGN_C, bold=True)
+        label(ws, "B35", "Delta vs Base")
+        link(ws, "C35",
+             "=(INDEX(sc_res_cylr,MATCH(nr_SelScenario,sc_res_names,0))-nr_CYLR_P)*100",
+             fmt=FMT_PTS_SIGNED, align=ALIGN_C)
+        note(ws, "B37", "Scenario definitions live on the Scenarios sheet; the Bridge "
+                        "and engine sheets always show Base inputs (see Methodology).")
 
     _dv(ws, "list", ["C7"], formula1="=lst_bu")
     _dv(ws, "list", ["C8"], formula1="=lst_state")
-    _dv(ws, "list", ["C9"], formula1="=lst_scenario")
+    if ctx.has(SHEETS.SCENARIOS):
+        _dv(ws, "list", ["C9"], formula1="=lst_scenario")
     _dv(ws, "list", ["C12", "C13"], formula1="=lst_onoff")
     _dv(ws, "whole", ["C6"], operator="between", formula1="2000", formula2="2100",
         error="Plan year must be a 4-digit year.")

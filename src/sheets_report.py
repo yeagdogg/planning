@@ -9,7 +9,8 @@ from openpyxl.chart.marker import Marker
 from openpyxl.chart.series import SeriesLabel
 from openpyxl.formatting.rule import CellIsRule
 
-from .build_workbook import GENERATOR_VERSION, SAMPLE_MOD_TAG, Ctx, Layout as L
+from .build_workbook import (GENERATOR_VERSION, SAMPLE_MOD_TAG, SHEETS,
+                             SOLVER_MAX_MOD_STEP, Ctx, Layout as L)
 from .xlstyle import (ALIGN_C, ALIGN_WRAP, BAND_FILL, BORDER_THIN, FAIL_RED,
     FILL_AMBER, FILL_GREEN, FILL_GREY, FILL_NAVY, FILL_PANEL, FILL_RED, FILL_REQ,
     FMT_DATE, FMT_DATE_S, FMT_GEN, FMT_IDX, FMT_INT, FMT_MOD, FMT_MONTH, FMT_PCT,
@@ -536,15 +537,21 @@ def build_checks(ctx: Ctx):
        1e-9, "FAIL"))
     A(("Structure", "Portfolio row = Bridge result (selected combo)",
        "=0", f"=IF({sel}=0,0,ABS(INDEX(calc_cylr_p,{sel})-nr_CYLR_P))", 1e-9, "FAIL"))
-    A(("Structure", "Scenario engine reproduces Base when all levers blank",
-       "=0",
-       "=IF(COUNT(sc_dpts,sc_shift,sc_ach,sc_dm1,sc_dnet)>0,0,"
-       "ABS(INDEX(sc_res_cylr,2)-nr_CYLR_P))",
-       1e-9, "FAIL"))
+    # Rows that check a tab this workbook may not have (D109). A light build
+    # drops the tab, its _calc section and the names both define, so the row
+    # would read #NAME? — and a Checks panel full of errors is the one thing
+    # that must not happen to the sheet people trust.
+    if ctx.has(SHEETS.SCENARIOS):
+        A(("Structure", "Scenario engine reproduces Base when all levers blank",
+           "=0",
+           "=IF(COUNT(sc_dpts,sc_shift,sc_ach,sc_dm1,sc_dnet)>0,0,"
+           "ABS(INDEX(sc_res_cylr,2)-nr_CYLR_P))",
+           1e-9, "FAIL"))
     A(("Identity", "Linear-mod identity: CY P earned mod = written mod at 1/1/P (§3.3.5)",
        None, None, None, "IDENTITY"))
-    A(("Structure", "Attribution factors multiply back to the actual CY LR",
-       None, None, None, "ATTR"))
+    if ctx.has(SHEETS.ATTRIBUTION):
+        A(("Structure", "Attribution factors multiply back to the actual CY LR",
+           None, None, None, "ATTR"))
 
     # --- oracle ties (fingerprint-scoped) ---
     ties = [
@@ -563,17 +570,18 @@ def build_checks(ctx: Ctx):
     ]
     for desc, e, a, tol in ties:
         A(("Oracle tie", desc, e, a, tol, "ORACLE"))
-    A(("Oracle tie", "Solver Mode A returns the seeded planned change (acceptance §11.7)",
-       None, None, None, "SOLVER"))
-    # The Mode B cross-check (April row with r = +5% equals the base CY LR)
-    # presumes the seeded single +5% @ 4/1/P planned program; emit it only
-    # when that pattern is actually present (it is absent in some per-BU files).
-    we_planned = [r for r in ctx.rate_rows
-                  if f"{r['bu']}|{r['state']}" == ctx.we_key and r["status"] == "planned"]
-    if (len(we_planned) == 1 and we_planned[0]["eff"] == dt.date(p, 4, 1)
-            and abs(ctx.oracle_solver_r - 0.05) < 1e-9):
-        A(("Oracle tie", "Solver Mode B April row equals the base CY plan LR",
-           None, None, None, "SOLVERB"))
+    if ctx.has(SHEETS.SOLVER):
+        A(("Oracle tie", "Solver Mode A returns the seeded planned change (acceptance §11.7)",
+           None, None, None, "SOLVER"))
+        # The Mode B cross-check (April row with r = +5% equals the base CY LR)
+        # presumes the seeded single +5% @ 4/1/P planned program; emit it only
+        # when that pattern is actually present (it is absent in some per-BU files).
+        we_planned = [r for r in ctx.rate_rows
+                      if f"{r['bu']}|{r['state']}" == ctx.we_key and r["status"] == "planned"]
+        if (len(we_planned) == 1 and we_planned[0]["eff"] == dt.date(p, 4, 1)
+                and abs(ctx.oracle_solver_r - 0.05) < 1e-9):
+            A(("Oracle tie", "Solver Mode B April row equals the base CY plan LR",
+               None, None, None, "SOLVERB"))
 
     # --- input sanity ---
     A(("Input sanity", "Achievement % within [0%, 150%]", "=0",
@@ -654,9 +662,12 @@ def build_checks(ctx: Ctx):
     # tested on the LN column, not on m_eff: m_eff is "" on blank rows and
     # ABS("") is #VALUE! inside SUMPRODUCT, which evaluates every element.
     # ln(1+m) is 0 there, and is monotonic in m, so the bound maps exactly.
-    A(("Advisory", "Single mod actions beyond the reasonability bound (Solver max mod)",
-       "=0", "=SUMPRODUCT((ml_ln1p>LN(1+nr_SolvMaxMod))*1)"
-             "+SUMPRODUCT((ml_ln1p<LN(MAX(0.01,1-nr_SolvMaxMod)))*1)", 0, "WARN"))
+    # the bound is an editable cell on the Solver sheet in a full workbook, and
+    # the same number baked as a literal where there is no Solver (D109)
+    _maxmod = "nr_SolvMaxMod" if ctx.has(SHEETS.SOLVER) else repr(float(SOLVER_MAX_MOD_STEP))
+    A(("Advisory", "Single mod actions beyond the reasonability bound (max mod step)",
+       "=0", f"=SUMPRODUCT((ml_ln1p>LN(1+{_maxmod}))*1)"
+             f"+SUMPRODUCT((ml_ln1p<LN(MAX(0.01,1-{_maxmod})))*1)", 0, "WARN"))
     A(("Advisory", "Taken MOD rows still carrying an achievement % (it is ignored — "
        "restate the directed change as achieved)", "=0",
        '=SUMPRODUCT((ml_status="taken")*(ml_ach<>"")*(ml_ach<>1)*1)', 0, "WARN"))
@@ -664,9 +675,10 @@ def build_checks(ctx: Ctx):
        "=0", '=IF(nd_BU="All",0,SUMPRODUCT((ndd_flags<>"")*(ndd_flags<>"—")*1))',
        0, "WARN"))
     # ---- appended v2.3 checks (Program Flow, D59) ----
-    A(("Structure", "Locked (taken-only) block = Solver base block when the Solver "
-       "follows Control", "=0",
-       "=IF(slv_key<>nr_SelKey,0,SUMPRODUCT(ABS(fd_tkw-slv_widx)))", 1e-9, "FAIL"))
+    if ctx.has(SHEETS.SOLVER):
+        A(("Structure", "Locked (taken-only) block = Solver base block when the Solver "
+           "follows Control", "=0",
+           "=IF(slv_key<>nr_SelKey,0,SUMPRODUCT(ABS(fd_tkw-slv_widx)))", 1e-9, "FAIL"))
     A(("Structure", "Flow Dashboard avg YoY delivered = _calc block results (selected "
        "combo)", "=0",
        f"=IF(br_selrow=0,0,ABS(INDEX('_calc'!$J$1:$J$"
@@ -1627,8 +1639,16 @@ def build_readme(ctx: Ctx):
     section(ws, r, "B", "Where to go")
     r += 1
     for name, desc in READ_ME_GUIDE:
+        if not ctx.has(name):          # light build: do not advertise a missing tab
+            continue
         jump(ws, f"B{r}", f"{_q(name)}!A1", name, bold=True)
         para(r, desc)
+        r += 1
+    if ctx.light:
+        para(r, "This is a LIGHT workbook: the what-if and single-combo exploration tabs "
+                "(Portfolio, Scenarios, Solver, Attribution, Compare, One-Pager) are not "
+                "built. Every number that remains is computed the same way — the engines, "
+                "the inputs and the checks are untouched.", size=9, color=GREY_DARK)
         r += 1
     put(ws, f"B{r}", "_lists / _calc / _netcalc / _oracle", fnt=font(GREY_DARK, size=9))
     para(r, "Hidden machinery: validation lists, the per-combo engine blocks, the Net "

@@ -343,50 +343,52 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
     check(f"all {len(lr_rows)} BU x state combos tie oracle (9 metrics each)", bad == 0,
           f"{bad} mismatches")
 
-    # solver seed + Mode B
-    sres = engine.solve_rate_for_target(p, combo, m.cy_lr_p, dt.date(p, 4, 1))
-    check("Solver Mode A returns the seeded +5.0% (acceptance §11.7)",
-          approx(nval(wb, "nr_SolverR"), 0.05, 1e-9), str(nval(wb, "nr_SolverR")))
-    check("Solver Mode A ties oracle solver", approx(nval(wb, "nr_SolverR"),
-          sres.required_change, 1e-9))
-    sv = wb["Solver"]
-    tt = engine.solver_timing_table(p, combo, r=0.05, target_cy_lr=m.cy_lr_p)
-    ok_b = all(approx(sv[f"G{28 + row['month']}"].value, row["cy_lr"], 1e-9) for row in tt)
-    check("Solver Mode B 12-month table ties oracle", ok_b)
-    if lob.term_months == 12:
-        check("Solver Mode B latest qualifying month is April",
-              sv["D42"].value == f"Apr {p}", str(sv["D42"].value))
-    # D79: Mode C's chart times a FIXED action in loss-ratio points, the Mode B
-    # statistic on the pricing lever. Each month must equal a full oracle run
-    # with that step logged on the taken-only base (D13) — not a re-derivation
-    # of the same closed form, or the tie would only prove the algebra matches
-    # itself.
-    c_ach = sv["G49"].value * sv["C47"].value
-    bad_c = 0
-    for mm in range(1, 13):
-        cm = replace(combo, mod_changes=engine.base_plus(
-            engine._taken_mod_changes(combo), dt.date(p, mm, 1), c_ach))
-        if not approx(sv[f"K{52 + mm}"].value,
-                      engine.run_bridge(p, cm).cy_lr_p, 1e-9):
-            bad_c += 1
-    check("Solver Mode C timing chart ties a full oracle run in all 12 months",
-          bad_c == 0, f"{bad_c} mismatched months")
-    check("Solver Mode C reports the last month the timed action meets the target",
-          isinstance(sv["E67"].value, str) and sv["E67"].value != "",
-          repr(sv["E67"].value))
+    if "Solver" in wb.sheetnames:      # absent in a light build (D109)
+        # solver seed + Mode B
+        sres = engine.solve_rate_for_target(p, combo, m.cy_lr_p, dt.date(p, 4, 1))
+        check("Solver Mode A returns the seeded +5.0% (acceptance §11.7)",
+              approx(nval(wb, "nr_SolverR"), 0.05, 1e-9), str(nval(wb, "nr_SolverR")))
+        check("Solver Mode A ties oracle solver", approx(nval(wb, "nr_SolverR"),
+              sres.required_change, 1e-9))
+        sv = wb["Solver"]
+        tt = engine.solver_timing_table(p, combo, r=0.05, target_cy_lr=m.cy_lr_p)
+        ok_b = all(approx(sv[f"G{28 + row['month']}"].value, row["cy_lr"], 1e-9) for row in tt)
+        check("Solver Mode B 12-month table ties oracle", ok_b)
+        if lob.term_months == 12:
+            check("Solver Mode B latest qualifying month is April",
+                  sv["D42"].value == f"Apr {p}", str(sv["D42"].value))
+        # D79: Mode C's chart times a FIXED action in loss-ratio points, the Mode B
+        # statistic on the pricing lever. Each month must equal a full oracle run
+        # with that step logged on the taken-only base (D13) — not a re-derivation
+        # of the same closed form, or the tie would only prove the algebra matches
+        # itself.
+        c_ach = sv["G49"].value * sv["C47"].value
+        bad_c = 0
+        for mm in range(1, 13):
+            cm = replace(combo, mod_changes=engine.base_plus(
+                engine._taken_mod_changes(combo), dt.date(p, mm, 1), c_ach))
+            if not approx(sv[f"K{52 + mm}"].value,
+                          engine.run_bridge(p, cm).cy_lr_p, 1e-9):
+                bad_c += 1
+        check("Solver Mode C timing chart ties a full oracle run in all 12 months",
+              bad_c == 0, f"{bad_c} mismatched months")
+        check("Solver Mode C reports the last month the timed action meets the target",
+              isinstance(sv["E67"].value, str) and sv["E67"].value != "",
+              repr(sv["E67"].value))
 
-    # S1 ships seeded (+2 pts on planned rows) as a self-teaching demo; the
-    # remaining blank-lever scenarios must reproduce Base exactly
-    sc = wb["Scenarios"]
-    s1_combo = replace(combo, rate_changes=tuple(
-        replace(rc, filed_pct=rc.filed_pct + 0.02) if rc.status == "planned" else rc
-        for rc in combo.rate_changes))
-    s1_m = engine.run_bridge(p, s1_combo, "monthly")
-    check("seeded S1 (+2 pts on planned rows) ties oracle",
-          approx(sc["D14"].value, s1_m.cy_lr_p, 1e-9),
-          f"wb={sc['D14'].value} oracle={s1_m.cy_lr_p}")
-    ok_s = all(approx(sc[f"{cL}14"].value, m.cy_lr_p, 1e-9) for cL in "EFG")
-    check("blank-lever scenarios reproduce Base CY LR", ok_s)
+    if "Scenarios" in wb.sheetnames:      # absent in a light build (D109)
+        # S1 ships seeded (+2 pts on planned rows) as a self-teaching demo; the
+        # remaining blank-lever scenarios must reproduce Base exactly
+        sc = wb["Scenarios"]
+        s1_combo = replace(combo, rate_changes=tuple(
+            replace(rc, filed_pct=rc.filed_pct + 0.02) if rc.status == "planned" else rc
+            for rc in combo.rate_changes))
+        s1_m = engine.run_bridge(p, s1_combo, "monthly")
+        check("seeded S1 (+2 pts on planned rows) ties oracle",
+              approx(sc["D14"].value, s1_m.cy_lr_p, 1e-9),
+              f"wb={sc['D14'].value} oracle={s1_m.cy_lr_p}")
+        ok_s = all(approx(sc[f"{cL}14"].value, m.cy_lr_p, 1e-9) for cL in "EFG")
+        check("blank-lever scenarios reproduce Base CY LR", ok_s)
 
     # State Summary in 'All' mode: EP-weighted aggregates per state (D38)
     ss = wb["State Summary"]
@@ -828,10 +830,11 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
         ncmb3 = sample_to_combo(cfg, lob, net_combo, rate_rows, mod_rows)
         lp, _ = engine.program_basis_plan_lr(p, ncmb3)
         gap = (lp - engine.run_bridge(p, ncmb3, "monthly").cy_lr_p) * 100.0
-        check("[program basis] Portfolio row shows the combo's program LR and gap",
-              approx(wb["Portfolio"][f"P{L.PF_FIRST + ni}"].value, lp, 1e-9)
-              and approx(wb["Portfolio"][f"Q{L.PF_FIRST + ni}"].value, gap, 1e-9),
-              f"wb={wb['Portfolio'][f'P{L.PF_FIRST + ni}'].value} oracle={lp}")
+        if "Portfolio" in wb.sheetnames:      # absent in a light build (D109)
+            check("[program basis] Portfolio row shows the combo's program LR and gap",
+                  approx(wb["Portfolio"][f"P{L.PF_FIRST + ni}"].value, lp, 1e-9)
+                  and approx(wb["Portfolio"][f"Q{L.PF_FIRST + ni}"].value, gap, 1e-9),
+                  f"wb={wb['Portfolio'][f'P{L.PF_FIRST + ni}'].value} oracle={lp}")
         # State Summary 'All' view: EP-weighted across the state's BUs
         sr = 8 + list(_states(cfg)).index(net_combo["state"])
         rows_s = [(x["ep"], sample_to_combo(cfg, lob, x, rate_rows, mod_rows))
@@ -970,7 +973,24 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path, legacy: bool = False):
     states: dict[tuple, Path] = {}
     scanned: set[tuple] = set()
 
-    def run(label_, mutations, assertions):
+    present = set(openpyxl.load_workbook(path, read_only=True).sheetnames)
+
+    def run(label_, mutations, assertions, needs=()):
+        # An exercise that types into a tab this workbook does not have has
+        # nothing to say about it. One guard here covers nearly every such
+        # exercise, because a mutation dict already NAMES the sheets it needs —
+        # rather than several separate conditions that could each drift out of
+        # step with the tabs a light build drops (D109).
+        #
+        # `needs` is for the exception: an exercise that mutates one tab and
+        # ASSERTS on another. The mixed-status cohort-month case types into the
+        # Rate Log and then reads the Solver's answer, so the mutations alone
+        # do not say what it depends on.
+        absent = sorted(({s for (s, _a) in mutations} | set(needs)) - present)
+        if absent:
+            print(f"  (skipping [{label_}]: this workbook has no "
+                  f"{', '.join(absent)} tab)")
+            return
         sig = tuple(sorted((s, a, repr(v)) for (s, a), v in mutations.items()))
         first = sig not in scanned
         scanned.add(sig)
@@ -1209,7 +1229,7 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path, legacy: bool = False):
         check("[mixed-status month] solver required r ties oracle (D58)",
               approx(nval(wb, "nr_SolverR"), mix_r, 1e-9),
               f"wb={nval(wb, 'nr_SolverR')} oracle={mix_r}")
-    run("mixed-status cohort month (solver base)", muts_mix, a8b)
+    run("mixed-status cohort month (solver base)", muts_mix, a8b, needs=("Solver",))
 
     # 9. attribution actuals
     actuals = [engine.PlannedActual(dt.date(p, 4, 1), 0.04, dt.date(p, 6, 1))]
@@ -1956,9 +1976,10 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path, legacy: bool = False):
         ss_hdr = wb["State Summary"].cell(row=7, column=ss_c("planlr")).value
         check(f"[plan year {pm1}] State Summary header relabels live",
               ss_hdr == f"=  CY {pm1} plan LR", str(ss_hdr))
-        pf_hdr = wb["Portfolio"].cell(row=L.PF_HDR, column=7).value
-        check(f"[plan year {pm1}] Portfolio header relabels live",
-              pf_hdr == f"CY {pm1} plan LR", str(pf_hdr))
+        if "Portfolio" in wb.sheetnames:      # absent in a light build (D109)
+            pf_hdr = wb["Portfolio"].cell(row=L.PF_HDR, column=7).value
+            check(f"[plan year {pm1}] Portfolio header relabels live",
+                  pf_hdr == f"CY {pm1} plan LR", str(pf_hdr))
         banner = wb["Control"]["B10"].value
         check(f"[plan year {pm1}] Control stale-year banner appears",
               isinstance(banner, str) and banner.startswith("NOTE"), str(banner)[:60])

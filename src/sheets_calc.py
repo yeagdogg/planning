@@ -413,321 +413,341 @@ def build_calc(ctx: Ctx):
     for name, (cL, desc) in res_names.items():
         ctx.define(name, "_calc", f"${cL}${L.CALC_RES_FIRST}:${cL}${L.CALC_RES_LAST}", desc)
 
-    # ------------------------------------------------------------------
-    # 3. Scenario section (selected combo)
-    # ------------------------------------------------------------------
-    sl = block_tops[-1] + L.CALC_BLOCK_STRIDE + 2          # scenario log header row
-    put(ws, f"A{sl}", "Scenario-transformed rate logs (S1..S4), row-aligned with tbl_RateLog",
-        fnt=font(GREY_DARK, bold=True, size=9))
-    sc_logs = []
-    for s in range(1, 5):
-        c0 = 1 + (s - 1) * 10  # A, K, U, AE
-        cEff, cEm, cAch, cReff, cLn, cDay, cEcnt, cScnt, cFirst = (col(c0 + j) for j in range(9))
-        for j, h in enumerate(["eff'", "effmo'", "ach'", "r_eff'", "ln'", "days'", "ecnt", "scnt",
-                               "first'"]):
-            put(ws, f"{col(c0 + j)}{sl + 1}", f"S{s} {h}", fnt=font(GREY_DARK, size=8))
-        r0 = sl + 2
+    # Sections 3-5 below exist ONLY to serve the Scenarios,
+    # Attribution and Solver tabs, and they read names those tabs
+    # define (sc_*, att_*, slv_key). A light workbook has neither, so
+    # building them would fill a thousand rows with #NAME?. The
+    # section anchors used to chain off one another; they run off a
+    # CURSOR now, so a section that is not built simply does not
+    # advance it and section 6 lands wherever the last one finished.
+    # Every address other sheets reach into _calc for sits in the
+    # per-combo block region above, which never moves (D109).
+    cursor = block_tops[-1] + L.CALC_BLOCK_STRIDE + 2
+
+    if ctx.has(SHEETS.SCENARIOS):
+        # ------------------------------------------------------------------
+        # 3. Scenario section (selected combo)
+        # ------------------------------------------------------------------
+        sl = cursor          # scenario log header row
+        put(ws, f"A{sl}", "Scenario-transformed rate logs (S1..S4), row-aligned with tbl_RateLog",
+            fnt=font(GREY_DARK, bold=True, size=9))
+        sc_logs = []
+        for s in range(1, 5):
+            c0 = 1 + (s - 1) * 10  # A, K, U, AE
+            cEff, cEm, cAch, cReff, cLn, cDay, cEcnt, cScnt, cFirst = (col(c0 + j) for j in range(9))
+            for j, h in enumerate(["eff'", "effmo'", "ach'", "r_eff'", "ln'", "days'", "ecnt", "scnt",
+                                   "first'"]):
+                put(ws, f"{col(c0 + j)}{sl + 1}", f"S{s} {h}", fnt=font(GREY_DARK, size=8))
+            r0 = sl + 2
+            for j in range(L.RL_ROWS):
+                r = r0 + j
+                ir = L.RL_FIRST + j
+                f_grey(ws, f"{cEff}{r}",
+                       f'=IF({RL}!$C${ir}="","",IF({RL}!$E${ir}="planned",'
+                       f"EDATE({RL}!$C${ir},N(INDEX(sc_shift,{s}))),{RL}!$C${ir}))", FMT_DATE)
+                f_grey(ws, f"{cEm}{r}",
+                       f'=IF(${cEff}{r}="","",DATE(YEAR(${cEff}{r}),MONTH(${cEff}{r}),1))',
+                       FMT_DATE)
+                f_grey(ws, f"{cAch}{r}",
+                       f'=IF(N(INDEX(sc_ach,{s}))=0,IF({RL}!$G${ir}="",1,{RL}!$G${ir}),'
+                       f"INDEX(sc_ach,{s}))", "0.0%")
+                f_grey(ws, f"{cReff}{r}",
+                       f'=IF({RL}!$C${ir}="",0,IF({RL}!$E${ir}="planned",'
+                       f"({RL}!$D${ir}+N(INDEX(sc_dpts,{s})))*${cAch}{r},{RL}!$D${ir}))", "0.0%")
+                f_grey(ws, f"{cLn}{r}",
+                       f'=IF({RL}!$C${ir}="",0,IF(1+${cReff}{r}>0,LN(1+${cReff}{r}),0))', FMT_IDX)
+                f_grey(ws, f"{cDay}{r}",
+                       f'=IF(${cEff}{r}="",0,EOMONTH(${cEff}{r},0)-${cEff}{r}+1)', FMT_INT)
+                f_grey(ws, f"{cEcnt}{r}",
+                       f'=IF(${cEff}{r}="",0,COUNTIFS(rl_key,{RL}!$J${ir},'
+                       f'${cEm}${r0}:${cEm}${r0 + L.RL_ROWS - 1},${cEm}{r},'
+                       f'${cEff}${r0}:${cEff}${r0 + L.RL_ROWS - 1},"<"&${cEff}{r}))', FMT_INT)
+                f_grey(ws, f"{cScnt}{r}",
+                       f'=IF(${cEff}{r}="",0,COUNTIFS({RL}!$J${L.RL_FIRST}:$J${ir},{RL}!$J${ir},'
+                       f"${cEm}${r0}:${cEm}{r},${cEm}{r},${cEff}${r0}:${cEff}{r},${cEff}{r}))",
+                       FMT_INT)
+                f_grey(ws, f"{cFirst}{r}",
+                       f'=IF(${cEff}{r}="",0,IF(AND(${cEcnt}{r}=0,${cScnt}{r}=1),1,0))', FMT_INT)
+            sc_logs.append(dict(
+                eff=f"${cEff}${r0}:${cEff}${r0 + L.RL_ROWS - 1}",
+                effmonth=f"${cEm}${r0}:${cEm}${r0 + L.RL_ROWS - 1}",
+                ln=f"${cLn}${r0}:${cLn}${r0 + L.RL_ROWS - 1}",
+                daysafter=f"${cDay}${r0}:${cDay}${r0 + L.RL_ROWS - 1}",
+                first=f"${cFirst}${r0}:${cFirst}${r0 + L.RL_ROWS - 1}",
+            ))
+
+        sb = sl + L.RL_ROWS + 4
+        ctx.lay_dyn["scenario_results"] = []
+        for s in range(1, 5):
+            t = sb + (s - 1) * L.CALC_BLOCK_STRIDE
+            put(ws, f"A{t}", f"Scenario S{s} engine block (selected combo)",
+                fnt=font(GREY_DARK, bold=True, size=9))
+            # D70: a scenario inherits the selected combo's mod actions unchanged —
+            # the levers move the rate program and the mod LEVEL, never the log. The
+            # delta-M_1 lever shifts the base those actions compound on, which keeps
+            # "shift the projected mod path" meaning the same thing on both
+            # mechanisms AND keeps the blank-lever run identical to the base. Without
+            # this the Checks row "Scenario engine reproduces Base when all levers
+            # blank" fails the moment a combo with logged actions is selected.
+            f_grey(ws, f"M{t}", "='Mod Engine'!$C$11", FMT_INT)
+            f_grey(ws, f"N{t}", f"='Mod Engine'!$C$12+N(INDEX(sc_dm1,{s}))", FMT_MOD)
+            anchors = write_mod_anchor_cells(
+                ws, ctx, t + 1, 1, mind_ref="nr_MInd", m0_ref="nr_M0", asof_ref="nr_M0Asof",
+                m1_ref="nr_M1", mprior_ref="nr_MPrior", m2_ref="nr_M2",
+                dm1_expr=f"+N(INDEX(sc_dm1,{s}))",
+                steps_cond=f"$M${t}>0", mend_ref=f"$N${t}")
+            lg = sc_logs[s - 1]
+            blk = write_cohort_block(
+                ws, ctx, t + 3,
+                LogRefs(key_cond="nr_SelKey", eff=lg["eff"], ln=lg["ln"],
+                        effmonth=lg["effmonth"], first=lg["first"], daysafter=lg["daysafter"]),
+                t_ref="nr_TermMonths", srow_ref="re_srow", ssum_ref="re_ssum",
+                anchors=anchors, header=True, header_row_at=t + 2,
+                net=dict(mode="nr_NetMode",
+                         x=f"(nr_NetSelP+N(INDEX(sc_dnet,{s})))",
+                         x1=f"(nr_NetSelP1+N(INDEX(sc_dnet,{s})))",
+                         modeff='nr_ModAdjEff="ON"', mind="nr_MInd"),
+                mod_refs=LogRefs(key_cond="nr_SelKey", eff="ml_eff", ln="ml_ln1p",
+                                 effmonth="ml_effmonth", first="ml_first",
+                                 daysafter="ml_daysafter"),
+                mod_col=22, mod_base_ref=f"$N${t}", mod_count_ref=f"$M${t}")
+            rr = t + 51
+            label(ws, f"A{rr}", f"S{s} results:")
+            _grey(ws, f"A{rr}")
+            f_grey(ws, f"B{rr}",
+                   f"=SUMPRODUCT({blk['w']},{blk['ec_p']},{blk['U']})/SUMPRODUCT({blk['w']},{blk['ec_p']})",
+                   FMT_IDX)
+            f_grey(ws, f"C{rr}",
+                   f"=SUMPRODUCT({blk['w']},{blk['ec_p1']},{blk['U']})/SUMPRODUCT({blk['w']},{blk['ec_p1']})",
+                   FMT_IDX)
+            f_grey(ws, f"D{rr}",
+                   f"=SUMPRODUCT({blk['w']},{blk['ec_p']},{blk['Mw']})/SUMPRODUCT({blk['w']},{blk['ec_p']})",
+                   FMT_MOD)
+            ctx.lay_dyn["scenario_results"].append(
+                dict(e_p=f"'_calc'!$B${rr}", e_p1=f"'_calc'!$C${rr}", mbar_p=f"'_calc'!$D${rr}"))
+
+        cursor = sb + 4 * L.CALC_BLOCK_STRIDE + 2
+
+    if ctx.has(SHEETS.ATTRIBUTION):
+        # ------------------------------------------------------------------
+        # 4. Attribution section (selected combo)
+        # ------------------------------------------------------------------
+        al = cursor
+        put(ws, f"A{al}", "Attribution: planned-row ranks and transformed logs (selected combo)",
+            fnt=font(GREY_DARK, bold=True, size=9))
+        for j, h in enumerate(["rank", "r_eff mag", "ln mag", "eff act", "effmo act", "days act",
+                               "ecnt", "scnt", "first act"]):
+            put(ws, f"{col(1 + j)}{al + 1}", h, fnt=font(GREY_DARK, size=8))
+        r0 = al + 2
         for j in range(L.RL_ROWS):
             r = r0 + j
             ir = L.RL_FIRST + j
-            f_grey(ws, f"{cEff}{r}",
-                   f'=IF({RL}!$C${ir}="","",IF({RL}!$E${ir}="planned",'
-                   f"EDATE({RL}!$C${ir},N(INDEX(sc_shift,{s}))),{RL}!$C${ir}))", FMT_DATE)
-            f_grey(ws, f"{cEm}{r}",
-                   f'=IF(${cEff}{r}="","",DATE(YEAR(${cEff}{r}),MONTH(${cEff}{r}),1))',
+            f_grey(ws, f"A{r}",
+                   f'=IF(OR({RL}!$J${ir}<>nr_SelKey,{RL}!$E${ir}<>"planned",{RL}!$C${ir}=""),0,'
+                   f'COUNTIFS({RL}!$J${L.RL_FIRST}:$J${ir},nr_SelKey,'
+                   f'{RL}!$E${L.RL_FIRST}:$E${ir},"planned"))', FMT_INT)
+            f_grey(ws, f"B{r}",
+                   f"=IF($A{r}=0,N({RL}!$K${ir}),IF(ISBLANK(INDEX(att_actpct,$A{r})),"
+                   f"N({RL}!$K${ir}),INDEX(att_actpct,$A{r})))", "0.0%")
+            f_grey(ws, f"C{r}",
+                   f'=IF({RL}!$C${ir}="",0,IF(1+$B{r}>0,LN(1+$B{r}),0))', FMT_IDX)
+            f_grey(ws, f"D{r}",
+                   f'=IF({RL}!$C${ir}="","",IF($A{r}=0,{RL}!$C${ir},'
+                   f"IF(ISBLANK(INDEX(att_actdate,$A{r})),{RL}!$C${ir},INDEX(att_actdate,$A{r}))))",
                    FMT_DATE)
-            f_grey(ws, f"{cAch}{r}",
-                   f'=IF(N(INDEX(sc_ach,{s}))=0,IF({RL}!$G${ir}="",1,{RL}!$G${ir}),'
-                   f"INDEX(sc_ach,{s}))", "0.0%")
-            f_grey(ws, f"{cReff}{r}",
-                   f'=IF({RL}!$C${ir}="",0,IF({RL}!$E${ir}="planned",'
-                   f"({RL}!$D${ir}+N(INDEX(sc_dpts,{s})))*${cAch}{r},{RL}!$D${ir}))", "0.0%")
-            f_grey(ws, f"{cLn}{r}",
-                   f'=IF({RL}!$C${ir}="",0,IF(1+${cReff}{r}>0,LN(1+${cReff}{r}),0))', FMT_IDX)
-            f_grey(ws, f"{cDay}{r}",
-                   f'=IF(${cEff}{r}="",0,EOMONTH(${cEff}{r},0)-${cEff}{r}+1)', FMT_INT)
-            f_grey(ws, f"{cEcnt}{r}",
-                   f'=IF(${cEff}{r}="",0,COUNTIFS(rl_key,{RL}!$J${ir},'
-                   f'${cEm}${r0}:${cEm}${r0 + L.RL_ROWS - 1},${cEm}{r},'
-                   f'${cEff}${r0}:${cEff}${r0 + L.RL_ROWS - 1},"<"&${cEff}{r}))', FMT_INT)
-            f_grey(ws, f"{cScnt}{r}",
-                   f'=IF(${cEff}{r}="",0,COUNTIFS({RL}!$J${L.RL_FIRST}:$J${ir},{RL}!$J${ir},'
-                   f"${cEm}${r0}:${cEm}{r},${cEm}{r},${cEff}${r0}:${cEff}{r},${cEff}{r}))",
-                   FMT_INT)
-            f_grey(ws, f"{cFirst}{r}",
-                   f'=IF(${cEff}{r}="",0,IF(AND(${cEcnt}{r}=0,${cScnt}{r}=1),1,0))', FMT_INT)
-        sc_logs.append(dict(
-            eff=f"${cEff}${r0}:${cEff}${r0 + L.RL_ROWS - 1}",
-            effmonth=f"${cEm}${r0}:${cEm}${r0 + L.RL_ROWS - 1}",
-            ln=f"${cLn}${r0}:${cLn}${r0 + L.RL_ROWS - 1}",
-            daysafter=f"${cDay}${r0}:${cDay}${r0 + L.RL_ROWS - 1}",
-            first=f"${cFirst}${r0}:${cFirst}${r0 + L.RL_ROWS - 1}",
-        ))
+            f_grey(ws, f"E{r}", f'=IF($D{r}="","",DATE(YEAR($D{r}),MONTH($D{r}),1))', FMT_DATE)
+            f_grey(ws, f"F{r}", f'=IF($D{r}="",0,EOMONTH($D{r},0)-$D{r}+1)', FMT_INT)
+            f_grey(ws, f"G{r}",
+                   f'=IF($D{r}="",0,COUNTIFS(rl_key,{RL}!$J${ir},'
+                   f'$E${r0}:$E${r0 + L.RL_ROWS - 1},$E{r},$D${r0}:$D${r0 + L.RL_ROWS - 1},"<"&$D{r}))', FMT_INT)
+            f_grey(ws, f"H{r}",
+                   f'=IF($D{r}="",0,COUNTIFS({RL}!$J${L.RL_FIRST}:$J${ir},{RL}!$J${ir},'
+                   f"$E${r0}:$E{r},$E{r},$D${r0}:$D{r},$D{r}))", FMT_INT)
+            f_grey(ws, f"I{r}", f'=IF($D{r}="",0,IF(AND($G{r}=0,$H{r}=1),1,0))', FMT_INT)
+        ctx.lay_dyn["att_rank"] = f"'_calc'!$A${r0}:$A${r0 + L.RL_ROWS - 1}"
+        mag_ln = f"$C${r0}:$C${r0 + L.RL_ROWS - 1}"
+        act_eff = f"$D${r0}:$D${r0 + L.RL_ROWS - 1}"
+        act_em = f"$E${r0}:$E${r0 + L.RL_ROWS - 1}"
+        act_day = f"$F${r0}:$F${r0 + L.RL_ROWS - 1}"
+        act_first = f"$I${r0}:$I${r0 + L.RL_ROWS - 1}"
 
-    sb = sl + L.RL_ROWS + 4
-    ctx.lay_dyn["scenario_results"] = []
-    for s in range(1, 5):
-        t = sb + (s - 1) * L.CALC_BLOCK_STRIDE
-        put(ws, f"A{t}", f"Scenario S{s} engine block (selected combo)",
+        ab = al + L.RL_ROWS + 4
+        # magnitude block: achieved % at planned dates (rate only)
+        t = ab
+        put(ws, f"A{t}", "Attribution block 1 — rate magnitude (achieved % at planned dates)",
             fnt=font(GREY_DARK, bold=True, size=9))
-        # D70: a scenario inherits the selected combo's mod actions unchanged —
-        # the levers move the rate program and the mod LEVEL, never the log. The
-        # delta-M_1 lever shifts the base those actions compound on, which keeps
-        # "shift the projected mod path" meaning the same thing on both
-        # mechanisms AND keeps the blank-lever run identical to the base. Without
-        # this the Checks row "Scenario engine reproduces Base when all levers
-        # blank" fails the moment a combo with logged actions is selected.
-        f_grey(ws, f"M{t}", "='Mod Engine'!$C$11", FMT_INT)
-        f_grey(ws, f"N{t}", f"='Mod Engine'!$C$12+N(INDEX(sc_dm1,{s}))", FMT_MOD)
-        anchors = write_mod_anchor_cells(
-            ws, ctx, t + 1, 1, mind_ref="nr_MInd", m0_ref="nr_M0", asof_ref="nr_M0Asof",
-            m1_ref="nr_M1", mprior_ref="nr_MPrior", m2_ref="nr_M2",
-            dm1_expr=f"+N(INDEX(sc_dm1,{s}))",
-            steps_cond=f"$M${t}>0", mend_ref=f"$N${t}")
-        lg = sc_logs[s - 1]
+        blk = write_cohort_block(
+            ws, ctx, t + 3, LogRefs(key_cond="nr_SelKey", ln=mag_ln),
+            t_ref="nr_TermMonths", srow_ref="re_srow", ssum_ref="re_ssum",
+            anchors=None, include_mod=False, header=True, header_row_at=t + 2)
+        rr = t + 51
+        f_grey(ws, f"B{rr}",
+               f"=SUMPRODUCT({blk['w']},{blk['ec_p']},{blk['W']})/SUMPRODUCT({blk['w']},{blk['ec_p']})",
+               FMT_IDX)
+        ctx.lay_dyn["att_e_mag"] = f"'_calc'!$B${rr}"
+
+        # timing block: achieved % at actual dates
+        t = ab + L.CALC_BLOCK_STRIDE
+        put(ws, f"A{t}", "Attribution block 2 — rate timing (achieved % at actual dates)",
+            fnt=font(GREY_DARK, bold=True, size=9))
         blk = write_cohort_block(
             ws, ctx, t + 3,
-            LogRefs(key_cond="nr_SelKey", eff=lg["eff"], ln=lg["ln"],
-                    effmonth=lg["effmonth"], first=lg["first"], daysafter=lg["daysafter"]),
+            LogRefs(key_cond="nr_SelKey", eff=act_eff, ln=mag_ln, effmonth=act_em,
+                    first=act_first, daysafter=act_day),
             t_ref="nr_TermMonths", srow_ref="re_srow", ssum_ref="re_ssum",
-            anchors=anchors, header=True, header_row_at=t + 2,
-            net=dict(mode="nr_NetMode",
-                     x=f"(nr_NetSelP+N(INDEX(sc_dnet,{s})))",
-                     x1=f"(nr_NetSelP1+N(INDEX(sc_dnet,{s})))",
-                     modeff='nr_ModAdjEff="ON"', mind="nr_MInd"),
+            anchors=None, include_mod=False, header=True, header_row_at=t + 2)
+        rr = t + 51
+        f_grey(ws, f"B{rr}",
+               f"=SUMPRODUCT({blk['w']},{blk['ec_p']},{blk['W']})/SUMPRODUCT({blk['w']},{blk['ec_p']})",
+               FMT_IDX)
+        ctx.lay_dyn["att_e_time"] = f"'_calc'!$B${rr}"
+
+        # actual-mod block
+        t = ab + 2 * L.CALC_BLOCK_STRIDE
+        put(ws, f"A{t}", "Attribution block 3 — actual written-mod path",
+            fnt=font(GREY_DARK, bold=True, size=9))
+        f_grey(ws, f"M{t}", "=IF(N(att_m0)=0,nr_M0,att_m0)", FMT_MOD)
+        f_grey(ws, f"N{t}", "=IF(N(att_asof)=0,nr_M0Asof,att_asof)", FMT_DATE)
+        f_grey(ws, f"O{t}", "=IF(N(att_m1)=0,nr_M1,att_m1)", FMT_MOD)
+        f_grey(ws, f"P{t}", "=IF(N(att_m2)=0,N(nr_M2),att_m2)", FMT_MOD)
+        # D70: taken mod actions ARE the actual path, so the actual-mod block reads
+        # the log too. With no att_* overrides typed this reproduces the base path
+        # exactly and the mod attribution factor is 1 — the property attribution has
+        # always had, restored. (Restating a mod action as partly achieved is not yet
+        # modelled; there is no actual-mod override to match att_actpct on rates.)
+        f_grey(ws, f"Q{t}", "='Mod Engine'!$C$11", FMT_INT)
+        f_grey(ws, f"R{t}", "='Mod Engine'!$C$12", FMT_MOD)
+        anchors = write_mod_anchor_cells(
+            ws, ctx, t + 1, 1, mind_ref="nr_MInd", m0_ref=f"$M${t}", asof_ref=f"$N${t}",
+            m1_ref=f"$O${t}", mprior_ref="nr_MPrior", m2_ref=f"$P${t}",
+            steps_cond=f"$Q${t}>0", mend_ref=f"$R${t}")
+        blk = write_cohort_block(
+            ws, ctx, t + 3, LogRefs(key_cond="nr_SelKey"), t_ref="nr_TermMonths",
+            srow_ref="re_srow", ssum_ref="re_ssum", anchors=anchors,
+            include_rate=False, header=True, header_row_at=t + 2,
             mod_refs=LogRefs(key_cond="nr_SelKey", eff="ml_eff", ln="ml_ln1p",
                              effmonth="ml_effmonth", first="ml_first",
                              daysafter="ml_daysafter"),
-            mod_col=22, mod_base_ref=f"$N${t}", mod_count_ref=f"$M${t}")
+            mod_col=22, mod_base_ref=f"$R${t}", mod_count_ref=f"$Q${t}")
         rr = t + 51
-        label(ws, f"A{rr}", f"S{s} results:")
-        _grey(ws, f"A{rr}")
         f_grey(ws, f"B{rr}",
-               f"=SUMPRODUCT({blk['w']},{blk['ec_p']},{blk['U']})/SUMPRODUCT({blk['w']},{blk['ec_p']})",
-               FMT_IDX)
-        f_grey(ws, f"C{rr}",
-               f"=SUMPRODUCT({blk['w']},{blk['ec_p1']},{blk['U']})/SUMPRODUCT({blk['w']},{blk['ec_p1']})",
-               FMT_IDX)
-        f_grey(ws, f"D{rr}",
                f"=SUMPRODUCT({blk['w']},{blk['ec_p']},{blk['Mw']})/SUMPRODUCT({blk['w']},{blk['ec_p']})",
                FMT_MOD)
-        ctx.lay_dyn["scenario_results"].append(
-            dict(e_p=f"'_calc'!$B${rr}", e_p1=f"'_calc'!$C${rr}", mbar_p=f"'_calc'!$D${rr}"))
+        ctx.lay_dyn["att_mbar_act"] = f"'_calc'!$B${rr}"
 
-    # ------------------------------------------------------------------
-    # 4. Attribution section (selected combo)
-    # ------------------------------------------------------------------
-    al = sb + 4 * L.CALC_BLOCK_STRIDE + 2
-    put(ws, f"A{al}", "Attribution: planned-row ranks and transformed logs (selected combo)",
-        fnt=font(GREY_DARK, bold=True, size=9))
-    for j, h in enumerate(["rank", "r_eff mag", "ln mag", "eff act", "effmo act", "days act",
-                           "ecnt", "scnt", "first act"]):
-        put(ws, f"{col(1 + j)}{al + 1}", h, fnt=font(GREY_DARK, size=8))
-    r0 = al + 2
-    for j in range(L.RL_ROWS):
-        r = r0 + j
-        ir = L.RL_FIRST + j
-        f_grey(ws, f"A{r}",
-               f'=IF(OR({RL}!$J${ir}<>nr_SelKey,{RL}!$E${ir}<>"planned",{RL}!$C${ir}=""),0,'
-               f'COUNTIFS({RL}!$J${L.RL_FIRST}:$J${ir},nr_SelKey,'
-               f'{RL}!$E${L.RL_FIRST}:$E${ir},"planned"))', FMT_INT)
-        f_grey(ws, f"B{r}",
-               f"=IF($A{r}=0,N({RL}!$K${ir}),IF(ISBLANK(INDEX(att_actpct,$A{r})),"
-               f"N({RL}!$K${ir}),INDEX(att_actpct,$A{r})))", "0.0%")
-        f_grey(ws, f"C{r}",
-               f'=IF({RL}!$C${ir}="",0,IF(1+$B{r}>0,LN(1+$B{r}),0))', FMT_IDX)
-        f_grey(ws, f"D{r}",
-               f'=IF({RL}!$C${ir}="","",IF($A{r}=0,{RL}!$C${ir},'
-               f"IF(ISBLANK(INDEX(att_actdate,$A{r})),{RL}!$C${ir},INDEX(att_actdate,$A{r}))))",
-               FMT_DATE)
-        f_grey(ws, f"E{r}", f'=IF($D{r}="","",DATE(YEAR($D{r}),MONTH($D{r}),1))', FMT_DATE)
-        f_grey(ws, f"F{r}", f'=IF($D{r}="",0,EOMONTH($D{r},0)-$D{r}+1)', FMT_INT)
-        f_grey(ws, f"G{r}",
-               f'=IF($D{r}="",0,COUNTIFS(rl_key,{RL}!$J${ir},'
-               f'$E${r0}:$E${r0 + L.RL_ROWS - 1},$E{r},$D${r0}:$D${r0 + L.RL_ROWS - 1},"<"&$D{r}))', FMT_INT)
-        f_grey(ws, f"H{r}",
-               f'=IF($D{r}="",0,COUNTIFS({RL}!$J${L.RL_FIRST}:$J${ir},{RL}!$J${ir},'
-               f"$E${r0}:$E{r},$E{r},$D${r0}:$D{r},$D{r}))", FMT_INT)
-        f_grey(ws, f"I{r}", f'=IF($D{r}="",0,IF(AND($G{r}=0,$H{r}=1),1,0))', FMT_INT)
-    ctx.lay_dyn["att_rank"] = f"'_calc'!$A${r0}:$A${r0 + L.RL_ROWS - 1}"
-    mag_ln = f"$C${r0}:$C${r0 + L.RL_ROWS - 1}"
-    act_eff = f"$D${r0}:$D${r0 + L.RL_ROWS - 1}"
-    act_em = f"$E${r0}:$E${r0 + L.RL_ROWS - 1}"
-    act_day = f"$F${r0}:$F${r0 + L.RL_ROWS - 1}"
-    act_first = f"$I${r0}:$I${r0 + L.RL_ROWS - 1}"
+        cursor = ab + 3 * L.CALC_BLOCK_STRIDE
 
-    ab = al + L.RL_ROWS + 4
-    # magnitude block: achieved % at planned dates (rate only)
-    t = ab
-    put(ws, f"A{t}", "Attribution block 1 — rate magnitude (achieved % at planned dates)",
-        fnt=font(GREY_DARK, bold=True, size=9))
-    blk = write_cohort_block(
-        ws, ctx, t + 3, LogRefs(key_cond="nr_SelKey", ln=mag_ln),
-        t_ref="nr_TermMonths", srow_ref="re_srow", ssum_ref="re_ssum",
-        anchors=None, include_mod=False, header=True, header_row_at=t + 2)
-    rr = t + 51
-    f_grey(ws, f"B{rr}",
-           f"=SUMPRODUCT({blk['w']},{blk['ec_p']},{blk['W']})/SUMPRODUCT({blk['w']},{blk['ec_p']})",
-           FMT_IDX)
-    ctx.lay_dyn["att_e_mag"] = f"'_calc'!$B${rr}"
+    if ctx.has(SHEETS.SOLVER):
+        # ------------------------------------------------------------------
+        # 5. Solver base block (taken rows only) + cumulative columns
+        # ------------------------------------------------------------------
+        t = cursor
+        put(ws, f"A{t}", "Solver base block — taken rows only (planned program excluded, D13); "
+                         "keyed on slv_key so the Solver can follow Control OR its own override",
+            fnt=font(GREY_DARK, bold=True, size=9))
+        # local seasonality for the SOLVE combo's state (may differ from the selection)
+        f_grey(ws, f"M{t}", "=IF(COUNTIF(se_state,slv_state)=0,0,MATCH(slv_state,se_state,0))",
+               FMT_INT)
+        f_grey(ws, f"N{t}", f"=IF($M${t}=0,0,INDEX(se_sum,$M${t}))", "0.00")
+        # first="rl_firsttaken": the split flag must be STATUS-AWARE — the plain
+        # rl_first is filter-blind, and a planned row earlier in a taken row's
+        # cohort month would steal the flag, zero the L column, and silently drop
+        # the taken change from that cohort's W0 (D58; oracle filters first).
+        # D73: the block carries a MOD leg too, so the same block serves Mode A/B
+        # (solve on rate) and Mode C (solve on a dated mod step).
+        #   V = mod-action count for the solve combo, +1 for the step being solved
+        #       for. The count drives the re-anchor, and the answer will always
+        #       contain at least one action, so the base must already be
+        #       re-anchored — the workbook form of the oracle's zero-step base.
+        #   W = M_endPrior for the solve combo (M_0 when blank)
+        # every mod input resolved for slv_key, NOT the Control selection — the
+        # Solver's override can detach the two, and reading nr_M0 here would
+        # quietly solve the wrong combo
+        # D85: read the SOLVE combo's own _calc header cells rather than
+        # re-resolving the mod inputs from tbl_LR. This block used to be a fourth
+        # hand-synced copy of that resolution and it had dropped the blank guards
+        # every other copy carries — so a combo with blank mod fields (legal
+        # everywhere else, where it reads as a flat 1.000 path) drove Mode C's mod
+        # leg off M_0 = 0 and an as-of date of serial 0, silently. Pointing at the
+        # guarded cells fixes the divergence and removes the copy in one edit.
+        sr = "MATCH(slv_key,lr_key,0)"
+        cl = L.CALC_BLOCK_FIRST + L.LR_ROWS * L.CALC_BLOCK_STRIDE + 60
+        base = f"{L.CALC_BLOCK_FIRST}+({sr}-1)*{L.CALC_BLOCK_STRIDE}"
 
-    # timing block: achieved % at actual dates
-    t = ab + L.CALC_BLOCK_STRIDE
-    put(ws, f"A{t}", "Attribution block 2 — rate timing (achieved % at actual dates)",
-        fnt=font(GREY_DARK, bold=True, size=9))
-    blk = write_cohort_block(
-        ws, ctx, t + 3,
-        LogRefs(key_cond="nr_SelKey", eff=act_eff, ln=mag_ln, effmonth=act_em,
-                first=act_first, daysafter=act_day),
-        t_ref="nr_TermMonths", srow_ref="re_srow", ssum_ref="re_ssum",
-        anchors=None, include_mod=False, header=True, header_row_at=t + 2)
-    rr = t + 51
-    f_grey(ws, f"B{rr}",
-           f"=SUMPRODUCT({blk['w']},{blk['ec_p']},{blk['W']})/SUMPRODUCT({blk['w']},{blk['ec_p']})",
-           FMT_IDX)
-    ctx.lay_dyn["att_e_time"] = f"'_calc'!$B${rr}"
+        def hdr(colL: str, absent: str) -> str:
+            return (f"=IF(COUNTIF(lr_key,slv_key)=0,{absent},"
+                    f"INDEX(${colL}$1:${colL}${cl},{base}))")
 
-    # actual-mod block
-    t = ab + 2 * L.CALC_BLOCK_STRIDE
-    put(ws, f"A{t}", "Attribution block 3 — actual written-mod path",
-        fnt=font(GREY_DARK, bold=True, size=9))
-    f_grey(ws, f"M{t}", "=IF(N(att_m0)=0,nr_M0,att_m0)", FMT_MOD)
-    f_grey(ws, f"N{t}", "=IF(N(att_asof)=0,nr_M0Asof,att_asof)", FMT_DATE)
-    f_grey(ws, f"O{t}", "=IF(N(att_m1)=0,nr_M1,att_m1)", FMT_MOD)
-    f_grey(ws, f"P{t}", "=IF(N(att_m2)=0,N(nr_M2),att_m2)", FMT_MOD)
-    # D70: taken mod actions ARE the actual path, so the actual-mod block reads
-    # the log too. With no att_* overrides typed this reproduces the base path
-    # exactly and the mod attribution factor is 1 — the property attribution has
-    # always had, restored. (Restating a mod action as partly achieved is not yet
-    # modelled; there is no actual-mod override to match att_actpct on rates.)
-    f_grey(ws, f"Q{t}", "='Mod Engine'!$C$11", FMT_INT)
-    f_grey(ws, f"R{t}", "='Mod Engine'!$C$12", FMT_MOD)
-    anchors = write_mod_anchor_cells(
-        ws, ctx, t + 1, 1, mind_ref="nr_MInd", m0_ref=f"$M${t}", asof_ref=f"$N${t}",
-        m1_ref=f"$O${t}", mprior_ref="nr_MPrior", m2_ref=f"$P${t}",
-        steps_cond=f"$Q${t}>0", mend_ref=f"$R${t}")
-    blk = write_cohort_block(
-        ws, ctx, t + 3, LogRefs(key_cond="nr_SelKey"), t_ref="nr_TermMonths",
-        srow_ref="re_srow", ssum_ref="re_ssum", anchors=anchors,
-        include_rate=False, header=True, header_row_at=t + 2,
-        mod_refs=LogRefs(key_cond="nr_SelKey", eff="ml_eff", ln="ml_ln1p",
-                         effmonth="ml_effmonth", first="ml_first",
-                         daysafter="ml_daysafter"),
-        mod_col=22, mod_base_ref=f"$R${t}", mod_count_ref=f"$Q${t}")
-    rr = t + 51
-    f_grey(ws, f"B{rr}",
-           f"=SUMPRODUCT({blk['w']},{blk['ec_p']},{blk['Mw']})/SUMPRODUCT({blk['w']},{blk['ec_p']})",
-           FMT_MOD)
-    ctx.lay_dyn["att_mbar_act"] = f"'_calc'!$B${rr}"
+        f_grey(ws, f"V{t}", "=COUNTIF(ml_key,slv_key)+1", FMT_INT)
+        f_grey(ws, f"W{t}", hdr("Q", "1"), FMT_MOD)          # guarded M_endPrior
+        f_grey(ws, f"X{t}", hdr("G", "1"), FMT_MOD)          # guarded M_0
+        f_grey(ws, f"Y{t}", hdr("H", "DATE(nr_PlanYear-1,10,1)"), FMT_DATE)
+        f_grey(ws, f"Z{t}", hdr("J", "0"), FMT_MOD)          # M_prior (raw, as _calc)
+        anchors_s = write_mod_anchor_cells(
+            ws, ctx, t + 1, 1,
+            mind_ref="nr_MInd", m0_ref=f"$X${t}", asof_ref=f"$Y${t}",
+            m1_ref=f"$W${t}", mprior_ref=f"$Z${t}", m2_ref=f"$W${t}",
+            steps_cond="TRUE", mend_ref=f"$W${t}")
+        blk = write_cohort_block(
+            ws, ctx, t + 3, LogRefs(key_cond="slv_key", taken_only=True,
+                                    first="rl_firsttaken"),
+            t_ref="nr_TermMonths", srow_ref=f"$M${t}", ssum_ref=f"$N${t}",
+            anchors=anchors_s, header=True, header_row_at=t + 2,
+            mod_refs=LogRefs(key_cond="slv_key", eff="ml_eff", ln="ml_ln1p",
+                             effmonth="ml_effmonth", first="ml_firsttaken",
+                             daysafter="ml_daysafter", taken_only=True,
+                             status="ml_status"),
+            mod_col=27, mod_base_ref=f"$W${t}", mod_count_ref=f"$V${t}")
+        bf, bl = blk["first"], blk["last"]
+        for cL, hdr_ in (("S", "w-ec-W0"), ("T", "cum"), ("U", "w-ec-W0eom"),
+                         ("AG", "w-ec-M0"), ("AH", "cum mod"), ("AI", "w-ec-Meom")):
+            put(ws, f"{cL}{t + 2}", hdr_, fnt=font(GREY_DARK, size=8))
+        mc = [col(27 + i) for i in range(5)]     # AA..AE: the mod index helper strip
+        for i in range(L.N_COH):
+            r = bf + i
+            f_grey(ws, f"S{r}", f"=$H{r}*$Q{r}*$N{r}", FMT_IDX)
+            f_grey(ws, f"T{r}", f"=SUM($S${bf}:$S{r})", FMT_IDX)
+            f_grey(ws, f"U{r}", f"=$H{r}*$Q{r}*$J{r}", FMT_IDX)
+            # mod analogues: level in force, running total, and the end-of-month
+            # mod the split month's post-share is valued at
+            f_grey(ws, f"AG{r}", f"=$H{r}*$Q{r}*$O{r}", FMT_IDX)
+            f_grey(ws, f"AH{r}", f"=SUM($AG${bf}:$AG{r})", FMT_IDX)
+            f_grey(ws, f"AI{r}", f"=$H{r}*$Q{r}*$W${t}*${mc[1]}{r}", FMT_IDX)
+        rr = t + 51
+        label(ws, f"A{rr}", "solver totals:")
+        _grey(ws, f"A{rr}")
+        f_grey(ws, f"B{rr}", f"=SUMPRODUCT({blk['w']},{blk['ec_p']})", FMT_IDX)   # D
+        f_grey(ws, f"C{rr}", f"=SUM($S${bf}:$S${bl})", FMT_IDX)                   # total blend
+        f_grey(ws, f"D{rr}", f"=SUM($AG${bf}:$AG${bl})", FMT_IDX)                 # total mod
+        ctx.lay_dyn["solver"] = dict(first=bf, last=bl)
+        slv_names = {
+            "slv_absmi": (f"$G${bf}:$G${bl}", "Solver block: absolute cohort month indices"),
+            "slv_w": (f"$H${bf}:$H${bl}", "Solver block: written weights"),
+            "slv_ecp": (f"$Q${bf}:$Q${bl}", "Solver block: CY P earning fractions"),
+            "slv_widx": (f"$N${bf}:$N${bl}", "Solver block: taken-only written index W0 (blended)"),
+            "slv_wpre": (f"$I${bf}:$I${bl}", "Solver block: pre-month index W0_pre"),
+            "slv_weom": (f"$J${bf}:$J${bl}", "Solver block: end-of-month index W0_eom"),
+            "slv_dfirst": (f"$L${bf}:$L${bl}", "Solver block: first-taken-change days on/after"),
+            "slv_cum": (f"$T${bf}:$T${bl}", "Solver block: cumulative w-ec-W0"),
+            "slv_weom_c": (f"$U${bf}:$U${bl}", "Solver block: w-ec-W0_eom by cohort"),
+            "slv_den": (f"$B${rr}", "Solver denominator D = SUM w-ec over CY P"),
+            "slv_total": (f"$C${rr}", "Solver total SUM w-ec-W0 over CY P"),
+            # D73 mod leg
+            "slv_modcum": (f"$AH${bf}:$AH${bl}", "Solver block: cumulative w-ec-M_w (taken "
+                                                 "mod actions only)"),
+            "slv_meom_c": (f"$AI${bf}:$AI${bl}", "Solver block: w-ec-M_eom by cohort"),
+            "slv_mtotal": (f"$D${rr}", "Solver total SUM w-ec-M_w over CY P"),
+            "slv_mbase": (f"$W${t}", "Solver block: M_endPrior the mod steps compound on"),
+        }
+        for name, (ref, desc) in slv_names.items():
+            ctx.define(name, "_calc", ref, desc)
 
-    # ------------------------------------------------------------------
-    # 5. Solver base block (taken rows only) + cumulative columns
-    # ------------------------------------------------------------------
-    t = ab + 3 * L.CALC_BLOCK_STRIDE
-    put(ws, f"A{t}", "Solver base block — taken rows only (planned program excluded, D13); "
-                     "keyed on slv_key so the Solver can follow Control OR its own override",
-        fnt=font(GREY_DARK, bold=True, size=9))
-    # local seasonality for the SOLVE combo's state (may differ from the selection)
-    f_grey(ws, f"M{t}", "=IF(COUNTIF(se_state,slv_state)=0,0,MATCH(slv_state,se_state,0))",
-           FMT_INT)
-    f_grey(ws, f"N{t}", f"=IF($M${t}=0,0,INDEX(se_sum,$M${t}))", "0.00")
-    # first="rl_firsttaken": the split flag must be STATUS-AWARE — the plain
-    # rl_first is filter-blind, and a planned row earlier in a taken row's
-    # cohort month would steal the flag, zero the L column, and silently drop
-    # the taken change from that cohort's W0 (D58; oracle filters first).
-    # D73: the block carries a MOD leg too, so the same block serves Mode A/B
-    # (solve on rate) and Mode C (solve on a dated mod step).
-    #   V = mod-action count for the solve combo, +1 for the step being solved
-    #       for. The count drives the re-anchor, and the answer will always
-    #       contain at least one action, so the base must already be
-    #       re-anchored — the workbook form of the oracle's zero-step base.
-    #   W = M_endPrior for the solve combo (M_0 when blank)
-    # every mod input resolved for slv_key, NOT the Control selection — the
-    # Solver's override can detach the two, and reading nr_M0 here would
-    # quietly solve the wrong combo
-    # D85: read the SOLVE combo's own _calc header cells rather than
-    # re-resolving the mod inputs from tbl_LR. This block used to be a fourth
-    # hand-synced copy of that resolution and it had dropped the blank guards
-    # every other copy carries — so a combo with blank mod fields (legal
-    # everywhere else, where it reads as a flat 1.000 path) drove Mode C's mod
-    # leg off M_0 = 0 and an as-of date of serial 0, silently. Pointing at the
-    # guarded cells fixes the divergence and removes the copy in one edit.
-    sr = "MATCH(slv_key,lr_key,0)"
-    cl = L.CALC_BLOCK_FIRST + L.LR_ROWS * L.CALC_BLOCK_STRIDE + 60
-    base = f"{L.CALC_BLOCK_FIRST}+({sr}-1)*{L.CALC_BLOCK_STRIDE}"
-
-    def hdr(colL: str, absent: str) -> str:
-        return (f"=IF(COUNTIF(lr_key,slv_key)=0,{absent},"
-                f"INDEX(${colL}$1:${colL}${cl},{base}))")
-
-    f_grey(ws, f"V{t}", "=COUNTIF(ml_key,slv_key)+1", FMT_INT)
-    f_grey(ws, f"W{t}", hdr("Q", "1"), FMT_MOD)          # guarded M_endPrior
-    f_grey(ws, f"X{t}", hdr("G", "1"), FMT_MOD)          # guarded M_0
-    f_grey(ws, f"Y{t}", hdr("H", "DATE(nr_PlanYear-1,10,1)"), FMT_DATE)
-    f_grey(ws, f"Z{t}", hdr("J", "0"), FMT_MOD)          # M_prior (raw, as _calc)
-    anchors_s = write_mod_anchor_cells(
-        ws, ctx, t + 1, 1,
-        mind_ref="nr_MInd", m0_ref=f"$X${t}", asof_ref=f"$Y${t}",
-        m1_ref=f"$W${t}", mprior_ref=f"$Z${t}", m2_ref=f"$W${t}",
-        steps_cond="TRUE", mend_ref=f"$W${t}")
-    blk = write_cohort_block(
-        ws, ctx, t + 3, LogRefs(key_cond="slv_key", taken_only=True,
-                                first="rl_firsttaken"),
-        t_ref="nr_TermMonths", srow_ref=f"$M${t}", ssum_ref=f"$N${t}",
-        anchors=anchors_s, header=True, header_row_at=t + 2,
-        mod_refs=LogRefs(key_cond="slv_key", eff="ml_eff", ln="ml_ln1p",
-                         effmonth="ml_effmonth", first="ml_firsttaken",
-                         daysafter="ml_daysafter", taken_only=True,
-                         status="ml_status"),
-        mod_col=27, mod_base_ref=f"$W${t}", mod_count_ref=f"$V${t}")
-    bf, bl = blk["first"], blk["last"]
-    for cL, hdr_ in (("S", "w-ec-W0"), ("T", "cum"), ("U", "w-ec-W0eom"),
-                     ("AG", "w-ec-M0"), ("AH", "cum mod"), ("AI", "w-ec-Meom")):
-        put(ws, f"{cL}{t + 2}", hdr_, fnt=font(GREY_DARK, size=8))
-    mc = [col(27 + i) for i in range(5)]     # AA..AE: the mod index helper strip
-    for i in range(L.N_COH):
-        r = bf + i
-        f_grey(ws, f"S{r}", f"=$H{r}*$Q{r}*$N{r}", FMT_IDX)
-        f_grey(ws, f"T{r}", f"=SUM($S${bf}:$S{r})", FMT_IDX)
-        f_grey(ws, f"U{r}", f"=$H{r}*$Q{r}*$J{r}", FMT_IDX)
-        # mod analogues: level in force, running total, and the end-of-month
-        # mod the split month's post-share is valued at
-        f_grey(ws, f"AG{r}", f"=$H{r}*$Q{r}*$O{r}", FMT_IDX)
-        f_grey(ws, f"AH{r}", f"=SUM($AG${bf}:$AG{r})", FMT_IDX)
-        f_grey(ws, f"AI{r}", f"=$H{r}*$Q{r}*$W${t}*${mc[1]}{r}", FMT_IDX)
-    rr = t + 51
-    label(ws, f"A{rr}", "solver totals:")
-    _grey(ws, f"A{rr}")
-    f_grey(ws, f"B{rr}", f"=SUMPRODUCT({blk['w']},{blk['ec_p']})", FMT_IDX)   # D
-    f_grey(ws, f"C{rr}", f"=SUM($S${bf}:$S${bl})", FMT_IDX)                   # total blend
-    f_grey(ws, f"D{rr}", f"=SUM($AG${bf}:$AG${bl})", FMT_IDX)                 # total mod
-    ctx.lay_dyn["solver"] = dict(first=bf, last=bl)
-    slv_names = {
-        "slv_absmi": (f"$G${bf}:$G${bl}", "Solver block: absolute cohort month indices"),
-        "slv_w": (f"$H${bf}:$H${bl}", "Solver block: written weights"),
-        "slv_ecp": (f"$Q${bf}:$Q${bl}", "Solver block: CY P earning fractions"),
-        "slv_widx": (f"$N${bf}:$N${bl}", "Solver block: taken-only written index W0 (blended)"),
-        "slv_wpre": (f"$I${bf}:$I${bl}", "Solver block: pre-month index W0_pre"),
-        "slv_weom": (f"$J${bf}:$J${bl}", "Solver block: end-of-month index W0_eom"),
-        "slv_dfirst": (f"$L${bf}:$L${bl}", "Solver block: first-taken-change days on/after"),
-        "slv_cum": (f"$T${bf}:$T${bl}", "Solver block: cumulative w-ec-W0"),
-        "slv_weom_c": (f"$U${bf}:$U${bl}", "Solver block: w-ec-W0_eom by cohort"),
-        "slv_den": (f"$B${rr}", "Solver denominator D = SUM w-ec over CY P"),
-        "slv_total": (f"$C${rr}", "Solver total SUM w-ec-W0 over CY P"),
-        # D73 mod leg
-        "slv_modcum": (f"$AH${bf}:$AH${bl}", "Solver block: cumulative w-ec-M_w (taken "
-                                             "mod actions only)"),
-        "slv_meom_c": (f"$AI${bf}:$AI${bl}", "Solver block: w-ec-M_eom by cohort"),
-        "slv_mtotal": (f"$D${rr}", "Solver total SUM w-ec-M_w over CY P"),
-        "slv_mbase": (f"$W${t}", "Solver block: M_endPrior the mod steps compound on"),
-    }
-    for name, (ref, desc) in slv_names.items():
-        ctx.define(name, "_calc", ref, desc)
+        cursor = t + L.CALC_BLOCK_STRIDE
 
     # ------------------------------------------------------------------
     # 6. Program-flow locked block (taken rows only, keyed on nr_SelKey)
     # ------------------------------------------------------------------
-    t = ab + 4 * L.CALC_BLOCK_STRIDE
+    t = cursor
     put(ws, f"A{t}", "Program-flow locked block — taken rows only (D13), keyed on "
                      "nr_SelKey (the Solver base cannot be reused: slv_key can detach "
                      "from Control via the override); status-aware first flag per D58",
