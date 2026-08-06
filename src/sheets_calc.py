@@ -96,6 +96,25 @@ BOOK_SLOTS = 4
 # index moves, and tools/harvest.py keeps every position it maps.
 TARGET_PUB = dict(w_target=152)   # EV  target LR x EP
 
+# D110: the FOLLOWING year's two legs, plus the net target that governs them.
+# The cohort blocks already span Jan P-2..Dec P+1 — the same rows PRIOR_PUB
+# reads one year back — so this publishes months that were always computed and
+# never read, exactly as D68 did. No epw twin for the same reason: the weight is
+# 12*INDEX(se_block,srow,MONTH(m))/ssum, a function of calendar MONTH alone, so
+# w(Jan P+1) = w(Jan P) and the published plan-year weights aggregate all three
+# years correctly.
+#
+# netx1 carries the blank-carries-forward fallback the workbook already applies
+# (a blank lr_netp1 means "hold the P selection"), and netset1 records WHICH of
+# those two things happened — a book showing a P+1 target should be able to say
+# whether anyone chose it.
+NETD_PUB = dict(
+    rate1=153,       # EW..FH  YoY written rate leg, Jan..Dec P+1
+    delivered1=165,  # FI..FT  YoY delivered net leg, Jan..Dec P+1
+    netx1=177,       # FU      x(P+1), after the blank-carries-forward fallback
+    netset1=178,     # FV      1 when x(P+1) was entered, 0 when carried from P
+)
+
 PRIOR_PUB = dict(
     rate=113,       # DI..DT  YoY written rate leg, Jan..Dec P-1
     mod=125,        # DU..EF  YoY written mod leg (raw path, ungated)
@@ -304,6 +323,19 @@ def build_calc(ctx: Ctx):
                    f"=$N${num}/$N${den}-1", FMT_IDX)
             f_grey(ws, f"{col(PRIOR_PUB['mod'] + j)}{r}",
                    f"=$O${num}/$O${den}-1", FMT_IDX)
+        # D110 published FOLLOWING-year columns: the same formulas one year
+        # forward, Jan..Dec P+1 over their own Jan..Dec P base.
+        for j in range(12):
+            num, den = t + 39 + j, t + 27 + j
+            f_grey(ws, f"{col(NETD_PUB['delivered1'] + j)}{r}",
+                   f"=$N${num}/$N${den}*IF($O${t}=1,$O${num}/$O${den},1)-1", FMT_IDX)
+            f_grey(ws, f"{col(NETD_PUB['rate1'] + j)}{r}",
+                   f"=$N${num}/$N${den}-1", FMT_IDX)
+        # the P+1 net target the block already resolved, and whether it was
+        # entered or inherited from P
+        f_grey(ws, f"{col(NETD_PUB['netx1'])}{r}", f"=IF($L${t},$N${t},0)", "0.0%")
+        f_grey(ws, f"{col(NETD_PUB['netset1'])}{r}",
+               f"=IF(AND($L${t},NOT(ISBLANK(INDEX(lr_netp1,{n})))),1,0)", FMT_INT)
         f_grey(ws, f"{col(PRIOR_PUB['avg_rate'])}{r}", f"=$M${t + 51}", FMT_IDX)
         f_grey(ws, f"{col(PRIOR_PUB['avg_mod'])}{r}", f"=$N${t + 51}", FMT_IDX)
         f_grey(ws, f"{col(PRIOR_PUB['avg_del'])}{r}", f"=$O${t + 51}", FMT_IDX)
@@ -381,6 +413,11 @@ def build_calc(ctx: Ctx):
         "calc_w_target": ("EV", "Target LR x EP (State Summary weighting, D96)"),
         "calc_netmode": ("AK", "1 when the combo carries a net rate selection (D39)"),
         "calc_netx": ("AL", "Net selection x(P) by combo (0 when off)"),
+        "calc_netx1": (col(NETD_PUB["netx1"]),
+                       "Net selection x(P+1) after the blank-carries-forward "
+                       "fallback; 0 when off (D110)"),
+        "calc_netset1": (col(NETD_PUB["netset1"]),
+                         "1 when x(P+1) was ENTERED, 0 when carried from P (D110)"),
     }
     for nm, key, desc in (
             ("calc_cylr_prog", "cylr",

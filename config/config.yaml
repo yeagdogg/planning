@@ -102,4 +102,4 @@ theme:
   font: Calibri
 
 # Version stamped on Read Me; bump when regenerating with structural changes.
-version: 3.9.0
+version: 3.10.0

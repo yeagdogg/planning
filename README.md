@@ -185,6 +185,17 @@ walk tied to a fresh oracle run, with its residual decomposition required to rep
 own weighted mean; scenario, attribution, seasonality, projected-LR, mod-toggle,
 degenerate-input, stepped-mod, and plan-year-change exercises each tied to fresh oracle runs.
 
+**Net Delivery in the book.** Where a combo asserts a net rate selection, the book now
+shows the target, what the program AS LOGGED delivers against it, and the gap — per state
+and month by month over two years, premium-weighted. The per-line tab **solves** (what
+should I file to hit the target?) and cannot be harvested: its engine runs one business
+unit at a time against dates typed on the sheet. This one **reports**, which is the half
+that survives being frozen. Two rules keep it honest: the required pricing leg
+`(1+x)/(1+rate)-1` does not aggregate, so it shows only where the filters leave exactly
+one net-mode combo and is dashed elsewhere rather than approximated; and targets average
+over the combos that assert one, while delivered is weighted across every combo in view.
+The Solver's *suggested* filings are not injected, so a gap means work outstanding.
+
 **A LIGHT workbook, for a reader rather than an analyst.** Set `profile: light` on any
 line in `config/config.yaml` and that workbook is built without Portfolio, Scenarios,
 Solver, Attribution, Compare and One-Pager — nor the three hidden `_calc` sections that
@@ -196,12 +207,12 @@ Log and the Mod Log are never candidates however little a light reader opens the
 alone hosts 21 named cells that ten surviving sheets read. Excel cannot hide tabs from a
 formula, so this is a build-time choice rather than a switch inside the file.
 
-At v3.9.0 every artifact is green through **phase D**, from a single
+At v3.10.0 every artifact is green through **phase D**, from a single
 `python tools/release.py --full --force-full`: the five 12-month lines **318 checks / 0
-failed** each, the 6-month-term Inland Marine **316 / 0**, and the combined book **61 / 0**
-(`tools/verify_book.py`, including the source-freshness phase and the Pivot Data ties).
-pytest 369/369. Build, recalculate, roll up the book and verify all seven — **13.1 minutes**,
-of which 3.7 is pytest. Verification alone is about 3.
+failed** each, the 6-month-term Inland Marine **316 / 0**, and the combined book **65 / 0**
+(`tools/verify_book.py`, including the source-freshness phase, the Pivot Data ties and the
+Net Delivery grids). pytest 369/369. Build, recalculate, roll up the book and verify all
+seven — **8.3 minutes**, of which 1.9 is pytest. Verification alone is about 3.
 
 The book's 61st check is the D106 regression: where the filters resolve a state row to one
 combo, a rate-change slot that combo never filed must read BLANK. It used to read as the zero

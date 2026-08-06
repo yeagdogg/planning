@@ -31,7 +31,7 @@ import openpyxl
 
 from src.build_workbook import (GENERATOR_VERSION, Layout as L, load_config,
                                 output_path)
-from src.sheets_calc import (BOOK_PUB, BOOK_SLOTS, FLOW_PUB, PROG_LR,
+from src.sheets_calc import (BOOK_PUB, BOOK_SLOTS, FLOW_PUB, NETD_PUB, PROG_LR,
                              TARGET_PUB, W_AOTHER_COL)
 
 # scalar per-combo fields: field name -> column index on the results table
@@ -48,16 +48,22 @@ SCALARS = {
     "cylr_prog": PROG_LR["cylr"], "cylr1_prog": PROG_LR["cylr1"],
     "progident": PROG_LR["ident"], "proggap": PROG_LR["gap"],
     "ntaken": BOOK_PUB["ntaken"], "nplanned": BOOK_PUB["nplanned"],
+    "netx1": NETD_PUB["netx1"], "netset1": NETD_PUB["netset1"],   # D110
 }
-# 12-month families: field name -> first column index
+# 12-month families: field name -> first column index. The two P+1 legs (D110)
+# have no epw twin — the seasonality weight depends on calendar month alone, so
+# the plan-year weights below aggregate every year.
 MONTHLY = {"delivered": FLOW_PUB["delivered"], "rate": FLOW_PUB["rate"],
-           "mod": FLOW_PUB["mod"], "epw": FLOW_PUB["epw"]}
+           "mod": FLOW_PUB["mod"], "epw": FLOW_PUB["epw"],
+           "rate1": NETD_PUB["rate1"], "delivered1": NETD_PUB["delivered1"]}
 # The widest published column this harvester reads. It used to be exactly the
 # end of the Book's slot block; D96 appended the EP-weighted target beyond the
 # prior-year block, so take the max rather than assuming the last block added is
 # the rightmost one. Reading a few dozen extra cells per row costs nothing; a
 # silent IndexError on a column that IS published costs a release.
-LAST_COL = max(BOOK_PUB["slot"] + BOOK_SLOTS * 3 - 1, *TARGET_PUB.values())
+LAST_COL = max(BOOK_PUB["slot"] + BOOK_SLOTS * 3 - 1, *TARGET_PUB.values(),
+               NETD_PUB["rate1"] + 11, NETD_PUB["delivered1"] + 11,
+               NETD_PUB["netx1"], NETD_PUB["netset1"])
 
 # A row is only usable if these carry cached values. None means one of two
 # things, and both must stop the harvest: the workbook was never recalculated,

@@ -60,7 +60,7 @@ def _ss_chain1(r) -> str:
 BOOK = "_book"
 PIVOT = "Pivot Data"
 SHEET_ORDER = ["Read Me", "Control", "State Summary", "Portfolio", "Roll-ups",
-               "Program Flow", PIVOT, "Checks", BOOK]
+               "Program Flow", "Net Delivery", PIVOT, "Checks", BOOK]
 
 # ---- _book layout ---------------------------------------------------------
 BK_HDR = 1
@@ -79,6 +79,7 @@ SCALARS = [
     ("arate_p1", "A_rate +1", FMT_IDX), ("amod_p1", "A_mod +1", FMT_IDX),
     ("echg", "Earned chg vs ind", PCT_S), ("carry", "Carryover", PCT_S),
     ("netmode", "Net?", FMT_INT), ("netx", "Net target", PCT_S),
+    ("netx1", "Net target +1", PCT_S), ("netset1", "+1 target set?", FMT_INT),
     ("modeff", "Mod adj on", FMT_INT),
     ("cylr_prog", "Plan LR (program)", FMT_PCT),
     ("cylr1_prog", "Plan LR +1 (program)", FMT_PCT),
@@ -131,7 +132,11 @@ PIVOT_HEADERS = ["LOB", "BU", "State", "Category", "Measure", "Month",
                  "Weight", "Weighted value"]
 # monthly families: EP x weight, and the same times each leg (mod legs are
 # additionally gated by the combo's mod-adjustment flag)
-MONTHLY = ["epw", "epw_del", "epw_rate", "epwm", "epwm_mod"]
+# D110 adds the FOLLOWING year's two legs. They share the epw denominator with
+# their plan-year twins — the seasonality weight is a function of calendar month
+# alone, so w(Jan P+1) = w(Jan P) and one weight family serves both years.
+MONTHLY = ["epw", "epw_del", "epw_rate", "epwm", "epwm_mod",
+           "epw_rate1", "epw_del1"]
 SLOTS = 4
 
 
@@ -308,7 +313,9 @@ def build_book_data(ctx: BookCtx):
                     "epw_del": epw * (rec["delivered"][j] or 0.0),
                     "epw_rate": epw * (rec["rate"][j] or 0.0),
                     "epwm": epw * modeff,
-                    "epwm_mod": epw * modeff * (rec["mod"][j] or 0.0)}
+                    "epwm_mod": epw * modeff * (rec["mod"][j] or 0.0),
+                    "epw_rate1": epw * (rec["rate1"][j] or 0.0),
+                    "epw_del1": epw * (rec["delivered1"][j] or 0.0)}
             for fam, v in vals.items():
                 put(ws, f"{col(COLS[f'{fam}_{j}'])}{r}", v, fmt=FMT_IDX)
         for j in range(SLOTS):
@@ -317,6 +324,7 @@ def build_book_data(ctx: BookCtx):
             put(ws, f"{col(COLS[f'slot{j}_pct'])}{r}", pct, fmt=PCT_S)
             put(ws, f"{col(COLS[f'slot{j}_tok'])}{r}", tok)
     for f in ("lob", "bu", "state", "key", "ukey", "ep", "netmode", "netx",
+              "netx1", "netset1",
               "progident",
               "proggap", "ntaken", "nplanned", "cylr_p", "cylr_prog", "modeff"):
         ctx.define(f"bk_{f}", BOOK, rng(f, n).split("!")[1],
@@ -874,6 +882,239 @@ def build_program_flow(ctx: BookCtx, n: int):
 
 
 # ---------------------------------------------------------------------------
+# Net Delivery — targets and what the logged program delivers against them
+# ---------------------------------------------------------------------------
+
+
+def build_net_delivery(ctx: BookCtx, n: int):
+    """The book's view of net rate selections (D110).
+
+    NOT the per-LOB Net Delivery tab, and the difference is the point. That one
+    SOLVES: pick a business unit, type an effective date, and it tells you the
+    filing that hits the target. It cannot be harvested — its engine runs one
+    business unit at a time against inputs typed on the sheet, so there is no
+    per-combo answer to publish.
+
+    This one REPORTS: here are the targets in view, here is what the program AS
+    LOGGED delivers against them, month by month across two years and weighted
+    by premium. The gap it shows is the honest one — the distance between what
+    has been filed and planned, and what was asserted. Closing it is still the
+    line workbook's job, and the exhibit says so rather than implying otherwise.
+    """
+    ws = ctx.wb["Net Delivery"]
+    d = ctx.data
+    states = d.states
+    p = d.plan_year
+    title(ws, "A1", f"Net Delivery — targets and what the program delivers ({p})",
+          "Where a combo asserts a net rate selection, this is the target and the "
+          "delivery the LOGGED program (taken + planned filings) produces against it. "
+          "Suggested filings from the per-line Solver are NOT injected here.")
+    nav_bar(ws, 3, 1, ["Control", "State Summary", "Program Flow", "Roll-ups",
+                       "Checks"], step=2)
+    dims = ("lob", "bu")
+
+    # ---- per-state summary ------------------------------------------------
+    r = 5
+    section(ws, r, "A", "Net targets in view, by state")
+    put(ws, f"A{r + 1}",
+        "Targets are averaged over the NET-MODE combos only — a combo that asserts "
+        "nothing is not a target of zero. Delivered is the premium-weighted plan-year "
+        "average across every combo in view, which is the book statistic; a state with "
+        "no net combos shows its delivery and a dash for the target.", fnt=F_SMALL_IT)
+    hdr = r + 2
+    heads = ["State", "Adj plan EP", "Net combos", f"Net target {p}",
+             f"Net target {p + 1}", f"{p + 1} target set?",
+             "Avg delivered (as logged)", "Gap to target (pts)",
+             "Plan LR (program basis)", "Program vs asserted (pts)"]
+    header_row(ws, hdr, 1, heads, widths=[8, 12, 10, 11, 11, 11, 13, 12, 12, 12])
+    ws.row_dimensions[hdr].height = 30
+    # anchors so the harness addresses these grids by name rather than by
+    # counting rows — the exhibit can grow without the ties going stale
+    ctx.define("bk_nd_sum", "Net Delivery", f"$A${hdr + 1}",
+               "First state row of the Net Delivery summary")
+
+    for i, st in enumerate(states):
+        rr = hdr + 1 + i
+        band = FILL_PANEL if i % 2 else None
+        put(ws, f"A{rr}", st, fnt=font(NAVY, bold=True), align=ALIGN_C, fill=band,
+            border=BORDER_THIN)
+        st_c = f',{rng("state", n)},$A{rr}'
+        ep = f'SUMIFS({rng("ep", n)}{st_c}{crit(*dims)})'
+        nm = f'SUMIFS({rng("netmode", n)}{st_c}{crit(*dims)})'
+        formula(ws, f"B{rr}", f"={ep}", fmt="#,##0", align=ALIGN_C, fill=band,
+                border=BORDER_THIN)
+        formula(ws, f"C{rr}", f"={nm}", fmt=FMT_INT, align=ALIGN_C, fill=band,
+                border=BORDER_THIN)
+        # the two targets: a simple mean over the combos that assert one
+        for cL, fld in (("D", "netx"), ("E", "netx1")):
+            formula(ws, f"{cL}{rr}",
+                    f'=IF({nm}=0,"—",SUMIFS({rng(fld, n)}{st_c}{crit(*dims)})/{nm})',
+                    fmt=PCT_S, align=ALIGN_C, fill=band, border=BORDER_THIN)
+        formula(ws, f"F{rr}",
+                f'=IF({nm}=0,"—",IF(SUMIFS({rng("netset1", n)}{st_c}{crit(*dims)})={nm},'
+                f'"entered",IF(SUMIFS({rng("netset1", n)}{st_c}{crit(*dims)})=0,'
+                f'"carried","mixed")))', align=ALIGN_C, fill=band, border=BORDER_THIN)
+        # delivered: premium-weighted over the whole plan year, every combo
+        den = "+".join(f'SUMIFS({rng(f"epw_{j}", n)}{st_c}{crit(*dims)})'
+                       for j in range(12))
+        num = "+".join(f'SUMIFS({rng(f"epw_del_{j}", n)}{st_c}{crit(*dims)})'
+                       for j in range(12))
+        formula(ws, f"G{rr}", f'=IF(({den})=0,"—",({num})/({den}))', fmt=PCT_S,
+                align=ALIGN_C, fill=band, border=BORDER_THIN)
+        formula(ws, f"H{rr}",
+                f'=IF(OR({nm}=0,NOT(ISNUMBER($G{rr}))),"—",($G{rr}-$D{rr})*100)',
+                fmt=PTS, align=ALIGN_C, fill=band, border=BORDER_THIN, bold=True)
+        formula(ws, f"I{rr}",
+                f'=IF({nm}=0,"—",IF({ep}=0,"—",'
+                f'SUMIFS({rng("w_prog", n)}{st_c}{crit(*dims)})/{ep}))',
+                fmt=FMT_PCT, align=ALIGN_C, fill=band, border=BORDER_THIN)
+        formula(ws, f"J{rr}",
+                f'=IF({nm}=0,"—",IF({ep}=0,"—",'
+                f'SUMIFS({rng("proggap", n)}{st_c}{crit(*dims)})/{nm}))',
+                fmt=PTS, align=ALIGN_C, fill=band, border=BORDER_THIN)
+
+    tot = hdr + 1 + len(states)
+    put(ws, f"A{tot}", "TOTAL", fnt=font(NAVY, bold=True), align=ALIGN_C,
+        fill=steel_fill())
+    ep_t = f'SUMIFS({rng("ep", n)}{crit(*dims)})'
+    nm_t = f'SUMIFS({rng("netmode", n)}{crit(*dims)})'
+    formula(ws, f"B{tot}", f"={ep_t}", fmt="#,##0", align=ALIGN_C, bold=True,
+            fill=steel_fill())
+    formula(ws, f"C{tot}", f"={nm_t}", fmt=FMT_INT, align=ALIGN_C, bold=True,
+            fill=steel_fill())
+    for cL, fld in (("D", "netx"), ("E", "netx1")):
+        formula(ws, f"{cL}{tot}",
+                f'=IF({nm_t}=0,"—",SUMIFS({rng(fld, n)}{crit(*dims)})/{nm_t})',
+                fmt=PCT_S, align=ALIGN_C, fill=steel_fill())
+    put(ws, f"F{tot}", None, fill=steel_fill())
+    den_t = "+".join(f'SUMIFS({rng(f"epw_{j}", n)}{crit(*dims)})' for j in range(12))
+    num_t = "+".join(f'SUMIFS({rng(f"epw_del_{j}", n)}{crit(*dims)})' for j in range(12))
+    formula(ws, f"G{tot}", f'=IF(({den_t})=0,"—",({num_t})/({den_t}))', fmt=PCT_S,
+            align=ALIGN_C, bold=True, fill=steel_fill())
+    formula(ws, f"H{tot}",
+            f'=IF(OR({nm_t}=0,NOT(ISNUMBER($G{tot}))),"—",($G{tot}-$D{tot})*100)',
+            fmt=PTS, align=ALIGN_C, bold=True, fill=steel_fill())
+    formula(ws, f"I{tot}",
+            f'=IF(OR({nm_t}=0,{ep_t}=0),"—",'
+            f'SUMIFS({rng("w_prog", n)}{crit(*dims)})/{ep_t})',
+            fmt=FMT_PCT, align=ALIGN_C, fill=steel_fill())
+    formula(ws, f"J{tot}",
+            f'=IF({nm_t}=0,"—",SUMIFS({rng("proggap", n)}{crit(*dims)})/{nm_t})',
+            fmt=PTS, align=ALIGN_C, bold=True, fill=steel_fill())
+
+    r = tot + 2
+    formula(ws, f"A{r}",
+            f'=IF({nm_t}=0,"No combo in view asserts a net rate selection — every '
+            f'target column reads as a dash, and the grids below are simply what the '
+            f'logged program delivers.",{nm_t}&" combo(s) in view assert a net target. '
+            f'The delivery shown is the program AS LOGGED: filings the per-line Solver '
+            f'would SUGGEST to close the gap are not injected here, so a gap means work '
+            f'outstanding rather than an error.")')
+    ws[f"A{r}"].font = font(FAIL_RED, size=9, italic=True)
+
+    # ---- the two 24-month grids -------------------------------------------
+    r += 2
+    grids = [("rate", "The rate leg — YoY written rate change on renewals",
+              "epw_rate", "epw_rate1"),
+             ("del", "Delivered net — rate x pricing, what the customer sees",
+              "epw_del", "epw_del1")]
+    starts = []
+    for key, head, fam_p, fam_p1 in grids:
+        section(ws, r, "A", head)
+        put(ws, f"A{r + 1}",
+            f"{p} then {p + 1}, premium-weighted across the lines and business units "
+            f"in view. The following year is CARRYOVER: it is what this year's program "
+            f"keeps delivering as its anniversaries roll through, with no second filing "
+            f"assumed.", fnt=F_SMALL_IT)
+        hd = r + 2
+        put(ws, f"A{hd}", "State", fnt=font("FFFFFF", bold=True), fill=FILL_NAVY,
+            align=ALIGN_C)
+        for yi, yr in enumerate((p, p + 1)):
+            for j in range(12):
+                cell = ws.cell(row=hd, column=2 + yi * 12 + j)
+                cell.value = f'=TEXT(DATE({yr},{j + 1},1),"mmm")&" {yr}"'
+                cell.font = font("FFFFFF", bold=True, size=9)
+                cell.fill = FILL_NAVY if yi == 0 else steel_fill()
+                cell.alignment = ALIGN_C
+        starts.append(hd)
+        for i, st in enumerate(states):
+            rr = hd + 1 + i
+            put(ws, f"A{rr}", st, fnt=font(NAVY, bold=True), align=ALIGN_C)
+            st_c = f',{rng("state", n)},$A{rr}'
+            for yi, fam in enumerate((fam_p, fam_p1)):
+                for j in range(12):
+                    den = f'SUMIFS({rng(f"epw_{j}", n)}{st_c}{crit(*dims)})'
+                    num = f'SUMIFS({rng(f"{fam}_{j}", n)}{st_c}{crit(*dims)})'
+                    cc = ws.cell(row=rr, column=2 + yi * 12 + j)
+                    formula(ws, cc.coordinate, f'=IF({den}=0,"—",{num}/{den})',
+                            fmt=PCT_S, align=ALIGN_C)
+                    cc.font = font(GREY_DARK, size=9)
+        rt = hd + 1 + len(states)
+        formula(ws, f"A{rt}", '=IF(bkf_lob="All","BOOK AVG","LINE AVG")', align=ALIGN_C)
+        ws[f"A{rt}"].font = font(NAVY, bold=True, size=9)
+        for yi, fam in enumerate((fam_p, fam_p1)):
+            for j in range(12):
+                den = f'SUMIFS({rng(f"epw_{j}", n)}{crit(*dims)})'
+                num = f'SUMIFS({rng(f"{fam}_{j}", n)}{crit(*dims)})'
+                cc = ws.cell(row=rt, column=2 + yi * 12 + j)
+                formula(ws, cc.coordinate, f'=IF({den}=0,"—",{num}/{den})', fmt=PCT_S,
+                        align=ALIGN_C)
+                cc.font = font(NAVY, bold=True, size=9)
+        if key == "del":
+            ws.conditional_formatting.add(
+                f"B{hd + 1}:Y{rt - 1}",
+                ColorScaleRule(start_type="min", start_color="D6E8D5",
+                               mid_type="percentile", mid_value=50,
+                               mid_color="FFF2CC", end_type="max", end_color="F4B8B8"))
+        ctx.define(f"bk_nd_{key}", "Net Delivery", f"$B${hd + 1}",
+                   f"First cell of the Net Delivery {key} grid (Jan of the plan year)")
+        r = rt + 3
+
+    # ---- the pricing leg, where it can be stated honestly ------------------
+    section(ws, r, "A", "Required pricing leg — only where the filters resolve to one combo")
+    put(ws, f"A{r + 1}",
+        "(1 + target) / (1 + rate leg) - 1: the schedule-mod movement a month still "
+        "needs to reach its net target. It does NOT aggregate — a ratio of weighted "
+        "means is not the weighted mean of the ratios — so it is shown only on rows "
+        "where the LOB and BU filters leave exactly one combo, and dashed everywhere "
+        "else rather than approximated.", fnt=F_SMALL_IT)
+    hd = r + 2
+    put(ws, f"A{hd}", "State", fnt=font("FFFFFF", bold=True), fill=FILL_NAVY,
+        align=ALIGN_C)
+    for j in range(12):
+        cell = ws.cell(row=hd, column=2 + j)
+        cell.value = f'=TEXT(DATE({p},{j + 1},1),"mmm")&" {p}"'
+        cell.font = font("FFFFFF", bold=True, size=9)
+        cell.fill = FILL_NAVY
+        cell.alignment = ALIGN_C
+    ctx.define("bk_nd_price", "Net Delivery", f"$B${hd + 1}",
+               "First cell of the required-pricing grid (Jan of the plan year)")
+    for i, st in enumerate(states):
+        rr = hd + 1 + i
+        put(ws, f"A{rr}", st, fnt=font(NAVY, bold=True), align=ALIGN_C)
+        st_c = f',{rng("state", n)},$A{rr}'
+        cnt = f'COUNTIFS({rng("key", n)},"?*"{st_c}{crit(*dims)})'
+        nm = f'SUMIFS({rng("netmode", n)}{st_c}{crit(*dims)})'
+        x = f'SUMIFS({rng("netx", n)}{st_c}{crit(*dims)})'
+        for j in range(12):
+            den = f'SUMIFS({rng(f"epw_{j}", n)}{st_c}{crit(*dims)})'
+            num = f'SUMIFS({rng(f"epw_rate_{j}", n)}{st_c}{crit(*dims)})'
+            cc = ws.cell(row=rr, column=2 + j)
+            formula(ws, cc.coordinate,
+                    f'=IF(OR({cnt}<>1,{nm}<>1,{den}=0),"—",'
+                    f"(1+{x})/(1+{num}/{den})-1)", fmt=PCT_S, align=ALIGN_C)
+            cc.font = font(GREY_DARK, size=9)
+    r = hd + 1 + len(states) + 2
+
+    put(ws, f"A{r}",
+        "Sources and the as-of stamp are on Control. These values do not move until "
+        "the book is rebuilt from the line workbooks.", fnt=F_SMALL_IT)
+    set_widths(ws, {"A": 10, **{col(2 + j): 9 for j in range(24)}})
+    presentation_setup(ws, gridlines_off=True, freeze="B6", tab_color=NAVY)
+    print_setup(ws)
+
+
+# ---------------------------------------------------------------------------
 # Checks
 # ---------------------------------------------------------------------------
 
@@ -998,6 +1239,9 @@ def build_readme(ctx: BookCtx, n: int):
                          "with its mix residual."),
             ("Program Flow", "Month-by-month YoY rate, pricing and delivered legs "
                              "across the book."),
+            ("Net Delivery", "Where combos assert a net target: the target, what the "
+                             "logged program delivers against it, and the gap — over "
+                             "two years. Solving a filing stays on the line workbook."),
             (PIVOT, "Build your own view: the whole book as one long table "
                     "(tbl_Pivot), ready for a PivotTable. Recipe below."),
             ("Checks", "Harvest and reconciliation checks — must read ALL CHECKS PASS.")):
@@ -1092,6 +1336,7 @@ def build_book(data) -> Workbook:
     build_portfolio(ctx, n)
     build_rollups(ctx, n)
     build_program_flow(ctx, n)
+    build_net_delivery(ctx, n)
     build_pivot_data(ctx, data.plan_year)
     build_checks(ctx, n)
     build_readme(ctx, n)

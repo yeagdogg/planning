@@ -43,6 +43,18 @@ def _banner_ok(v) -> bool:
                                    or v.startswith("PASS WITH "))
 
 
+def _anchor_row(wb, name: str) -> int:
+    """Row of a single-cell anchor the builder exported.
+
+    Grids are addressed by NAME rather than by counting rows from a caption, so
+    an exhibit can grow a note or a header line without every tie below it
+    quietly starting to check the wrong cells.
+    """
+    import re as _re
+    ref = str(wb.defined_names[name].attr_text)
+    return int(_re.search(r"\$(\d+)$", ref).group(1))
+
+
 def check(desc: str, ok: bool, detail: str = ""):
     global PASS, FAIL
     if ok:
@@ -227,6 +239,82 @@ def phase_bc(path: Path, cfg, do_recalc=True):
           approx(ep_month, ep_all, 1e-6), f"monthly={ep_month} annual={ep_all}")
     check("Pivot Data is an Excel Table (a pivot source that grows with the roster)",
           "tbl_Pivot" in pv.tables, str(list(pv.tables)))
+
+    # ---- D110: Net Delivery -----------------------------------------------
+    # The two 24-month grids are premium-weighted means of harvested legs, and
+    # the P+1 half is the part that could be silently wrong — it publishes rows
+    # of the engine block that nothing read before, so an off-by-twelve would
+    # look entirely plausible. Recompute both years in Python from the harvest.
+    nd = wb["Net Delivery"]
+    sum_r = _anchor_row(wb, "bk_nd_sum")
+    bad = 0
+    for key, leg in (("rate", "rate"), ("del", "delivered")):
+        gr = _anchor_row(wb, f"bk_nd_{key}")
+        for i, st in enumerate(book.states):
+            sub = [r for r in rows if r["state"] == st]
+            for yi, fam in enumerate((leg, leg + "1")):
+                for j in range(12):
+                    den = sum((r["epw"][j] or 0.0) for r in sub)
+                    got = nd.cell(row=gr + i, column=2 + yi * 12 + j).value
+                    if den <= 0:
+                        continue
+                    want = sum((r["epw"][j] or 0.0) * (r[fam][j] or 0.0)
+                               for r in sub) / den
+                    if not approx(got, want, 1e-9):
+                        bad += 1
+    check("Net Delivery: both 24-month grids reproduce an EP x weight recomputation "
+          "over the harvest, for the plan year AND the following year", bad == 0,
+          f"{bad} mismatched cells")
+
+    # The following year must not merely echo the plan year — that is exactly
+    # what an off-by-twelve in the published columns would look like.
+    moved = sum(1 for r in rows for j in range(12)
+                if not approx(r["rate"][j], r["rate1"][j], 1e-12))
+    check("Net Delivery: the following-year legs are their own year, not a copy "
+          "of the plan year", moved > 0,
+          f"{moved} of {len(rows) * 12} combo-months differ")
+
+    # Targets average over the combos that ASSERT one; a combo asserting
+    # nothing is not a target of zero.
+    bad = 0
+    for i, st in enumerate(book.states):
+        sub = [r for r in rows if r["state"] == st]
+        nmode = [r for r in sub if (r["netmode"] or 0) == 1]
+        for cL, fld in (("D", "netx"), ("E", "netx1")):
+            got = nd[f"{cL}{sum_r + i}"].value
+            if not nmode:
+                if got != "—":
+                    bad += 1
+            elif not approx(got, sum(r[fld] for r in nmode) / len(nmode), 1e-9):
+                bad += 1
+    check("Net Delivery: net targets average over the net-mode combos only "
+          "(dashed where none asserts one)", bad == 0, f"{bad} mismatched states")
+
+    # The required pricing leg is shown only where the filters leave ONE combo
+    # that asserts a target — and where it IS shown it must be the definition.
+    price_r = _anchor_row(wb, "bk_nd_price")
+    shown = wrong = 0
+    for i, st in enumerate(book.states):
+        sub = [r for r in rows if r["state"] == st]
+        nmode = [r for r in sub if (r["netmode"] or 0) == 1]
+        single = len(sub) == 1 and len(nmode) == 1
+        for j in range(12):
+            got = nd.cell(row=price_r + i, column=2 + j).value
+            if not single:
+                if got != "—":
+                    wrong += 1
+                continue
+            den = sub[0]["epw"][j] or 0.0
+            if den <= 0:
+                continue
+            rate = sub[0]["rate"][j] or 0.0
+            want = (1.0 + nmode[0]["netx"]) / (1.0 + rate) - 1.0
+            shown += 1
+            if not approx(got, want, 1e-9):
+                wrong += 1
+    check("Net Delivery: the required pricing leg is dashed unless the filters "
+          "resolve to one net-mode combo, and equals (1+x)/(1+rate)-1 where it is "
+          "shown", wrong == 0, f"{wrong} wrong, {shown} shown")
     return wb, book
 
 
