@@ -163,14 +163,16 @@ class ComboInputs:
     covers cohorts written in P+1 (None = carry ``net_sel_p``).
     """
 
-    lr_proj: float  # projected loss ratio from the indication
-    lr_basis: str  # 'current' | 'proposed'
+    # The projected loss ratio is defined to be AT CURRENT RATE LEVEL. Until
+    # v3.8 it could be entered at proposed level and normalized here by a
+    # selected change s; the basis was dropped (D107) because nobody used it,
+    # and an input that is almost never anything but 'current' is a column every
+    # paste has to get right for no benefit. Convert before entry.
+    lr_proj: float  # projected loss ratio from the indication, at current level
     mods: ModInputs
     rate_changes: tuple[RateChange, ...] = ()
-    sel_change: float = 0.0  # selected indication change s (for basis conversion)
     net_trend: float = 0.0  # annual net loss-over-premium trend for P+1
     a_other: float = 1.0  # manual adjustment factor
-    a_other_label: str = ""
     mod_adjustment_enabled: bool = True
     term_months: int = 12
     seasonality: tuple[float, ...] | None = None  # 12 monthly written weights
@@ -254,8 +256,6 @@ def validate_inputs(plan_year: int, combo: ComboInputs) -> list[str]:
     """
     w: list[str] = []
     p = plan_year
-    if combo.lr_basis not in ("current", "proposed"):
-        raise ValueError(f"lr_basis must be 'current' or 'proposed', got {combo.lr_basis!r}")
     if not 1 <= combo.term_months <= 12:
         raise ValueError(f"term_months must be in 1..12, got {combo.term_months}")
     lo, hi = mi_first(month_index(p - 2, 1)), mi_last(month_index(p + 1, 12))
@@ -859,9 +859,14 @@ def crl_indication(changes: Sequence[RateChange]) -> float:
 
 
 def lr_at_current_level(combo: ComboInputs) -> float:
-    """Basis normalization (brief §3.4.1)."""
-    if combo.lr_basis == "proposed":
-        return combo.lr_proj * (1.0 + combo.sel_change)
+    """The projected LR the bridge starts from.
+
+    Identity since v3.8: the input IS at current rate level by definition
+    (D107). Kept as a function, and `EngineResult.lr_current` kept as a field,
+    because a dozen callers and every exhibit name the concept — the basis
+    normalization it used to perform (brief §3.4.1, LR x (1+s) when the input
+    was at proposed level) is what went away, not the concept.
+    """
     return combo.lr_proj
 
 
@@ -2333,11 +2338,9 @@ def lr_flow_by_month(plan_year: int, combo: ComboInputs) -> LrFlowResult:
 
 
 def worked_example() -> tuple[int, ComboInputs]:
-    """Brief §9: P=2027, indication eff 7/1/2026, LR 65% current basis."""
+    """Brief §9: P=2027, indication eff 7/1/2026, LR 65% at current rate level."""
     combo = ComboInputs(
         lr_proj=0.65,
-        lr_basis="current",
-        sel_change=0.0,
         mods=ModInputs(
             m_ind=0.850,
             m0=0.860,

@@ -36,7 +36,7 @@ def _combo(**kw) -> ComboInputs:
         m_ind=0.850, m0=0.860, m0_asof=dt.date(P - 1, 9, 30), m1=0.890,
         m_end_prior=0.870)
     base = dict(
-        lr_proj=0.65, lr_basis="current", mods=mods,
+        lr_proj=0.65, mods=mods,
         rate_changes=(RateChange(dt.date(P - 1, 7, 1), 0.06, "taken", True),))
     base.update(kw)
     return ComboInputs(**base)

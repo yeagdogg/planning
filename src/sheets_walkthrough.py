@@ -89,12 +89,8 @@ def build_walkthrough(ctx: Ctx):
     # off — a hyperlink has no value to verify, so nothing caught it.
     w2 = [
         ("Projected loss ratio", "=nr_LRproj", FMT_PCT, "lr_lrproj",
-         '=IF(nr_Basis="proposed","entered at the PROPOSED level — step 2 converts it '
-         'to current level","already at the current rate level — no conversion needed")'),
-        ("LR basis", "=nr_Basis", None, "lr_basis",
-         "current = today's rates; proposed = includes the indicated change s."),
-        ("Indication selected change (s)", "=nr_SelS", FMT_PCT, "lr_s",
-         "Only used when the basis is 'proposed'."),
+         "The loss pick from the indication, at CURRENT rate level — convert a "
+         "proposed-level pick before entering it."),
         ("Mod assumed in indication (M_ind)", "=nr_MInd", FMT_MOD, "lr_mind",
          "The average schedule mod the indication priced against — the mod benchmark."),
         ("Current avg written mod (M_0)", "=nr_M0", FMT_MOD, "lr_m0",
@@ -113,7 +109,8 @@ def build_walkthrough(ctx: Ctx):
          "Applied once, to the following year only (inherits the Control default when "
          "the tbl_LR cell is blank)."),
         ("Other adjustment (A_other)", "=nr_AOther", FMT_IDX, "lr_aother",
-         '=IF(nr_AOtherLbl="","no manual adjustment","reason: "&nr_AOtherLbl)'),
+         '=IF(nr_AOther=1,"no manual adjustment","a manual factor applied to the '
+         'plan LR — 1.000 means none")'),
         ("Mod adjustment effective?", "=nr_ModAdjEff", None, "lr_modadj",
          "Master toggle (Control) AND the combo's own toggle must both be ON."),
         ("Net rate selection", "=IF(nr_NetMode,nr_NetSelP,0)", FMT_PCT, "lr_netp",
@@ -347,7 +344,7 @@ def build_walkthrough(ctx: Ctx):
     asm0 = r
     asm = [
         ("Projected LR at current rate level", None, "=nr_LRcur",
-         "Step 1's loss pick, basis-normalized."),
+         "Step 1's loss pick."),
         ("x  rate earn-in  A_rate", "=nr_Arate_P", None, ""),
         ("x  mod drift  A_mod", "=nr_Amod_P", None, ""),
         ("x  other  A_other", "=nr_AOther", None, ""),

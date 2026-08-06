@@ -58,13 +58,15 @@ def build_lists(ctx: Ctx):
           "helper machinery in columns M:P (D42).", bold=True)
 
     # ---- static enumerations ----
+    # Each entry pins its OWN letter, so E and H simply stand empty now that the
+    # LR-basis list and its KPI display toggle are gone (D107). Re-lettering to
+    # close the gap would move four surviving lists for cosmetics nobody can
+    # see — this sheet is hidden.
     static_cols = {
         "C": ("lst_status", "Rate change status", ["taken", "planned"]),
         "D": ("lst_yn", "Yes/No flags", ["Y", "N"]),
-        "E": ("lst_basis", "LR basis", ["current", "proposed"]),
         "F": ("lst_onoff", "Toggles", ["ON", "OFF"]),
         "G": ("lst_scenario", "Scenario selector", ["Base", "S1", "S2", "S3", "S4"]),
-        "H": ("lst_basisdisp", "Projected-LR KPI display", ["As input", "Current level"]),
     }
     for letter, (name, desc, values) in static_cols.items():
         label(ws, f"{letter}2", desc, bold=True)
@@ -162,25 +164,70 @@ class LrCol:
     dv: str = ""              # data-validation group tag (see LR_DV)
 
 
+# Four blocks, left to right (D107): WHO the row is and how big it is; what the
+# INDICATION said; where the MODS are going; and the handful of plan-year
+# levers. Premium leads because it is the first thing anyone looks up and the
+# weight behind every aggregate — it used to sit at column N, past six mods.
+#
+# The indication block is mostly CARRY-THROUGH: prospective trends, the expense
+# ratio, ALAE/ULAE, the combined ratio and the two loads are recorded so the
+# workbook holds the whole indication, and no engine formula reads any of them
+# (the D96 contract, now eight columns wider). Target LR is the one they relate
+# to arithmetically — target = (combined - expense) / (ALAE x ULAE) — and the
+# Checks sheet says so ADVISORY, because which convention a line uses is not
+# something this workbook should overrule.
+#
 # The mod block runs CHRONOLOGICALLY — M_prior, M_0 (with its as-of date),
 # M_endPrior, M_1, M_2 — behind M_ind, which leads because it is the
 # indication's assumption rather than a point on the projected path.
 LR_COLS: tuple[LrCol, ...] = (
+    # ---- who, and how big ------------------------------------------------
     LrCol("lr_bu", "BU", "bu", FMT_GEN, 9, "tbl_LR business unit", True, "bu"),
     LrCol("lr_state", "State", "state", FMT_GEN, 8, "tbl_LR state", True, "state"),
+    LrCol("lr_ep", "Adj plan EP (000s)", "ep", FMT_EP, 12,
+          "ADJUSTED plan earned premium (000s) — the weight behind Portfolio "
+          "totals and State Summary aggregates", False, "ep"),
+    # ---- the indication --------------------------------------------------
     LrCol("lr_lrproj", "Projected loss ratio", "lr_proj", FMT_PCT, 11,
-          "Projected loss ratio from the indication", True, "lr"),
-    LrCol("lr_basis", "LR basis", "basis", FMT_GEN, 10,
-          "LR basis: current | proposed", True, "basis"),
-    LrCol("lr_s", "Indication selected chg (s)", "s", FMT_PCT, 12,
-          "Selected/indicated change s (used when basis = proposed)", False, "pct"),
+          "Projected loss ratio from the indication, AT CURRENT RATE LEVEL "
+          "(convert a proposed-level pick before entering it, D107)", True, "lr"),
+    LrCol("lr_premtrend", "Prospective premium trend", "prem_trend", FMT_PCT, 12,
+          "Prospective annual premium trend from the indication. Carry-through: "
+          "no engine formula reads it (D107)", False, "pct"),
+    LrCol("lr_losstrend", "Prospective loss trend", "loss_trend", FMT_PCT, 12,
+          "Prospective annual loss trend from the indication. Carry-through: "
+          "no engine formula reads it (D107)", False, "pct"),
+    LrCol("lr_expense", "Expense ratio", "expense", FMT_PCT, 11,
+          "Expense ratio underlying the target. Carry-through: no engine formula "
+          "reads it, but the target-LR advisory on Checks uses it (D107)",
+          False, "ratio"),
+    LrCol("lr_alae", "ALAE factor", "alae", FMT_IDX, 10,
+          "ALAE load as a factor on losses. Carry-through: no engine formula "
+          "reads it, but the target-LR advisory on Checks uses it (D107)",
+          False, "factor"),
+    LrCol("lr_ulae", "ULAE factor", "ulae", FMT_IDX, 10,
+          "ULAE load as a factor on losses. Carry-through: no engine formula "
+          "reads it, but the target-LR advisory on Checks uses it (D107)",
+          False, "factor"),
+    LrCol("lr_combined", "Combined ratio", "combined", FMT_PCT, 11,
+          "Target combined ratio from the indication. Carry-through: no engine "
+          "formula reads it, but the target-LR advisory on Checks uses it (D107)",
+          False, "ratio"),
     # Reference only, by design (D96): the loss ratio that carries the profit
     # provision. Nothing computes from it — it is the benchmark you read the
     # plan LR against, and the line the loss-ratio charts plot.
     LrCol("lr_target", "Target loss ratio (profit provision)", "target", FMT_PCT, 12,
           "Target loss ratio — the LR that earns the profit provision. Reference "
           "only: no engine formula reads it; the exhibits show the gap and the "
-          "charts plot it", False, "lr"),
+          "charts plot it. Checks compares it to (combined - expense) / "
+          "(ALAE x ULAE) where all four are entered", False, "lr"),
+    LrCol("lr_catload", "Cat load", "cat_load", FMT_PCT, 10,
+          "Catastrophe load carried in the indication. Carry-through: no engine "
+          "formula reads it (D107)", False, "pct"),
+    LrCol("lr_largeload", "Large loss load", "large_load", FMT_PCT, 11,
+          "Large-loss load carried in the indication. Carry-through: no engine "
+          "formula reads it (D107)", False, "pct"),
+    # ---- where the mods are going ----------------------------------------
     LrCol("lr_mind", "Mod assumed in indication (M_ind)", "m_ind", FMT_MOD, 13,
           "M_ind: avg schedule mod assumed in the indication", True, "mod"),
     LrCol("lr_mprior", "Mod ~1 yr before as-of (M_prior, opt)", "m_prior", FMT_MOD, 13,
@@ -197,15 +244,11 @@ LR_COLS: tuple[LrCol, ...] = (
           "M_1: projected avg written mod at 12/31/P", True, "mod"),
     LrCol("lr_m2", "Projected mod, end plan yr+1 (M_2, opt)", "m2", FMT_MOD, 12,
           "M_2: projected avg written mod at 12/31/(P+1); blank = M_1", False, "mod"),
-    LrCol("lr_ep", "Adj plan EP (000s)", "ep", FMT_EP, 12,
-          "ADJUSTED plan earned premium (000s) — the weight behind Portfolio "
-          "totals and State Summary aggregates", False, "ep"),
+    # ---- plan-year levers ------------------------------------------------
     LrCol("lr_trend", "Net trend, plan yr+1 (opt)", "trend", FMT_PCT, 11,
           "Annual net loss-over-premium trend for the P+1 view", False, "pct"),
     LrCol("lr_aother", "Other adj factor (A_other)", "a_other", FMT_IDX, 10,
           "A_other manual adjustment factor", False, "aother"),
-    LrCol("lr_aotherlbl", "Reason for other adj", "a_other_label", FMT_GEN, 18,
-          "Label required when A_other <> 1"),
     LrCol("lr_modadj", "Apply mod adjustment?", "modadj", FMT_GEN, 11,
           "Per-combo mod adjustment toggle (ON/OFF)", True, "onoff"),
     LrCol("lr_netp", "Net rate selection, plan yr (opt)", "netp", FMT_PCT, 12,
@@ -222,8 +265,15 @@ LR_DV: dict[str, dict] = {
     # one — every list downstream then follows automatically (D42).
     "bu": dict(kind="list", blocking=False, formula1="=lst_bu"),
     "state": dict(kind="list", blocking=False, formula1="=lst_state"),
-    "basis": dict(kind="list", formula1="=lst_basis"),
     "onoff": dict(kind="list", formula1="=lst_onoff"),
+    # Ratios are entered as decimal fractions like every other percent here, so
+    # the bound is generous enough for a combined ratio well over 100% while
+    # still catching the classic paste of 65 for 65%.
+    "ratio": dict(kind="decimal", operator="between", formula1="0", formula2="3",
+                  error="Enter a ratio as a decimal fraction (0 to 300%)."),
+    "factor": dict(kind="decimal", operator="between", formula1="0.5", formula2="2",
+                   error="ALAE/ULAE factors are multipliers on losses and must "
+                         "lie in [0.5, 2.0] — 1.05 means a 5% load."),
     "lr": dict(kind="decimal", operator="between", formula1="0", formula2="3",
                error="Loss ratio must be between 0 and 300% (entered as a fraction)."),
     "pct": dict(kind="decimal", operator="between", formula1="-0.5", formula2="1",
@@ -503,8 +553,12 @@ def build_control(ctx: Ctx):
         "Set OFF if the indication's premium trend already reflects schedule mod drift — "
         "otherwise the drift is double-counted.",
         fnt=font(FAIL_RED, size=9, italic=True), align=ALIGN_WRAP)
-    label(ws, "B14", "Projected-LR KPI shows")
-    input_cell(ws, "C14", "As input", required=False)
+    # Row 14 is deliberately EMPTY. It held the "Projected-LR KPI shows"
+    # toggle (D16), which chose between the LR as entered and the LR at current
+    # rate level — two names for the same number since D107 removed the basis.
+    # The trend default stays at C15: the harness and the carry-forward test
+    # both address it literally, and sliding it up to fill a cosmetic gap would
+    # move a cell two files name by address.
     label(ws, "B15", f"Default net trend for CY {p + 1}")
     _td = _carried(ctx, "trend_default")
     input_cell(ws, "C15", 0.0 if _td is None else _td, fmt=FMT_PCT)
@@ -513,7 +567,6 @@ def build_control(ctx: Ctx):
          "combo's tbl_LR trend cell is blank; a per-state entry overrides this default.")
     ctx.define("nr_SeasonOn", "Control", "$C$12", "Global seasonality toggle (ON/OFF)")
     ctx.define("nr_ModAdjMaster", "Control", "$C$13", "Master mod-adjustment toggle (ON/OFF)")
-    ctx.define("nr_BasisDisp", "Control", "$C$14", "Projected-LR KPI display basis")
     ctx.define("nr_TrendDefault", "Control", "$C$15",
                "Default net trend for the P+1 view (per-combo blank cells inherit it)")
 
@@ -526,9 +579,8 @@ def build_control(ctx: Ctx):
     section(ws, 17, "B", "Key results — selected BU x state")
     ok = "nr_SelOK"
     cards = [
-        ('=IF(nr_BasisDisp="As input","Projected LR (as input)","Projected LR (current level)")',
-         f'=IF({ok},IF(nr_BasisDisp="As input",nr_LRproj,nr_LRcur),"—")', FMT_PCT,
-         "from the rate level indication"),
+        ('="Projected loss ratio"', f'=IF({ok},nr_LRproj,"—")', FMT_PCT,
+         "from the indication, at current rate level"),
         (f'="CY "&nr_PlanYear&" plan loss ratio"', f'=IF({ok},nr_CYLR_P,"—")', FMT_PCT,
          "projected LR x rate earn-in x mod drift x other"),
         ('="CY earned rate chg vs indication"', f'=IF({ok},nr_EChgVsInd,"—")',
@@ -665,7 +717,6 @@ def build_control(ctx: Ctx):
     _dv(ws, "list", ["C8"], formula1="=lst_state")
     _dv(ws, "list", ["C9"], formula1="=lst_scenario")
     _dv(ws, "list", ["C12", "C13"], formula1="=lst_onoff")
-    _dv(ws, "list", ["C14"], formula1="=lst_basisdisp")
     _dv(ws, "whole", ["C6"], operator="between", formula1="2000", formula2="2100",
         error="Plan year must be a 4-digit year.")
     _dv(ws, "decimal", ["C15"], operator="between", formula1="-0.5", formula2="1",

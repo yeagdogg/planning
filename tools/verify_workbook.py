@@ -1013,16 +1013,27 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path, legacy: bool = False):
               f"lrf_cov={nval(wb, 'lrf_cov')} bp")
     run("combo mod OFF", {("Inputs", f"{lr_letter('lr_modadj')}{we_row_xl}"): "OFF"}, a2)
 
-    # 3. basis proposed on the worked-example combo
-    prop_m = engine.run_bridge(p, replace(base_combo, lr_basis="proposed", sel_change=0.05),
-                               "monthly")
+    # 3. a different projected loss ratio on the worked-example combo.
+    #
+    # This replaces the "basis proposed" exercise D107 retired. That one moved
+    # the LR the bridge starts from INDIRECTLY, through a basis flag and a
+    # selected change; with the flag gone the direct move is what is left to
+    # test, and nothing else in phase D touches the single most consequential
+    # input. The bridge is linear in it, so the CY answer must scale exactly —
+    # a check the oracle tie alone would pass even if the workbook read the
+    # wrong cell, which is why the ratio is asserted too.
+    newlr = 0.72
+    lr_m = engine.run_bridge(p, replace(base_combo, lr_proj=newlr), "monthly")
 
     def a3(wb):
-        check("[basis proposed] LR_current = LR x (1+s)",
-              approx(nval(wb, "nr_LRcur"), 0.65 * 1.05, 1e-12))
-        check("[basis proposed] CY LR ties oracle", approx(nval(wb, "nr_CYLR_P"),
-              prop_m.cy_lr_p, 1e-9))
-    run("basis proposed", {("Inputs", f"{lr_letter('lr_basis')}{we_row_xl}"): "proposed"}, a3)
+        check("[projected LR moved] the bridge starts from the entered LR",
+              approx(nval(wb, "nr_LRcur"), newlr, 1e-12),
+              f"nr_LRcur={nval(wb, 'nr_LRcur')}")
+        check("[projected LR moved] CY LR ties oracle", approx(nval(wb, "nr_CYLR_P"),
+              lr_m.cy_lr_p, 1e-9))
+        check("[projected LR moved] CY LR scales with it (the bridge is linear)",
+              approx(nval(wb, "nr_CYLR_P") / base_m.cy_lr_p, newlr / 0.65, 1e-9))
+    run("projected LR moved", {("Inputs", f"{lr_letter('lr_lrproj')}{we_row_xl}"): newlr}, a3)
 
     # 4. seasonality ON for a state with a seeded profile
     se_state = season_rows[0]["state"] if season_rows else None
@@ -1070,7 +1081,10 @@ def phase_d(path: Path, cfg, lob, scratch_dir: Path, legacy: bool = False):
             ("net selection", _find(lambda r: r.get("netp") is not None)),
             ("mod actions", _find(lambda r: any(
                 m["bu"] == r["bu"] and m["state"] == r["state"] for m in mod_rows))),
-            ("proposed basis", _find(lambda r: r["basis"] == "proposed")),
+            # (the "proposed basis" pick went with D107; the combo that carried
+            # it is now the one seeded with a deliberately inconsistent
+            # combined ratio, which is an advisory rather than a resolver case)
+            ("explicit trend", _find(lambda r: r["trend"] is not None)),
             ("mod adj OFF", _find(lambda r: r["modadj"] == "OFF")),
     ):
         # the degenerate combo has exercise 6 to itself, with a stronger assertion

@@ -41,6 +41,9 @@ class CarriedInputs:
     sel_state: str | None = None
     source: Path | None = None
     missing: tuple[str, ...] = field(default_factory=tuple)
+    # Things the carry DID to the data, as opposed to columns it could not find.
+    # A rebuild that changes a value has to say which values and why.
+    notes: tuple[str, ...] = field(default_factory=tuple)
 
     def summary(self) -> str:
         return (f"{len(self.lr_rows)} tbl_LR rows, {len(self.rate_rows)} rate-log rows, "
@@ -112,6 +115,7 @@ def read_inputs(path: Path | str) -> CarriedInputs:
 
     try:
         missing = []
+        notes: list[str] = []
 
         def need(name: str) -> list:
             got = _col(wb, name)
@@ -120,17 +124,36 @@ def read_inputs(path: Path | str) -> CarriedInputs:
             return got
 
         # ---- tbl_LR ----------------------------------------------------
+        # Read by DEFINED NAME, never by position, so the D107 reordering (EP
+        # moved to column C, eight indication columns inserted) is invisible
+        # here: lr_ep resolves to wherever lr_ep now lives. What is NOT
+        # invisible is a name that has gone away, or one that did not exist in
+        # the source — hence need(), which records it and lets the caller say
+        # the column will come up blank.
         lr_cols = {
             "bu": "lr_bu", "state": "lr_state", "lr_proj": "lr_lrproj",
-            "basis": "lr_basis", "s": "lr_s", "target": "lr_target",
+            "target": "lr_target",
+            "prem_trend": "lr_premtrend", "loss_trend": "lr_losstrend",
+            "expense": "lr_expense", "alae": "lr_alae", "ulae": "lr_ulae",
+            "combined": "lr_combined", "cat_load": "lr_catload",
+            "large_load": "lr_largeload",
             "m_ind": "lr_mind",
             "m_prior": "lr_mprior", "m0": "lr_m0", "m0_asof": "lr_m0asof",
             "m_end_prior": "lr_mendprior", "m1": "lr_m1", "m2": "lr_m2",
             "ep": "lr_ep", "trend": "lr_trend", "a_other": "lr_aother",
-            "a_other_label": "lr_aotherlbl", "modadj": "lr_modadj",
+            "modadj": "lr_modadj",
             "netp": "lr_netp", "netp1": "lr_netp1",
         }
         data = {k: need(n) for k, n in lr_cols.items()}
+        # A pre-v3.8 source carries its projected LR on a per-combo BASIS, and
+        # a row marked 'proposed' means the number is at PROPOSED rate level —
+        # the workbook normalized it with x(1+s) on the way in. v3.8 defines the
+        # input to be at current level, so carrying such a row across unchanged
+        # would silently reinterpret a real number. Fold it here instead, and
+        # SAY SO: this is the one place a rebuild can change a value.
+        legacy_basis = _col(wb, "lr_basis")
+        legacy_s = _col(wb, "lr_s")
+        folded = 0
         n_lr = max((len(v) for v in data.values()), default=0)
         lr_rows = []
         for i in range(n_lr):
@@ -138,7 +161,20 @@ def read_inputs(path: Path | str) -> CarriedInputs:
             if not (row["bu"] and row["state"]):
                 continue
             row["m0_asof"] = _date(row["m0_asof"])
+            basis = _clean(legacy_basis[i]) if i < len(legacy_basis) else None
+            if (str(basis).strip().lower() == "proposed"
+                    and isinstance(row["lr_proj"], (int, float))):
+                s = _clean(legacy_s[i]) if i < len(legacy_s) else None
+                row["lr_proj"] = row["lr_proj"] * (1.0 + (s if isinstance(
+                    s, (int, float)) else 0.0))
+                folded += 1
             lr_rows.append(row)
+        if folded:
+            notes.append(
+                f"{folded} row(s) carried a 'proposed' LR basis, which v3.8 no longer "
+                f"has: their projected loss ratios were converted to current rate "
+                f"level (x (1 + s)) on the way in — the value the workbook was "
+                f"already computing with.")
 
         # ---- Rate Log --------------------------------------------------
         rl_cols = {"bu": "rl_bu", "state": "rl_state", "eff": "rl_eff",
@@ -199,6 +235,7 @@ def read_inputs(path: Path | str) -> CarriedInputs:
             sel_bu=_clean(_scalar(wb, "nr_SelBU")),
             sel_state=_clean(_scalar(wb, "nr_SelState")),
             source=path, missing=tuple(dict.fromkeys(missing)),
+            notes=tuple(notes),
         )
     finally:
         wb.close()

@@ -39,7 +39,7 @@ def _combo(changes=(), seasonality=None, term=12, **kw) -> ComboInputs:
         "mods",
         ModInputs(m_ind=0.85, m0=0.85, m0_asof=dt.date(2026, 9, 30), m1=0.85),
     )
-    defaults = dict(lr_proj=0.65, lr_basis="current")
+    defaults = dict(lr_proj=0.65)
     defaults.update(kw)
     return ComboInputs(
         mods=mods, rate_changes=tuple(changes), seasonality=seasonality, term_months=term, **defaults
@@ -224,9 +224,12 @@ class TestDegenerate:
         assert res.a_mod_p == 1.0
         assert res.cy_lr_p == pytest.approx(0.65, abs=1e-12)
 
-    def test_basis_proposed(self):
-        res = run_bridge(2027, _combo(lr_basis="proposed", sel_change=0.08))
-        assert res.lr_current == pytest.approx(0.65 * 1.08, abs=1e-12)
+    def test_the_projected_lr_is_taken_at_current_level_as_entered(self):
+        """v3.8 (D107): the basis toggle is gone, so lr_current IS the input.
+        This replaces test_basis_proposed, which proved the x(1+s) conversion."""
+        assert run_bridge(2027, _combo()).lr_current == pytest.approx(0.65, abs=1e-12)
+        assert run_bridge(2027, _combo(lr_proj=0.702)).lr_current == pytest.approx(
+            0.702, abs=1e-12)
 
     def test_net_trend_applies_to_p1_only(self):
         res = run_bridge(2027, _combo(net_trend=0.02))
@@ -344,9 +347,13 @@ class TestValidationAndCrl:
         ]
         assert any("share cohort month" in w for w in validate_inputs(2027, _combo(log)))
 
-    def test_bad_basis_raises(self):
+    def test_bad_term_raises(self):
+        """The other input the engine cannot compute WITH rather than warn about.
+        (The basis check that used to sit beside this went with D107.)"""
         with pytest.raises(ValueError):
-            run_bridge(2027, _combo(lr_basis="nonsense"))
+            run_bridge(2027, _combo(term=0))
+        with pytest.raises(ValueError):
+            run_bridge(2027, _combo(term=13))
 
 
 # ---------------------------------------------------------------------------

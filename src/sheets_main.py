@@ -101,15 +101,16 @@ def build_bridge(ctx: Ctx):
     rows = [
         ("Business unit", "=nr_SelBU", FMT_GEN, None, None, True),
         ("State", "=nr_SelState", FMT_GEN, None, None, True),
-        ("Projected LR (as input)", f"=IF({R}=0,0,N(INDEX(lr_lrproj,{R})))", FMT_PCT,
-         "nr_LRproj", "Projected loss ratio from the indication, as entered", False),
-        ("LR basis", f'=IF({R}=0,"current",INDEX(lr_basis,{R})&"")', FMT_GEN,
-         "nr_Basis", "Basis of the input LR: current | proposed", False),
-        ("Indication selected change (s)", f"=IF({R}=0,0,N(INDEX(lr_s,{R})))", FMT_PCT,
-         "nr_SelS", "Selected/indicated change used for basis normalization", False),
-        ("LR at current rate level",
-         '=IF(nr_Basis="proposed",nr_LRproj*(1+nr_SelS),nr_LRproj)', FMT_PCT,
-         "nr_LRcur", "Basis-normalized projected LR (§3.4.1)", False),
+        ("Projected loss ratio", f"=IF({R}=0,0,N(INDEX(lr_lrproj,{R})))", FMT_PCT,
+         "nr_LRproj", "Projected loss ratio from the indication, at current rate level",
+         False),
+        # nr_LRcur keeps its name and its place in the chain. It used to carry
+        # the basis normalization, LR x (1+s) when the input was at proposed
+        # level; since D107 the input IS at current level, so this is the same
+        # number under the name a dozen exhibits already read.
+        ("LR at current rate level", "=nr_LRproj", FMT_PCT,
+         "nr_LRcur", "The projected LR the bridge starts from (the basis toggle "
+         "was removed in v3.8 — convert before entry)", False),
         ("Mod assumed in indication (M_ind)",
          f"=IF({R}=0,1,IF(N(INDEX(lr_mind,{R}))=0,1,INDEX(lr_mind,{R})))", FMT_MOD,
          "nr_MInd", "Average schedule mod assumed in the indication", False),
@@ -140,9 +141,7 @@ def build_bridge(ctx: Ctx):
          False),
         ("Other adjustment factor (A_other)",
          f"=IF({R}=0,1,IF(N(INDEX(lr_aother,{R}))=0,1,INDEX(lr_aother,{R})))", FMT_IDX,
-         "nr_AOther", "Manual adjustment factor (label required when <> 1)", False),
-        ("Reason for other adjustment", f'=IF({R}=0,"",INDEX(lr_aotherlbl,{R})&"")', FMT_GEN,
-         "nr_AOtherLbl", "Reason for A_other", False),
+         "nr_AOther", "Manual adjustment factor", False),
         ("Mod adjustment (combo row)",
          f'=IF({R}=0,"ON",IF(INDEX(lr_modadj,{R})="OFF","OFF","ON"))', FMT_GEN,
          "nr_ModAdjRow", "Per-combo mod adjustment toggle from tbl_LR", False),
@@ -195,8 +194,6 @@ def build_bridge(ctx: Ctx):
         "nr_MPrior": '=IF(N($C{r})=0,"blank -> backward anchor sits on the '
                      'M_0 -> M_1 line","")',
         "nr_M2": '=IF(N($C{r})=0,"blank -> M_1 carried flat beyond the plan year","")',
-        "nr_AOther": '=IF(AND(nr_AOther<>1,nr_AOtherLbl=""),'
-                     '"WARNING: A_other <> 1 requires a label","")',
         "nr_NetMode": '=IF($C{r},"NET SELECTION ACTIVE — supersedes planned rows '
                       'from 1/1","explicit rate program")',
     }
@@ -233,10 +230,12 @@ def build_bridge(ctx: Ctx):
                   (8, '="Step ("&(nr_PlanYear+1)&")"')):
         ws.cell(row=L.BR_WF_HDR, column=cc).value = f
     wf = L.BR_WF_FIRST
+    # Five steps since D107, not six: the basis conversion x(1+s) was the second
+    # and is gone with the basis itself. `tot` and the chart below both size
+    # themselves off len(steps) so neither can be left describing six.
     steps = [
-        ("Projected LR (as input)", None, "=nr_LRproj", None, "=nr_LRproj"),
-        ("Convert to current rate level x(1+s)", '=IF(nr_Basis="proposed",1+nr_SelS,1)', None,
-         '=IF(nr_Basis="proposed",1+nr_SelS,1)', None),
+        ("Projected loss ratio (at current rate level)", None, "=nr_LRproj", None,
+         "=nr_LRproj"),
         ('="Net trend (applies to "&(nr_PlanYear+1)&" only)"', "=1", None, "=1+nr_Trend", None),
         ('=IF(nr_NetMode,"Rate + price earn-in (net)  A_net","Rate earn-in  A_rate")',
          "=nr_Arate_P", None, "=nr_Arate_P1", None),
@@ -261,7 +260,7 @@ def build_bridge(ctx: Ctx):
         else:
             formula(ws, f"D{rr}", lr_p, fmt=FMT_PCT, align=ALIGN_C)
             formula(ws, f"G{rr}", lr_p1, fmt=FMT_PCT, align=ALIGN_C)
-    tot = wf + 6
+    tot = wf + len(steps)
     put(ws, f"B{tot}", f"CY plan loss ratio", fnt=font(NAVY, bold=True), fill=FILL_PANEL)
     formula(ws, f"D{tot}", f"=$D{tot - 1}", fmt=FMT_PCT, align=ALIGN_C, bold=True,
             fill=FILL_PANEL)
@@ -352,13 +351,16 @@ def build_bridge(ctx: Ctx):
     # ---- waterfall chart data + chart (staging grouped-hidden below) ----
     cd = L.BR_CHART_DATA
     put(ws, f"B{cd - 1}", "Waterfall chart data (formulas — do not edit)", fnt=F_SMALL_IT)
+    # Each non-total bar spans the LR before and after one waterfall step. The
+    # net-trend row is skipped, not missing: its plan-year factor is 1, so it
+    # would draw a zero-height bar. Since D107 dropped the basis step every span
+    # here sits one row earlier than it used to.
     cats = [("Projected LR", f"$D${wf}", None, True),
-            ("Basis", f"$D${wf}", f"$D${wf + 1}", False),
             ('=IF(nr_NetMode,"Net earn-in","Rate earn-in")',
-             f"$D${wf + 2}", f"$D${wf + 3}", False),
+             f"$D${wf + 1}", f"$D${wf + 2}", False),
             ('=IF(nr_NetMode,"Mod (in net)","Mod drift")',
-             f"$D${wf + 3}", f"$D${wf + 4}", False),
-            ("Other", f"$D${wf + 4}", f"$D${wf + 5}", False),
+             f"$D${wf + 2}", f"$D${wf + 3}", False),
+            ("Other", f"$D${wf + 3}", f"$D${wf + 4}", False),
             ('="CY "&nr_PlanYear&" plan LR"', f"$D${tot}", None, True)]
     for j, h in enumerate(["Step", "base", "up", "down", "total"]):
         put(ws, f"{col(2 + j)}{cd}", h, fnt=font(GREY_DARK, size=9))
@@ -389,8 +391,10 @@ def build_bridge(ctx: Ctx):
     chart.grouping = "stacked"
     chart.overlap = 100
     chart.gapWidth = 60
-    data = Reference(ws, min_col=3, min_row=cd, max_col=6, max_row=cd + 6)
-    cats_ref = Reference(ws, min_col=2, min_row=cd + 1, max_row=cd + 6)
+    # sized off the list, so a step added or removed cannot leave the chart
+    # reading a blank row — or missing a real one
+    data = Reference(ws, min_col=3, min_row=cd, max_col=6, max_row=cd + len(cats))
+    cats_ref = Reference(ws, min_col=2, min_row=cd + 1, max_row=cd + len(cats))
     chart.add_data(data, titles_from_data=True)
     chart.set_categories(cats_ref)
     chart.series[0].graphicalProperties.noFill = True
@@ -405,7 +409,7 @@ def build_bridge(ctx: Ctx):
                  y_title="Loss ratio", height=9, width=15)
     ws.add_chart(chart, "J5")
 
-    for rr in range(cd - 1, cd + 7):
+    for rr in range(cd - 1, cd + len(cats) + 1):
         ws.row_dimensions[rr].outlineLevel = 1
         ws.row_dimensions[rr].hidden = True
 
@@ -426,14 +430,21 @@ def build_portfolio(ctx: Ctx):
           "Computed simultaneously from the hidden _calc engine blocks (rows align 1:1 with tbl_LR). "
           "Heatmap: green = favorable vs projected.")
     nav_bar(ws, 3, 1, ["Control", "Inputs", "State Summary", "Bridge", "Checks"], step=2)
+    # D/E/F carried "Projected LR (as input) | Basis | Projected LR (current
+    # level)" until D107. With the basis gone the first and third are the same
+    # number, so the pair collapses to one projected LR and the freed column
+    # shows the target and the gap to it — the comparison a reader of this grid
+    # was making by eye against the State Summary. The COLUMN COUNT is unchanged
+    # on purpose: ~25 formulas below, two harness probes and the auto-filter all
+    # name letters from G rightward, and none of them move.
     header_row(ws, L.PF_HDR, 1,
-               ["BU", "State", "Key", "Projected LR (as input)", "Basis",
-                "Projected LR (current level)", "Plan LR",
+               ["BU", "State", "Key", "Projected loss ratio", "Target LR",
+                "Plan LR vs target (pts)", "Plan LR",
                 "Chg vs projected (pts)", "Rate earn-in (A_rate)", "Mod drift (A_mod)",
                 "Earned rate chg vs indication", "Carryover", "Plan LR +1",
                 "Adj plan EP (000s)", "EP weight",
                 "Plan LR — program basis", "Program vs asserted (pts)"],
-               widths=[9, 8, 4, 11, 10, 11, 11, 11, 10, 10, 13, 12, 11, 12, 8, 11, 12])
+               widths=[9, 8, 4, 11, 10, 12, 11, 11, 10, 10, 13, 12, 11, 12, 8, 11, 12])
     ws.row_dimensions[L.PF_HDR].height = 42
     # live year labels (D44)
     ws.cell(row=L.PF_HDR, column=7).value = '="CY "&nr_PlanYear&" plan LR"'
@@ -450,11 +461,17 @@ def build_portfolio(ctx: Ctx):
         # ignore text, so blank capacity rows can't distort the heatmap, and
         # the total rows below use SUM / comma-form SUMPRODUCT, which both
         # treat text as zero.
-        link(ws, f"D{r}", f'=IF($C{r}="","",N(INDEX(lr_lrproj,{n})))',
+        link(ws, f"D{r}", f'=IF($C{r}="","",INDEX(calc_lrcur,{n}))',
              fmt=FMT_PCT_Z, align=ALIGN_C)
-        link(ws, f"E{r}", f'=IF($C{r}="","",INDEX(lr_basis,{n})&"")', align=ALIGN_C)
-        link(ws, f"F{r}", f'=IF($C{r}="","",INDEX(calc_lrcur,{n}))',
-             fmt=FMT_PCT_Z, align=ALIGN_C)
+        # Target is optional (D96), so a row without one shows a dash rather
+        # than the 0% that N() would produce — and no gap, because there is
+        # nothing to be short of.
+        link(ws, f"E{r}", f'=IF($C{r}="","",IF(N(INDEX(lr_target,{n}))=0,"—",'
+                          f"INDEX(lr_target,{n})))", fmt=FMT_PCT_Z, align=ALIGN_C)
+        formula(ws, f"F{r}",
+                f'=IF($C{r}="","",IF(N(INDEX(lr_target,{n}))=0,"—",'
+                f"(INDEX(calc_cylr_p,{n})-INDEX(lr_target,{n}))*100))",
+                fmt=FMT_PTS_COL, align=ALIGN_C)
         link(ws, f"G{r}", f'=IF($C{r}="","",INDEX(calc_cylr_p,{n}))',
              fmt=FMT_PCT_Z, align=ALIGN_C, bold=True)
         link(ws, f"H{r}",
@@ -490,7 +507,12 @@ def build_portfolio(ctx: Ctx):
     put(ws, f"B{sr}", "Simple average", fnt=font(GREY_DARK, bold=True))
     epsum = f"SUM($N${f0}:$N${f1})"
     cnt = f'SUMPRODUCT(($C${f0}:$C${f1}<>"")*1)'
-    for cL, fmt in (("F", FMT_PCT), ("G", FMT_PCT), ("K", PCT_SIGNED_Z), ("L", PCT_SIGNED_Z),
+    # D carries the projected LR now (it was F until D107). Target and the gap
+    # to it get NO total: both are optional per row, so an EP-weighted average
+    # over ALL premium would quietly count a combo with no target as a target of
+    # zero. Averaging them correctly needs a denominator of the premium that HAS
+    # one, which is not a number this grid publishes.
+    for cL, fmt in (("D", FMT_PCT), ("G", FMT_PCT), ("K", PCT_SIGNED_Z), ("L", PCT_SIGNED_Z),
                     ("M", FMT_PCT)):
         formula(ws, f"{cL}{wr}",
                 f'=IF({epsum}=0,"n/a",SUMPRODUCT({cL}${f0}:{cL}${f1},$N${f0}:$N${f1})/{epsum})',
@@ -498,7 +520,7 @@ def build_portfolio(ctx: Ctx):
         formula(ws, f"{cL}{sr}",
                 f'=IF({cnt}=0,"n/a",SUM({cL}${f0}:{cL}${f1})/{cnt})',
                 fmt=fmt, align=ALIGN_C)
-    formula(ws, f"H{wr}", f'=IF(ISNUMBER($G${wr}),($G${wr}-$F${wr})*100,"")', fmt=PTS_Z,
+    formula(ws, f"H{wr}", f'=IF(ISNUMBER($G${wr}),($G${wr}-$D${wr})*100,"")', fmt=PTS_Z,
             align=ALIGN_C, fill=FILL_PANEL)
     formula(ws, f"N{wr}", f"={epsum}", fmt=FMT_EP_Z, align=ALIGN_C, fill=FILL_PANEL)
     note(ws, f"B{sr + 2}",

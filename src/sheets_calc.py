@@ -247,9 +247,10 @@ def build_calc(ctx: Ctx):
                f"=IF($L${t},1,IF({mod_adj_on(n)},$F${t}/$G{r},1))", FMT_IDX)
         f_grey(ws, f"L{r}",
                f"=IF($L${t},1,IF({mod_adj_on(n)},$F${t}/$H{r},1))", FMT_IDX)
-        f_grey(ws, f"M{r}",
-               f'=IF(INDEX(lr_basis,{n})="proposed",N(INDEX(lr_lrproj,{n}))*(1+N(INDEX(lr_s,{n}))),'
-               f"N(INDEX(lr_lrproj,{n})))", "0.0%")
+        # The projected LR IS at current rate level (D107): the basis toggle and
+        # its x(1+s) conversion are gone. calc_lrcur keeps its name — a dozen
+        # exhibits read it and the concept did not change, only the arithmetic.
+        f_grey(ws, f"M{r}", f"=N(INDEX(lr_lrproj,{n}))", "0.0%")
         f_grey(ws, f"R{r}", f"=IF(N(INDEX(lr_aother,{n}))=0,1,INDEX(lr_aother,{n}))", FMT_IDX)
         # effective trend: blank tbl_LR cell inherits the Control default (D38)
         f_grey(ws, f"S{r}",

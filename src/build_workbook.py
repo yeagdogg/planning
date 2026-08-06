@@ -37,7 +37,7 @@ from . import engine
 from .engine import ComboInputs, ModInputs, RateChange
 from .xlstyle import quote_sheet
 
-GENERATOR_VERSION = "3.7.2"
+GENERATOR_VERSION = "3.8.0"
 
 # Leads every seeded Mod Log comment so the Checks tripwire can spot a sample
 # action left in a real book (D80). Kept short and unmistakable — a real
@@ -241,15 +241,27 @@ def load_config(path: str | Path) -> Config:
 # the §9 worked example (asserted in build()).
 # ---------------------------------------------------------------------------
 
+# ptrend/ltrend/exp/alae/ulae/cat/lll seed the D107 carry-through block. The
+# shapes are the ones these lines usually have — property carries the cat load,
+# umbrella the ALAE and the large-loss load, comp the lowest expense ratio —
+# so a reader skimming sample data sees something plausible rather than a
+# constant repeated six times. Nothing computes from any of them.
 LOB_BASE = {
-    "Property": dict(lr=0.65, mind=0.850, ep=45),
-    "General Liability": dict(lr=0.62, mind=0.950, ep=35),
-    "Commercial Auto": dict(lr=0.68, mind=1.000, ep=40),
-    "Workers Comp": dict(lr=0.60, mind=0.900, ep=30),
-    "Umbrella": dict(lr=0.55, mind=1.000, ep=12),
-    "Inland Marine": dict(lr=0.58, mind=0.920, ep=8),
+    "Property": dict(lr=0.65, mind=0.850, ep=45, ptrend=0.030, ltrend=0.050,
+                     exp=0.320, alae=1.05, ulae=1.03, cat=0.060, lll=0.030),
+    "General Liability": dict(lr=0.62, mind=0.950, ep=35, ptrend=0.025, ltrend=0.045,
+                              exp=0.300, alae=1.12, ulae=1.04, cat=0.010, lll=0.050),
+    "Commercial Auto": dict(lr=0.68, mind=1.000, ep=40, ptrend=0.040, ltrend=0.060,
+                            exp=0.280, alae=1.08, ulae=1.03, cat=0.010, lll=0.040),
+    "Workers Comp": dict(lr=0.60, mind=0.900, ep=30, ptrend=0.020, ltrend=0.035,
+                         exp=0.260, alae=1.10, ulae=1.05, cat=0.005, lll=0.040),
+    "Umbrella": dict(lr=0.55, mind=1.000, ep=12, ptrend=0.030, ltrend=0.060,
+                     exp=0.270, alae=1.15, ulae=1.02, cat=0.020, lll=0.080),
+    "Inland Marine": dict(lr=0.58, mind=0.920, ep=8, ptrend=0.025, ltrend=0.040,
+                          exp=0.330, alae=1.04, ulae=1.02, cat=0.040, lll=0.020),
 }
-_DEFAULT_BASE = dict(lr=0.63, mind=0.950, ep=25)
+_DEFAULT_BASE = dict(lr=0.63, mind=0.950, ep=25, ptrend=0.030, ltrend=0.050,
+                     exp=0.300, alae=1.08, ulae=1.03, cat=0.020, lll=0.030)
 
 
 def _bu(cfg: Config, i: int) -> str:
@@ -278,31 +290,44 @@ def sample_lr_rows(cfg: Config, lob: LobCfg) -> list[dict]:
         m_ind = base["mind"]
         m0 = _clamp_mod(m_ind + ((i * 5) % 5 - 2) * 0.005)
         m1 = _clamp_mod(m0 + ((i * 3) % 7 - 2) * 0.005)
+        # reference-only benchmark (D96); varied a little so the exhibits
+        # show combos on both sides of their target
+        target = round(0.615 + ((i * 7) % 5) * 0.01, 3)
+        alae, ulae = base["alae"], base["ulae"]     # flat per LOB, like m_ind
+        expense = round(base["exp"] + ((i * 2) % 5 - 2) * 0.005, 4)
         row = dict(
-            bu=bu, state=state, lr_proj=lr, basis="current", s=0.05,
+            bu=bu, state=state, lr_proj=lr,
             m_ind=m_ind, m0=m0, m0_asof=asof, m1=m1, m_prior=None, m2=None,
             m_end_prior=_clamp_mod((m0 + m1) / 2.0),   # D70 educated guess
             ep=base["ep"] * (8 + (i * 13) % 17) * 100,  # ADJUSTED plan EP in 000s
             trend=None,  # blank inherits the Control default trend (D38)
-            a_other=1.0, a_other_label="", modadj="ON",
-            # reference-only benchmark (D96); varied a little so the exhibits
-            # show combos on both sides of their target
-            target=round(0.615 + ((i * 7) % 5) * 0.01, 3),
+            a_other=1.0, modadj="ON",
+            target=target,
+            # D107 carry-through. `combined` is DERIVED from the target rather
+            # than picked, so the Checks advisory holds exactly on sample data
+            # and a WARN there always means real data, never seeding drift.
+            prem_trend=round(base["ptrend"] + ((i * 3) % 5 - 2) * 0.002, 4),
+            loss_trend=round(base["ltrend"] + ((i * 5) % 7 - 3) * 0.002, 4),
+            expense=expense, alae=alae, ulae=ulae,
+            combined=round(target * alae * ulae + expense, 6),
+            cat_load=round(base["cat"] + ((i * 7) % 3) * 0.005, 4),
+            large_load=round(base["lll"] + ((i * 4) % 3) * 0.005, 4),
             netp=None, netp1=None,  # blank = explicit rate program (D39)
         )
         # showcase combos (state indices are positions in the configured list)
         if bu == _bu(cfg, 0) and state == st[0]:
-            row.update(lr_proj=0.65, s=0.05, m_ind=0.850, m0=0.860, m1=0.890)  # §9
+            row.update(lr_proj=0.65, m_ind=0.850, m0=0.860, m1=0.890)  # §9
         elif bu == _bu(cfg, 1) and len(st) > 1 and state == st[1]:
-            row.update(basis="proposed", s=0.08, trend=0.01)  # explicit trend override demo
+            # explicit trend override demo, and the ONE deliberate advisory
+            # WARN in the sample book: a combined ratio 2 pts off the one its
+            # target implies, so the D107 check is visibly capable of firing.
+            row.update(trend=0.01, combined=round(row["combined"] + 0.02, 6))
         elif bu == _bu(cfg, 1) and len(st) > 2 and state == st[2]:
-            row.update(a_other=1.02, a_other_label="Commission timing")
+            row.update(a_other=1.02)
         elif bu == _bu(cfg, 0) and len(st) > 3 and state == st[3]:
             row.update(modadj="OFF", m0=m_ind, m1=m_ind)
         elif bu == _bu(cfg, 0) and len(st) > 5 and state == st[5]:
             row.update(m_prior=_clamp_mod(m0 - 0.010), m2=_clamp_mod(m1 + 0.005))
-        elif bu == _bu(cfg, 2) and len(st) > 6 and state == st[6]:
-            row.update(s=0.065)  # matches the seed-pattern rate-log row (D36)
         elif bu == _bu(cfg, 2) and len(st) > 8 and state == st[8]:
             # net-rate-selection showcase (D39): +10% taken 10/1/(P-1) in the
             # log, product targets +10% NET from 1/1/P — specifics TBD
@@ -470,8 +495,6 @@ def sample_to_combo(
     return ComboInputs(
         mod_changes=mod_changes,
         lr_proj=lr_row["lr_proj"],
-        lr_basis=lr_row["basis"],
-        sel_change=lr_row["s"],
         mods=ModInputs(
             m_ind=lr_row["m_ind"], m0=lr_row["m0"], m0_asof=lr_row["m0_asof"],
             m1=lr_row["m1"], m_prior=lr_row["m_prior"], m2=lr_row["m2"],
@@ -480,7 +503,6 @@ def sample_to_combo(
         rate_changes=changes,
         net_trend=trend_default if lr_row["trend"] is None else lr_row["trend"],
         a_other=lr_row["a_other"],
-        a_other_label=lr_row["a_other_label"],
         # D81: ON-default, matching the workbook's single mod_adj_on() test and
         # ComboInputs' own default — a blank or misspelled token no longer means
         # OFF here and ON on the Bridge.
@@ -877,6 +899,8 @@ def main(argv=None) -> int:
                 if carried.missing:
                     print(f"  {name}: NOTE source lacks {', '.join(carried.missing)} "
                           "(older generator?) — those columns come up blank")
+                for n_ in carried.notes:
+                    print(f"  {name}: NOTE {n_}")
                 print(f"  {name}: carrying forward {carried.summary()} from {src.name}")
 
         # The guard, and the reason this whole feature exists: a rebuild used to

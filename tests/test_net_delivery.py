@@ -35,7 +35,7 @@ P = 2027
 def _combo(changes=(), net=0.10, mods=None, **kw) -> ComboInputs:
     mods = mods or ModInputs(m_ind=0.85, m0=0.86, m0_asof=dt.date(P - 1, 9, 30), m1=0.89)
     return ComboInputs(
-        lr_proj=0.65, lr_basis="current", mods=mods,
+        lr_proj=0.65, mods=mods,
         rate_changes=tuple(changes), net_sel_p=net, **kw,
     )
 

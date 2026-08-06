@@ -15,7 +15,7 @@ import pytest
 
 from src.build_workbook import build, load_config, output_path
 from src.carry import CarryError, holds_sample_data, read_inputs
-from src.sheets_inputs import LR_COLS
+from src.sheets_inputs import LR_COLS, lr_letter
 
 
 @pytest.fixture(scope="module")
@@ -73,9 +73,10 @@ def test_one_edited_cell_makes_it_real_data(tmp_path, cfg, seeded):
     p.write_bytes(seeded.read_bytes())
     wb = openpyxl.load_workbook(p)
     ws = wb["Inputs"]
+    lrp = lr_letter("lr_lrproj")                # NOT a literal: D107 moved it
     for r in range(1, 40):                      # first populated tbl_LR row
-        if ws[f"A{r}"].value and isinstance(ws[f"C{r}"].value, float):
-            ws[f"C{r}"] = 0.7777
+        if ws[f"A{r}"].value and isinstance(ws[f"{lrp}{r}"].value, float):
+            ws[f"{lrp}{r}"] = 0.7777
             break
     wb.save(p)
     wb.close()
@@ -103,9 +104,10 @@ def test_round_trip_preserves_edits(tmp_path, cfg, seeded):
     wb = openpyxl.load_workbook(p)
     ws = wb["Inputs"]
     edited_key = None
+    lrp = lr_letter("lr_lrproj")                # NOT a literal: D107 moved it
     for r in range(1, 40):
-        if ws[f"A{r}"].value and isinstance(ws[f"C{r}"].value, float):
-            ws[f"C{r}"] = 0.7777
+        if ws[f"A{r}"].value and isinstance(ws[f"{lrp}{r}"].value, float):
+            ws[f"{lrp}{r}"] = 0.7777
             edited_key = f"{ws[f'A{r}'].value}|{ws[f'B{r}'].value}"
             break
     rl = wb["Rate Log"]

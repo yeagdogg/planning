@@ -456,7 +456,6 @@ def build_oracle_sheet(ctx: Ctx):
         ("Plan year", p, "=nr_PlanYear", 1e-9),
         ("Selected key", key, "=nr_SelKey", None),
         ("Projected LR", we["lr_proj"], "=nr_LRproj", 1e-9),
-        ("LR basis", we["basis"], "=nr_Basis", None),
         ("M_ind", we["m_ind"], "=nr_MInd", 1e-9),
         ("M_0", we["m0"], "=nr_M0", 1e-9),
         ("M_0 as-of (serial)", _excel_serial(we["m0_asof"]), "=nr_M0Asof", 0.5),
@@ -587,12 +586,17 @@ def build_checks(ctx: Ctx):
        '+COUNTIF(lr_m2,">1.5")+COUNTIF(lr_m2,"<0.5")', 0, "FAIL"))
     A(("Input sanity", "Every effective change keeps 1 + r > 0", "=0",
        '=COUNTIF(rl_reff,"<=-1")', 0, "FAIL"))
+    # ISNUMBER, not N. N() does NOT broadcast over a range inside SUMPRODUCT —
+    # it collapses to the FIRST cell, so this row spent five versions testing
+    # tbl_LR row 1 and nothing else (and reported the whole row COUNT when that
+    # one row was bad). Proven by planting a violation in row 8: the check
+    # returned 0. IS-functions do broadcast, which is why the paste-hygiene
+    # rows below have always worked. (D107)
     A(("Input sanity", "M_0 as-of dates precede 12/31 of the plan year", "=0",
-       "=SUMPRODUCT((lr_key<>\"\")*(N(lr_m0asof)>=DATE(nr_PlanYear,12,31))*1)", 0, "FAIL"))
+       '=SUMPRODUCT((lr_key<>"")*ISNUMBER(lr_m0asof)'
+       "*(lr_m0asof>=DATE(nr_PlanYear,12,31))*1)", 0, "FAIL"))
     A(("Input sanity", "Rate-log status is taken/planned on every populated row", "=0",
        '=SUMPRODUCT((rl_key<>"")*(rl_status<>"taken")*(rl_status<>"planned")*1)', 0, "FAIL"))
-    A(("Input sanity", "LR basis is current/proposed (blank treated as current)", "=0",
-       '=SUMPRODUCT((lr_basis<>"current")*(lr_basis<>"proposed")*(lr_basis<>"")*1)', 0, "FAIL"))
     A(("Input sanity", "Plan EP is non-negative", "=0", '=COUNTIF(lr_ep,"<0")', 0, "FAIL"))
     A(("Input sanity", "Net rate selections within [-50%, +100%]", "=0",
        '=COUNTIF(lr_netp,">1")+COUNTIF(lr_netp,"<-0.5")'
@@ -604,10 +608,8 @@ def build_checks(ctx: Ctx):
     A(("Advisory", "Rate-change dates within the Jan (P-2) .. Dec (P+1) engine window", "=0",
        '=COUNTIF(rl_eff,"<"&DATE(nr_PlanYear-2,1,1))+COUNTIF(rl_eff,">"&DATE(nr_PlanYear+1,12,31))',
        0, "WARN"))
-    A(("Advisory", "A_other <> 1 carries a label", "=0",
-       '=SUMPRODUCT((lr_key<>"")*(lr_aother<>"")*(lr_aother<>1)*(lr_aotherlbl="")*1)', 0, "WARN"))
     A(("Advisory", "Populated seasonality rows have a positive weight sum", "=0",
-       '=SUMPRODUCT((se_state<>"")*(N(se_sum)=0)*1)', 0, "WARN"))
+       '=SUMPRODUCT((se_state<>"")*(se_sum=0)*1)', 0, "WARN"))   # N() collapses, D107
     A(("Advisory", "Considered? column is Y/N (blank counts as N)", "=0",
        '=SUMPRODUCT((rl_key<>"")*(rl_cons<>"Y")*(rl_cons<>"N")*(rl_cons<>"")*1)', 0, "WARN"))
     # D80: escalated from advisory. A duplicated roster row is not a style
@@ -703,7 +705,9 @@ def build_checks(ctx: Ctx):
         return "=" + "+".join(f"SUMPRODUCT(ISTEXT({n})*1)" for n in names)
 
     A(("Input sanity", "Inputs numerics are numbers, not text (paste hygiene)", "=0",
-       _istext("lr_lrproj", "lr_s", "lr_mind", "lr_mprior", "lr_m0", "lr_m0asof",
+       _istext("lr_lrproj", "lr_premtrend", "lr_losstrend", "lr_expense", "lr_alae",
+               "lr_ulae", "lr_combined", "lr_target", "lr_catload", "lr_largeload",
+               "lr_mind", "lr_mprior", "lr_m0", "lr_m0asof",
                "lr_mendprior", "lr_m1", "lr_m2", "lr_ep", "lr_trend", "lr_aother",
                "lr_netp", "lr_netp1"), 0, "FAIL"))
     A(("Input sanity", "Rate Log numerics are numbers, not text (paste hygiene)", "=0",
@@ -716,8 +720,6 @@ def build_checks(ctx: Ctx):
     # still looks plausible.
     A(("Input sanity", "Projected loss ratio within (0%, 300%] on every populated row",
        "=0", '=SUMPRODUCT((lr_key<>"")*((lr_lrproj<=0)+(lr_lrproj>3))*1)', 0, "FAIL"))
-    A(("Input sanity", "Indication selected change (s) within [-50%, +100%]", "=0",
-       '=SUMPRODUCT((lr_s<>"")*((lr_s<-0.5)+(lr_s>1))*1)', 0, "FAIL"))
     A(("Input sanity", "Net trend within [-50%, +100%]", "=0",
        '=SUMPRODUCT((lr_trend<>"")*((lr_trend<-0.5)+(lr_trend>1))*1)', 0, "FAIL"))
     A(("Input sanity", "A_other within [0.5, 2.0] where entered", "=0",
@@ -804,6 +806,29 @@ def build_checks(ctx: Ctx):
        "25 bp — a short term with lumpy writings moves the exposure centre of gravity "
        "off 7/1 (see the tilt line on that tab)", "=0",
        "=IF(ABS(lrf_resid_p)>25,1,0)", 0, "WARN"))
+    # ---- appended v3.8: the indication block hangs together (D107) ----------
+    # The eight carry-through columns are reference only, but one relationship
+    # among them is arithmetic: target = (combined - expense) / (ALAE x ULAE).
+    # ADVISORY, not FAIL — which loads a line puts inside the combined ratio and
+    # which it carries separately is a convention this workbook does not get to
+    # overrule. It fires only where all four components AND the target are
+    # entered, so a book that fills in none of them says nothing.
+    #
+    # Multiplied through rather than divided: dividing by a blank factor is a
+    # #DIV/0! on a row that simply has not been filled in yet. The tolerance
+    # rides along with the multiplier so it stays 0.5 pts ON THE TARGET.
+    #
+    # ISNUMBER rather than <>"" for the same reason as the as-of row above: it
+    # broadcasts, and it also keeps a text paste out of the arithmetic instead
+    # of letting it decide the row. (A text paste in these columns is already a
+    # FAIL on the hygiene row below, which names the offending column.)
+    A(("Advisory", "Target LR agrees with its indication components — "
+       "(combined - expense) / (ALAE x ULAE), within 0.5 pts, where all four are entered",
+       "=0",
+       '=SUMPRODUCT((lr_key<>"")*ISNUMBER(lr_target)*ISNUMBER(lr_combined)'
+       "*ISNUMBER(lr_expense)*ISNUMBER(lr_alae)*ISNUMBER(lr_ulae)"
+       "*(ABS(lr_target*lr_alae*lr_ulae-(lr_combined-lr_expense))"
+       ">0.005*lr_alae*lr_ulae)*1)", 0, "WARN"))
 
     header_row(ws, L.CK_HDR, 1,
                ["#", "Category", "Check", "Expected", "Actual", "Tolerance", "Status",
@@ -1072,10 +1097,14 @@ def build_methodology(ctx: Ctx):
          "number reaches the answer.",
          ]),
         ("6. The bridge", [
-         "LR_current = LR_input x (1 + s) when the input basis is 'proposed'; unchanged when "
-         "'current'.  CY_LR(P) = LR_current x A_rate(P) x A_mod(P) x A_other.  "
+         "The projected loss ratio is entered AT CURRENT RATE LEVEL: convert a "
+         "proposed-level pick before entering it. (Through v3.7 a per-combo basis column "
+         "let the workbook do that conversion, LR x (1 + s); it was removed in v3.8 "
+         "because an input that is almost never anything but 'current' is a column every "
+         "paste has to get right for no benefit.)  "
+         "CY_LR(P) = LR_current x A_rate(P) x A_mod(P) x A_other.  "
          "CY_LR(P+1) = LR_current x (1 + net_trend) x A_rate(P+1) x A_mod(P+1) x A_other "
-         "(indicative). A_other defaults to 1.000 and requires a text label when it differs.",
+         "(indicative). A_other defaults to 1.000.",
          "Communication metrics: CY earned rate change vs indication = E_CY(P)/CRL_ind - 1; "
          "year-over-year earned rate changes E_CY(P)/E_CY(P-1) - 1 and E_CY(P+1)/E_CY(P) - 1 "
          "(the carryover-plus-new-actions figures planning teams quote).",

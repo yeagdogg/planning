@@ -38,10 +38,11 @@ def _row_of(wb, name: str) -> int:
 
 
 # the note that belongs to each resolver input, by a phrase unique to it
+# (nr_AOther's note went with D107: it warned that A_other <> 1 needs a label,
+# and the label column is gone.)
 COMPANIONS = {
     "nr_MPrior": "backward anchor",
     "nr_M2": "carried flat beyond the plan year",
-    "nr_AOther": "A_other <> 1 requires a label",
     "nr_NetMode": "NET SELECTION ACTIVE",
 }
 

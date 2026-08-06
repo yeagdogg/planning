@@ -182,20 +182,30 @@ convention to 1e-9, and 63.36% at 4 decimals on annual-term books); **every BU×
 tied to a per-combo oracle run (9 metrics each); solver round-trip (+5.0% at 4/1); chart axes
 intact and no legend overlapping its plot after the Excel resave; every month of the LR Flow
 walk tied to a fresh oracle run, with its residual decomposition required to reproduce its
-own weighted mean; scenario, attribution, seasonality, basis, mod-toggle,
+own weighted mean; scenario, attribution, seasonality, projected-LR, mod-toggle,
 degenerate-input, stepped-mod, and plan-year-change exercises each tied to fresh oracle runs.
 
-At v3.7.2 every artifact is green through **phase D**, from a single
-`python tools/release.py --full --force-full`: the five 12-month lines **317 checks / 0
-failed** each, the 6-month-term Inland Marine **315 / 0**, and the combined book **61 / 0**
+At v3.8.0 every artifact is green through **phase D**, from a single
+`python tools/release.py --full --force-full`: the five 12-month lines **318 checks / 0
+failed** each, the 6-month-term Inland Marine **316 / 0**, and the combined book **61 / 0**
 (`tools/verify_book.py`, including the source-freshness phase and the Pivot Data ties).
-pytest 360/360. Build, recalculate, roll up the book and verify all seven — **8.2 minutes**,
-of which 2 is pytest. Verification alone is about 3.
+pytest 361/361. Build, recalculate, roll up the book and verify all seven — **11.6 minutes**,
+of which 2.6 is pytest. Verification alone is about 3.
 
 The book's 61st check is the D106 regression: where the filters resolve a state row to one
 combo, a rate-change slot that combo never filed must read BLANK. It used to read as the zero
 `INDEX` returns over an empty cell, which the date format renders `1/0/00`. Reverting the fix
 puts 186 violations back, which is the only evidence that a regression check is one.
+
+**The sample workbooks report `PASS WITH 2 WARNING(S)`, and one of those is on purpose.** One
+seeded combo carries a combined ratio 1.85 points away from the one its target loss ratio
+implies, so the D107 advisory that compares them has a visible failure case in every shipped
+file. That seed is what exposed D108: the advisory did not fire, because **`N()` does not
+broadcast over a range inside `SUMPRODUCT`** — it collapses to the range's first cell. Two
+Checks rows already written that way were inspecting tbl_LR row 1 and reporting on all
+sixty-three, one of them a FAIL-severity input guard. They use `ISNUMBER` now, and
+`tests/test_checks_formulas.py` fails the build on any Checks formula that applies `N()` to a
+multi-cell name.
 
 That used to be most of an hour, and the reason is D105: phase D now holds **one workbook open
 in Excel and mutates it in place** rather than copying the 2.7MB file and round-tripping it
@@ -366,7 +376,7 @@ a timestamped `.bak.xlsx` is written before anything is overwritten.
    --carry-forward` (bare, so each LOB carries from its own file), then run the recalc tool.
 3. Update what actually changed for the new year — projected LRs, the rate program, mod
    actions — rather than re-keying the whole book. Each dataset is one contiguous paste
-   block (`tbl_LR` columns A:T, `tbl_RateLog` A:H, `tbl_ModLog` A:G; keys and engine helpers
+   block (`tbl_LR` columns A:Y, `tbl_RateLog` A:H, `tbl_ModLog` A:G; keys and engine helpers
    sit to the right, behind a blank spacer column, and recalculate on their own — so
    Ctrl+Shift+Right stops at the edge of what you may edit and a paste one column too wide
    lands in dead space rather than on the key formulas). Default capacities per workbook:

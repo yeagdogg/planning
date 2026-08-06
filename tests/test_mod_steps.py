@@ -47,7 +47,7 @@ def _mods(**kw) -> ModInputs:
 
 
 def _combo(mod_changes=(), mods=None, **kw) -> ComboInputs:
-    return ComboInputs(lr_proj=0.65, lr_basis="current", mods=mods or _mods(),
+    return ComboInputs(lr_proj=0.65, mods=mods or _mods(),
                        mod_changes=tuple(mod_changes), **kw)
 
 
@@ -167,7 +167,7 @@ def test_history_still_drifts_before_the_plan_year():
 def test_no_mod_rows_is_bit_identical_to_the_drift_build():
     """The whole de-risking argument: an empty log changes nothing, and
     m_end_prior is inert without steps."""
-    drift = ComboInputs(lr_proj=0.65, lr_basis="current",
+    drift = ComboInputs(lr_proj=0.65,
                         mods=ModInputs(m_ind=0.85, m0=0.86,
                                        m0_asof=dt.date(P - 1, 9, 30), m1=0.90),
                         rate_changes=(RateChange(dt.date(P - 1, 7, 1), 0.06, "taken", True),))
