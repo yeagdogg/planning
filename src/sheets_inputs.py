@@ -243,14 +243,18 @@ LR_DV: dict[str, dict] = {
                       "fraction; blank = off)."),
 }
 
-LR_LAST_COL = col_letter(len(LR_COLS))          # "S" today; derived, never typed
+# All three are DERIVED from the length of LR_COLS and none is ever typed, so
+# adding or removing a column moves them together. No letter is named here on
+# purpose: the old comments said "S today" / "U today" / "W today" and were a
+# column behind reality from the day D96 widened the block.
+LR_LAST_COL = col_letter(len(LR_COLS))
 # A BLANK column separates the paste block from the machinery to its right, and
 # another separates the Key helper from the live results. Without the first one
 # the block and the helper are contiguous: Ctrl+Shift+Right runs straight past
 # the edge of what you may edit, and a paste one column too wide lands on the
 # key formulas instead of in dead space. The gap is the fence.
-LR_KEY_COL = col_letter(len(LR_COLS) + 2)       # "U" today — BU|State helper
-LR_ECHO_COL = len(LR_COLS) + 4                  # "W" today (1-based) — live results
+LR_KEY_COL = col_letter(len(LR_COLS) + 2)       # BU|State helper
+LR_ECHO_COL = len(LR_COLS) + 4                  # 1-based — live results
 
 
 def lr_letter(name: str) -> str:
@@ -290,7 +294,9 @@ def build_inputs(ctx: Ctx):
          f"with your book. {ctx.we_key} carries the documented worked example used by "
          "the Checks sheet."),
         fnt=font(FAIL_RED, bold=True, italic=True))
-    put(ws, "T4",
+    # anchored on the key helper, not a literal letter: the note describes the
+    # block from OUTSIDE it, so it has to move when the block widens
+    put(ws, f"{LR_KEY_COL}4",
         f"tbl_LR A:{LR_LAST_COL} is one contiguous paste block — keys, helpers, and live "
         "results sit to the right. The rate change log lives on the Rate Log sheet.",
         fnt=F_SMALL_IT)

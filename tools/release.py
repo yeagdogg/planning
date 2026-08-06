@@ -302,8 +302,9 @@ def _await_excel_drain(timeout_s: float = 45.0) -> int:
     ONLY ones that appeared after this run started. `_EXCEL_BASELINE` is
     snapshotted before any subprocess launches, so an Excel the user already had
     open — with unsaved work in it — is never a candidate. (The release also
-    refuses to start at all when a `~$` lock file says one of OUR workbooks is
-    open, which is the other half of that guarantee.)
+    refuses to start at all when a `~$` lock file says a workbook THIS RUN
+    WRITES is open, which is the other half of that guarantee. A line the run
+    does not touch may be open the whole time; see `_locked`.)
     """
     deadline = time.monotonic() + timeout_s
     ours: set[int] = set()
@@ -328,10 +329,25 @@ def _await_excel_drain(timeout_s: float = 45.0) -> int:
     return len(ours)
 
 
-def _locked(out_dir: Path) -> list[str]:
-    """Excel lock files. Recalculating a workbook that is open in Excel either
-    fails or silently binds to the open copy, so refuse rather than guess."""
-    return sorted(p.name for p in out_dir.glob("~$*.xlsx"))
+def _locked(out_dir: Path, targets: set[str] | None = None) -> list[str]:
+    """Excel lock files for the workbooks this run will WRITE.
+
+    Recalculating a workbook that is open in Excel either fails or silently
+    binds to the open copy, so refuse rather than guess. Scoped to the files in
+    play: a ``--lob`` run has no business refusing because some OTHER line is
+    open, which is the normal state of affairs when someone is reading one
+    workbook while another is rebuilt. ``targets`` is None for the whole set.
+
+    A lock is named for the file it guards — ``~$<workbook>.xlsx``. One that
+    resolves to a workbook this run does not write is somebody else's business.
+    One that resolves to NOTHING in the output directory is kept: an
+    unrecognised lock is not evidence of safety.
+    """
+    locks = sorted(p.name for p in out_dir.glob("~$*.xlsx"))
+    if targets is None:
+        return locks
+    known = {p.name for p in out_dir.glob("*.xlsx") if not p.name.startswith("~$")}
+    return [n for n in locks if n[2:] in targets or n[2:] not in known]
 
 
 def _sweep_stale_scratch(out_dir: Path, older_than_s: float = 7200) -> int:
@@ -404,7 +420,10 @@ def main(argv=None) -> int:
         return 0
 
     if not args.skip_build:
-        locked = _locked(out_dir)
+        targets = {output_path(cfg, out_dir, name).name for name in lobs}
+        if set(lobs) == set(cfg.output_lobs):
+            targets.add(book_path(cfg, out_dir).name)
+        locked = _locked(out_dir, targets)
         if locked:
             raise SystemExit(
                 f"REFUSING to build: {', '.join(locked)} indicate the workbook(s) are "

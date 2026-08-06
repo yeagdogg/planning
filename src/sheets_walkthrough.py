@@ -18,6 +18,7 @@ from openpyxl.formatting.rule import CellIsRule
 from openpyxl.styles import Font
 
 from .build_workbook import Ctx, Layout as L, SHEETS
+from .sheets_inputs import lr_letter
 from .xlstyle import (ALIGN_C, BORDER_THIN, FAIL_RED, FILL_GREEN, FILL_GREY,
     FILL_PANEL, FILL_RED, FMT_DATE, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT, F_LABEL,
     F_SMALL_IT, GREY_DARK, NAVY, PASS_GREEN, STEEL, chart_legend, col, font, formula,
@@ -81,46 +82,52 @@ def build_walkthrough(ctx: Ctx):
     section(ws, r, "B", "1.  What you gave us (tbl_LR, resolved for this combo)")
     _expl(ws, r, "Each row links the live input; 'edit >' opens the exact Inputs cell.")
     r += 1
+    # The 4th element names the tbl_LR COLUMN the 'edit >' link opens. It is a
+    # defined name resolved through lr_letter(), never a literal letter: these
+    # were literals until v3.7.2, and by then D70 and D96 had each inserted a
+    # column, so ten of the thirteen links quietly pointed one or more columns
+    # off — a hyperlink has no value to verify, so nothing caught it.
     w2 = [
-        ("Projected loss ratio", "=nr_LRproj", FMT_PCT, "C",
+        ("Projected loss ratio", "=nr_LRproj", FMT_PCT, "lr_lrproj",
          '=IF(nr_Basis="proposed","entered at the PROPOSED level — step 2 converts it '
          'to current level","already at the current rate level — no conversion needed")'),
-        ("LR basis", "=nr_Basis", None, "D",
+        ("LR basis", "=nr_Basis", None, "lr_basis",
          "current = today's rates; proposed = includes the indicated change s."),
-        ("Indication selected change (s)", "=nr_SelS", FMT_PCT, "E",
+        ("Indication selected change (s)", "=nr_SelS", FMT_PCT, "lr_s",
          "Only used when the basis is 'proposed'."),
-        ("Mod assumed in indication (M_ind)", "=nr_MInd", FMT_MOD, "F",
+        ("Mod assumed in indication (M_ind)", "=nr_MInd", FMT_MOD, "lr_mind",
          "The average schedule mod the indication priced against — the mod benchmark."),
-        ("Current avg written mod (M_0)", "=nr_M0", FMT_MOD, "G",
+        ("Current avg written mod (M_0)", "=nr_M0", FMT_MOD, "lr_m0",
          "Where the written mod stands at the as-of date."),
-        ("M_0 as-of date", "=nr_M0Asof", FMT_DATE, "H",
+        ("M_0 as-of date", "=nr_M0Asof", FMT_DATE, "lr_m0asof",
          "Anchored close-of-day: 'as of 9/30' means the 10/1 boundary."),
-        ("Projected mod, plan-yr end (M_1)", "=nr_M1", FMT_MOD, "I",
+        ("Projected mod, plan-yr end (M_1)", "=nr_M1", FMT_MOD, "lr_m1",
          "Where you project the written mod by 12/31 of the plan year."),
-        ("Mod ~1 yr before as-of (M_prior)", "=nr_MPrior", FMT_MOD, "J",
+        ("Mod ~1 yr before as-of (M_prior)", "=nr_MPrior", FMT_MOD, "lr_mprior",
          '=IF(N(nr_MPrior)=0,"not provided — the path extends the M_0 -> M_1 slope '
          'backward","anchors the path 12 months before the as-of date")'),
-        ("Projected mod, next-yr end (M_2)", "=nr_M2", FMT_MOD, "K",
+        ("Projected mod, next-yr end (M_2)", "=nr_M2", FMT_MOD, "lr_m2",
          '=IF(N(nr_M2)=0,"not provided — M_1 carries flat beyond the plan year",'
          '"anchors the path at the end of the following year")'),
-        ("Net trend (next-year view)", "=nr_Trend", FMT_PCT, "M",
+        ("Net trend (next-year view)", "=nr_Trend", FMT_PCT, "lr_trend",
          "Applied once, to the following year only (inherits the Control default when "
          "the tbl_LR cell is blank)."),
-        ("Other adjustment (A_other)", "=nr_AOther", FMT_IDX, "N",
+        ("Other adjustment (A_other)", "=nr_AOther", FMT_IDX, "lr_aother",
          '=IF(nr_AOtherLbl="","no manual adjustment","reason: "&nr_AOtherLbl)'),
-        ("Mod adjustment effective?", "=nr_ModAdjEff", None, "P",
+        ("Mod adjustment effective?", "=nr_ModAdjEff", None, "lr_modadj",
          "Master toggle (Control) AND the combo's own toggle must both be ON."),
-        ("Net rate selection", "=IF(nr_NetMode,nr_NetSelP,0)", FMT_PCT, "Q",
+        ("Net rate selection", "=IF(nr_NetMode,nr_NetSelP,0)", FMT_PCT, "lr_netp",
          '=IF(nr_NetMode,"ACTIVE: from 1/1 the combined rate x price renews this % above '
          'the year-ago cohort — planned rows and the mod projection are superseded",'
          '"off — the explicit rate program below drives the year")'),
     ]
     lr0 = L.LR_FIRST - 1
-    for lbl, f, fmt, colL, expl in w2:
+    for lbl, f, fmt, lr_name, expl in w2:
         label(ws, f"B{r}", lbl)
         link(ws, f"C{r}", f, fmt=fmt or "General", border=BORDER_THIN, align=ALIGN_C)
         formula(ws, f"I{r}",
-                f'=IF(br_selrow=0,"",HYPERLINK("#Inputs!{colL}"&(br_selrow+{lr0}),"edit >"))')
+                f'=IF(br_selrow=0,"",HYPERLINK("#Inputs!{lr_letter(lr_name)}"'
+                f'&(br_selrow+{lr0}),"edit >"))')
         ws[f"I{r}"].font = Font(name="Calibri", color=NAVY, size=9, underline="single")
         _expl(ws, r, expl, size=9)
         r += 1

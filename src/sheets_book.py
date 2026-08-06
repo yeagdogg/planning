@@ -217,7 +217,9 @@ def pivot_rows(data, plan_year: int) -> list[tuple]:
         dims = (rec["lob"], rec["bu"], rec["state"])
         if ep > 0:
             for measure, cat, src, pre in PIVOT_ANNUAL:
-                v = rec[src] or 0.0
+                v = rec[src]
+                if v is None:
+                    continue        # see the docstring: no answer, not a zero
                 out.append((*dims, cat, measure, None, ep, v if pre else ep * v))
         modeff = 1.0 if (rec["modeff"] or 0) == 1 else 0.0
         for j in range(12):
@@ -548,15 +550,25 @@ def build_state_summary(ctx: BookCtx, n: int):
         for key, fld, fmt in wide:
             formula(ws, f"{ss_l(key)}{r}", f"={w(fld)}", fmt=fmt,
                     align=ALIGN_C, fill=band, border=BORDER_THIN)
-        # rate-change slots: only when the filters resolve to exactly one combo
+        # rate-change slots: only when the filters resolve to exactly one combo,
+        # and only where that combo HAS the change. Two guards, not one. _calc
+        # publishes "" for a slot nobody filed, but a cached "" reads back as
+        # None and lands on _book as a genuinely blank cell — and INDEX over a
+        # blank returns 0, not "". That 0 renders 1/0/00 under the date format
+        # and 0.0% under the signed percent, which is what the per-LOB exhibit
+        # never shows because there the "" never round-trips through a value.
+        # Presence is tested on the slot's DATE: a real one is a serial well
+        # above zero, so COUNT cannot false-positive, and all three parts of a
+        # slot are published together so one test governs the trio.
         uk = f'bkf_lob&"|"&bkf_bu&"|"&$A{r}'
+        mt = f'MATCH({uk},{rng("ukey", n)},0)'
         for j in range(SLOTS):
-            for k, (part, fmt) in enumerate((("date", FMT_DATE_S), ("pct", PCT_S),
-                                             ("tok", None))):
+            has = f'COUNT(INDEX({rng(f"slot{j}_date", n)},{mt}))'
+            for part, fmt in (("date", FMT_DATE_S), ("pct", PCT_S),
+                              ("tok", None)):
                 formula(ws, f'{ss_l(f"chg{j + 1}_{part}")}{r}',
-                        f'=IF({cnt}<>1,"—",'
-                        f'INDEX({rng("slot" + str(j) + "_" + part, n)},'
-                        f'MATCH({uk},{rng("ukey", n)},0)))',
+                        f'=IF({cnt}<>1,"—",IF({has}=0,"",'
+                        f'INDEX({rng(f"slot{j}_{part}", n)},{mt})))',
                         fmt=fmt or "General", align=ALIGN_C, fill=band,
                         border=BORDER_THIN)
         for key in ("ntaken", "nplanned"):
@@ -599,6 +611,12 @@ def build_state_summary(ctx: BookCtx, n: int):
         formula(ws, f"{ss_l(key)}{tot}",
                 f'=SUMIFS({rng(key, n)}{crit(*dims)})', fmt=FMT_INT, align=ALIGN_C,
                 fill=steel_fill())
+    # the chronology band carries no total — four dated changes do not add up —
+    # but it still has to be part of the band, or the total row reads as though
+    # it stops twelve columns early (the per-LOB exhibit does the same)
+    for j in range(1, SLOTS + 1):
+        for part in ("date", "pct", "tok"):
+            put(ws, f"{ss_l(f'chg{j}_{part}')}{tot}", None, fill=steel_fill())
     formula(ws, f'{ss_l("mix")}{tot}',
             f'=IF($B${tot}=0,"",(${ss_l("planlr")}{tot}-{_ss_chain(tot)})*100)',
             fmt=PTS, align=ALIGN_C, fill=steel_fill())

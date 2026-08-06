@@ -261,6 +261,29 @@ def phase_d(path: Path, cfg, book, scratch_dir: Path):
             check(f"[{label_}] State Summary total plan LR matches the subset",
                   approx(ss[f"{ss_l('planlr')}{tot}"].value, lr, 1e-9),
                   f"wb={ss[f'AA{tot}'].value} py={lr}")
+        # The chronology band, where the v3.7.2 bug lived. Where the filters
+        # resolve a state row to ONE combo the slots populate, and a slot that
+        # combo never filed has to come back BLANK. It used to come back as the
+        # zero INDEX returns over an empty _book cell, which the date format
+        # renders 1/0/00 and the signed percent 0.0% — a rate change that never
+        # happened, shown as a real one. Only reachable single-combo, which is
+        # why four versions of All/All views never saw it.
+        if lob != "All" and bu != "All":
+            bad = []
+            for i, st in enumerate(book.states):
+                one = [r for r in sub if r["state"] == st]
+                if len(one) != 1:
+                    continue
+                for j in range(4):
+                    filed = one[0]["slots"][j][0] is not None
+                    for part in ("date", "pct", "tok"):
+                        v = ss[f"{ss_l(f'chg{j + 1}_{part}')}{SS_FIRST + i}"].value
+                        if filed == (v is None):
+                            bad.append(f"{st} slot{j + 1} {part}={v!r} "
+                                       f"(filed={filed})")
+            check(f"[{label_}] unfiled rate-change slots read blank, not zero",
+                  not bad, "; ".join(bad[:4]))
+
         # the Control KPI band honours all three
         sub3 = [r for r in sub if state == "All" or r["state"] == state]
         ep3 = sum(r["ep"] for r in sub3)

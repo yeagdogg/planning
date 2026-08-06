@@ -17,7 +17,7 @@ So the extractor is pinned against the actual output of the things it reads.
 
 from __future__ import annotations
 
-from tools.release import _verdict
+from tools.release import _locked, _verdict
 
 PYTEST_PASS = "........ [ 41%]\n346 passed in 105.35s (0:01:45)\n"
 
@@ -94,3 +94,49 @@ def test_unrecognisable_output_still_says_something_useful():
 def test_no_output_at_all_returns_empty_so_the_caller_can_say_so():
     assert _verdict("", "") == ""
     assert _verdict("", FAULTHANDLER_NOISE) == ""
+
+
+# ---------------------------------------------------------------------------
+# which open workbooks are actually this run's problem
+# ---------------------------------------------------------------------------
+
+
+def _out(tmp_path, workbooks=(), locks=()):
+    for n in (*workbooks, *locks):
+        (tmp_path / n).write_bytes(b"")
+    return tmp_path
+
+
+PROP = "Plan_LR_Workbook_2027_Property.xlsx"
+AUTO = "Plan_LR_Workbook_2027_Commercial_Auto.xlsx"
+BOOK = "Plan_LR_Book_2027.xlsx"
+
+
+def test_a_lock_on_a_line_this_run_writes_still_refuses(tmp_path):
+    """The guard's whole point: recalculating a workbook someone has open either
+    fails or silently binds to the open copy."""
+    d = _out(tmp_path, [PROP, AUTO], [f"~${PROP}"])
+    assert _locked(d, {PROP}) == [f"~${PROP}"]
+
+
+def test_a_lock_on_a_line_this_run_ignores_does_not(tmp_path):
+    """Found the hard way: a --lob Property run refused to build because
+    Commercial Auto was open in another window. Reading one workbook while
+    another is rebuilt is the normal working state, not a conflict."""
+    d = _out(tmp_path, [PROP, AUTO], [f"~${AUTO}"])
+    assert _locked(d, {PROP}) == []
+    assert _locked(d, {PROP, AUTO}) == [f"~${AUTO}"]      # a full run still cares
+    assert _locked(d) == [f"~${AUTO}"]                    # unscoped, as before
+
+
+def test_a_lock_that_names_nothing_here_is_kept(tmp_path):
+    """An unrecognised lock is not evidence of safety — it could be a form of a
+    name this run writes that we failed to resolve."""
+    d = _out(tmp_path, [PROP], ["~$something_else.xlsx"])
+    assert _locked(d, {PROP}) == ["~$something_else.xlsx"]
+
+
+def test_the_book_counts_as_a_target_when_the_run_builds_it(tmp_path):
+    d = _out(tmp_path, [PROP, BOOK], [f"~${BOOK}"])
+    assert _locked(d, {PROP}) == []
+    assert _locked(d, {PROP, BOOK}) == [f"~${BOOK}"]

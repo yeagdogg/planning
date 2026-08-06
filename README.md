@@ -185,12 +185,17 @@ walk tied to a fresh oracle run, with its residual decomposition required to rep
 own weighted mean; scenario, attribution, seasonality, basis, mod-toggle,
 degenerate-input, stepped-mod, and plan-year-change exercises each tied to fresh oracle runs.
 
-At v3.7.1 every artifact is green through **phase D**, from a single
+At v3.7.2 every artifact is green through **phase D**, from a single
 `python tools/release.py --full --force-full`: the five 12-month lines **317 checks / 0
-failed** each, the 6-month-term Inland Marine **315 / 0**, and the combined book **60 / 0**
+failed** each, the 6-month-term Inland Marine **315 / 0**, and the combined book **61 / 0**
 (`tools/verify_book.py`, including the source-freshness phase and the Pivot Data ties).
-pytest 354/354. Build, recalculate, roll up the book and verify all seven — **8.2 minutes**,
+pytest 360/360. Build, recalculate, roll up the book and verify all seven — **8.2 minutes**,
 of which 2 is pytest. Verification alone is about 3.
+
+The book's 61st check is the D106 regression: where the filters resolve a state row to one
+combo, a rate-change slot that combo never filed must read BLANK. It used to read as the zero
+`INDEX` returns over an empty cell, which the date format renders `1/0/00`. Reverting the fix
+puts 186 violations back, which is the only evidence that a regression check is one.
 
 That used to be most of an hour, and the reason is D105: phase D now holds **one workbook open
 in Excel and mutates it in place** rather than copying the 2.7MB file and round-tripping it
