@@ -115,6 +115,28 @@ NETD_PUB = dict(
     netset1=178,     # FV      1 when x(P+1) was entered, 0 when carried from P
 )
 
+# D111: the D107 carry-through indication fields, EP-weighted so the book can
+# show a premium-weighted average of any of them. Still reference only — nothing
+# computes from them — this publishes them so the Book's pivot can.
+#
+# TWO columns each, and the second is the point. `w_x` is N(x) x EP, which is
+# what every other weighted metric here looks like; but N() of a BLANK cell is
+# zero, so a combo that simply has not filled in an expense ratio would enter
+# the average as an expense ratio of 0% carrying its full premium. `ep_x` is the
+# premium of the rows that actually have a value, so weighted = SUM(w_x)/SUM(ep_x)
+# averages over the book that answered rather than the whole book. A blank drops
+# out instead of dragging the mean toward zero.
+IND_FIELDS = ("premtrend", "losstrend", "expense", "alae", "ulae",
+              "combined", "catload", "largeload")
+_IND_FIRST = 179
+IND_PUB = {f"{kind}_{f}": _IND_FIRST + 2 * i + off
+           for i, f in enumerate(IND_FIELDS)
+           for off, kind in ((0, "w"), (1, "ep"))}
+# the same weight for the D96 target loss ratio, whose w_target (EV) has carried
+# this flaw since it was added — on sample data every row has a target, so it
+# has never shown
+IND_PUB["ep_target"] = _IND_FIRST + 2 * len(IND_FIELDS)
+
 PRIOR_PUB = dict(
     rate=113,       # DI..DT  YoY written rate leg, Jan..Dec P-1
     mod=125,        # DU..EF  YoY written mod leg (raw path, ungated)
@@ -331,6 +353,19 @@ def build_calc(ctx: Ctx):
                    f"=$N${num}/$N${den}*IF($O${t}=1,$O${num}/$O${den},1)-1", FMT_IDX)
             f_grey(ws, f"{col(NETD_PUB['rate1'] + j)}{r}",
                    f"=$N${num}/$N${den}-1", FMT_IDX)
+        # D111: each carry-through indication field x EP, beside the premium of
+        # the rows that HAVE one. COUNT rather than ="" for the populated test:
+        # INDEX over a blank cell returns 0, not "", so ="" would call every
+        # blank populated — COUNT of that same reference is 0 for a blank and 1
+        # for any number (the D106 lesson, one file over).
+        for f in IND_FIELDS:
+            lr = f"lr_{f}"
+            f_grey(ws, f"{col(IND_PUB[f'w_{f}'])}{r}",
+                   f"=N(INDEX({lr},{n}))*$V{r}", FMT_IDX)
+            f_grey(ws, f"{col(IND_PUB[f'ep_{f}'])}{r}",
+                   f"=IF(COUNT(INDEX({lr},{n}))=0,0,$V{r})", FMT_IDX)
+        f_grey(ws, f"{col(IND_PUB['ep_target'])}{r}",
+               f"=IF(COUNT(INDEX(lr_target,{n}))=0,0,$V{r})", FMT_IDX)
         # the P+1 net target the block already resolved, and whether it was
         # entered or inherited from P
         f_grey(ws, f"{col(NETD_PUB['netx1'])}{r}", f"=IF($L${t},$N${t},0)", "0.0%")

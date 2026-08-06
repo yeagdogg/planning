@@ -31,8 +31,8 @@ import openpyxl
 
 from src.build_workbook import (GENERATOR_VERSION, Layout as L, load_config,
                                 output_path)
-from src.sheets_calc import (BOOK_PUB, BOOK_SLOTS, FLOW_PUB, NETD_PUB, PROG_LR,
-                             TARGET_PUB, W_AOTHER_COL)
+from src.sheets_calc import (BOOK_PUB, BOOK_SLOTS, FLOW_PUB, IND_FIELDS, IND_PUB,
+                             NETD_PUB, PROG_LR, TARGET_PUB, W_AOTHER_COL)
 
 # scalar per-combo fields: field name -> column index on the results table
 SCALARS = {
@@ -49,6 +49,11 @@ SCALARS = {
     "progident": PROG_LR["ident"], "proggap": PROG_LR["gap"],
     "ntaken": BOOK_PUB["ntaken"], "nplanned": BOOK_PUB["nplanned"],
     "netx1": NETD_PUB["netx1"], "netset1": NETD_PUB["netset1"],   # D110
+    # D111: the carry-through indication fields x EP, each beside the premium
+    # of the rows that actually carry one (see IND_PUB)
+    "target_ep": IND_PUB["ep_target"],
+    **{f"{f}_w": IND_PUB[f"w_{f}"] for f in IND_FIELDS},
+    **{f"{f}_ep": IND_PUB[f"ep_{f}"] for f in IND_FIELDS},
 }
 # 12-month families: field name -> first column index. The two P+1 legs (D110)
 # have no epw twin — the seasonality weight depends on calendar month alone, so
@@ -63,7 +68,7 @@ MONTHLY = {"delivered": FLOW_PUB["delivered"], "rate": FLOW_PUB["rate"],
 # silent IndexError on a column that IS published costs a release.
 LAST_COL = max(BOOK_PUB["slot"] + BOOK_SLOTS * 3 - 1, *TARGET_PUB.values(),
                NETD_PUB["rate1"] + 11, NETD_PUB["delivered1"] + 11,
-               NETD_PUB["netx1"], NETD_PUB["netset1"])
+               NETD_PUB["netx1"], NETD_PUB["netset1"], *IND_PUB.values())
 
 # A row is only usable if these carry cached values. None means one of two
 # things, and both must stop the harvest: the workbook was never recalculated,

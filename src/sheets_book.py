@@ -101,26 +101,43 @@ WEIGHTED_DIRECT = [("w_mind", "m_ind_w"), ("w_m0", "m0_w"), ("w_m1", "m1_w"),
                    ("w_target", "target_w")]                     # D96
 
 # ---- D103: the long (tidy) pivot dataset ----------------------------------
-# (Measure, Category, harvested field, the field is ALREADY x EP)
+# (Measure, Category, harvested field, the field is ALREADY x EP, weight field)
+#
+# The weight field is None for everything that every combo has — there the
+# weight is simply adjusted plan EP. It is named only for the OPTIONAL inputs
+# (D111): a combo that has not filled in an expense ratio must not enter the
+# average as an expense ratio of zero carrying its full premium, so those
+# measures weight by the premium of the rows that actually carry a value.
 PIVOT_ANNUAL = [
-    ("Projected LR (current level)", "Bridge", "lrcur", False),
-    ("Rate earn-in (A_rate)", "Bridge", "arate_p", False),
-    ("Mod drift (A_mod)", "Bridge", "amod_p", False),
-    ("Other adjustment (A_other)", "Bridge", "aother", False),
-    ("Plan LR", "Bridge", "cylr_p", False),
-    ("Target LR", "Bridge", "target_w", True),
-    ("Plan LR — program basis", "Bridge", "cylr_prog", False),
-    ("Plan LR +1", "Next year", "cylr_p1", False),
-    ("Rate earn-in +1", "Next year", "arate_p1", False),
-    ("Mod drift +1", "Next year", "amod_p1", False),
-    ("Net trend", "Next year", "trend", False),
-    ("Plan LR +1 — program basis", "Next year", "cylr1_prog", False),
-    ("Indication rate level (CRL)", "Levels", "crl", False),
-    ("Earned rate level", "Levels", "ecy_p", False),
-    ("Earned mod", "Levels", "mbar_p", False),
-    ("Mod in indication (M_ind)", "Mods", "m_ind_w", True),
-    ("Current mod (M_0)", "Mods", "m0_w", True),
-    ("Projected mod (M_1)", "Mods", "m1_w", True),
+    ("Projected LR (current level)", "Bridge", "lrcur", False, None),
+    ("Rate earn-in (A_rate)", "Bridge", "arate_p", False, None),
+    ("Mod drift (A_mod)", "Bridge", "amod_p", False, None),
+    ("Other adjustment (A_other)", "Bridge", "aother", False, None),
+    ("Plan LR", "Bridge", "cylr_p", False, None),
+    ("Target LR", "Bridge", "target_w", True, "target_ep"),
+    ("Plan LR — program basis", "Bridge", "cylr_prog", False, None),
+    ("Plan LR +1", "Next year", "cylr_p1", False, None),
+    ("Rate earn-in +1", "Next year", "arate_p1", False, None),
+    ("Mod drift +1", "Next year", "amod_p1", False, None),
+    ("Net trend", "Next year", "trend", False, None),
+    ("Plan LR +1 — program basis", "Next year", "cylr1_prog", False, None),
+    ("Indication rate level (CRL)", "Levels", "crl", False, None),
+    ("Earned rate level", "Levels", "ecy_p", False, None),
+    ("Earned mod", "Levels", "mbar_p", False, None),
+    ("Mod in indication (M_ind)", "Mods", "m_ind_w", True, None),
+    ("Current mod (M_0)", "Mods", "m0_w", True, None),
+    ("Projected mod (M_1)", "Mods", "m1_w", True, None),
+    # D111: the carry-through indication block. Nothing computes from these —
+    # they are here so the book can be asked what its premium-weighted expense
+    # ratio, ALAE load or cat load actually is.
+    ("Prospective premium trend", "Indication", "premtrend_w", True, "premtrend_ep"),
+    ("Prospective loss trend", "Indication", "losstrend_w", True, "losstrend_ep"),
+    ("Expense ratio", "Indication", "expense_w", True, "expense_ep"),
+    ("ALAE factor", "Indication", "alae_w", True, "alae_ep"),
+    ("ULAE factor", "Indication", "ulae_w", True, "ulae_ep"),
+    ("Combined ratio", "Indication", "combined_w", True, "combined_ep"),
+    ("Cat load", "Indication", "catload_w", True, "catload_ep"),
+    ("Large loss load", "Indication", "largeload_w", True, "largeload_ep"),
 ]
 # (Measure, harvested monthly leg, the mass is gated by the mod adjustment)
 PIVOT_MONTHLY = [
@@ -221,11 +238,16 @@ def pivot_rows(data, plan_year: int) -> list[tuple]:
         ep = rec["ep"] or 0.0
         dims = (rec["lob"], rec["bu"], rec["state"])
         if ep > 0:
-            for measure, cat, src, pre in PIVOT_ANNUAL:
+            for measure, cat, src, pre, wfield in PIVOT_ANNUAL:
                 v = rec[src]
                 if v is None:
                     continue        # see the docstring: no answer, not a zero
-                out.append((*dims, cat, measure, None, ep, v if pre else ep * v))
+                # an optional input weights by the premium that HAS one, so a
+                # combo which left it blank is absent rather than a zero (D111)
+                w = ep if wfield is None else (rec[wfield] or 0.0)
+                if w <= 0:
+                    continue
+                out.append((*dims, cat, measure, None, w, v if pre else w * v))
         modeff = 1.0 if (rec["modeff"] or 0) == 1 else 0.0
         for j in range(12):
             epw = rec["epw"][j] or 0.0
@@ -1294,6 +1316,12 @@ def build_readme(ctx: BookCtx, n: int):
               "the same premium restricted to combos whose mod adjustment is on. "
               "Combos with no premium, and months with no applicable weight, are "
               "absent rather than zero.",
+              "The Indication measures — the trends, expense ratio, ALAE and ULAE, "
+              "combined ratio and the two loads, plus Target LR — are OPTIONAL "
+              "inputs, so they weight by the premium of the combos that actually "
+              "carry a value. A line that has not filled in its expense ratio is "
+              "absent from that average rather than entering it as zero, which is "
+              "why a slice's weight there can be less than its EP.",
               "Monthly premium comes from tbl_Seasonality (per state, on each LOB "
               "workbook's Inputs). A blank seasonality row means UNIFORM writing, so "
               "if you have not filled it in, month-to-month shape here is coming "

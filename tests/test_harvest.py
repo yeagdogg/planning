@@ -193,8 +193,40 @@ def test_pivot_rows_are_long_and_self_weighting():
         else:
             assert month is None
     measures = {m for *_d, _c, m, _mo, _w, _wv in rows}
-    assert {m for m, _c, _s, _p in PIVOT_ANNUAL} <= measures
+    assert {m for m, _c, _s, _p, _w in PIVOT_ANNUAL} <= measures
     assert {m for m, _l, _g in PIVOT_MONTHLY} <= measures
+
+
+def test_an_optional_input_weights_by_the_premium_that_has_one(monkeypatch):
+    """D111. The eight carry-through indication fields are OPTIONAL, so a combo
+    that left one blank publishes N(blank) x EP = 0. Weighted by total premium
+    that reads as an expense ratio of zero carrying the full book — the same
+    trap the target loss ratio has carried since D96. Each such measure weights
+    by the premium of the rows that actually have a value, so a blank drops out
+    instead of dragging the mean toward zero."""
+    from src.sheets_book import PIVOT_ANNUAL, pivot_rows
+    try:
+        book = harvest(CFG, now=dt.datetime(2027, 1, 2, 3, 4))
+    except HarvestError as e:
+        pytest.skip(f"LOB workbooks not harvestable: {e}")
+
+    optional = {m: (src, wf) for m, _c, src, _p, wf in PIVOT_ANNUAL if wf}
+    assert "Expense ratio" in optional and "Target LR" in optional, sorted(optional)
+
+    # blank the expense ratio on the first combo: its weighted value and its
+    # populated-premium both go to zero, which is what the workbook publishes
+    row0 = book.rows[0]
+    ep0 = row0["ep"]
+    row0["expense_w"], row0["expense_ep"] = 0.0, 0.0
+
+    rows = pivot_rows(book, CFG.plan_year)
+    got = [(w, wv) for *_d, _c, m, _mo, w, wv in rows if m == "Expense ratio"]
+    assert all(w > 0 for w, _ in got), "a zero-weight row survived"
+    assert not any(abs(w - ep0) < 1e-9 and wv == 0 for w, wv in got), \
+        "the blanked combo still entered the average as a zero at full premium"
+    # and the mean is over the combos that answered
+    mean = sum(wv for _w, wv in got) / sum(w for w, _ in got)
+    assert 0.0 < mean < 3.0, mean
 
 
 def test_pivot_monthly_weights_sum_to_each_combo_s_premium():

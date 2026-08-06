@@ -185,6 +185,15 @@ walk tied to a fresh oracle run, with its residual decomposition required to rep
 own weighted mean; scenario, attribution, seasonality, projected-LR, mod-toggle,
 degenerate-input, stepped-mod, and plan-year-change exercises each tied to fresh oracle runs.
 
+**The indication block, premium-weighted.** The eight carry-through fields — prospective
+premium and loss trend, expense ratio, ALAE, ULAE, combined ratio, cat load, large-loss
+load — plus Target LR appear as an **Indication** category on the book's Pivot Data, so
+one calculated field gives the premium-weighted answer for any slice of the book. They
+are optional inputs, so each weights by the premium of the combos that actually carry a
+value: a line with no expense ratio is *absent* from that average rather than entering it
+as zero. A slice's weight on these measures can therefore be less than its EP, and the
+difference is the premium with no answer.
+
 **Net Delivery in the book.** Where a combo asserts a net rate selection, the book now
 shows the target, what the program AS LOGGED delivers against it, and the gap — per state
 and month by month over two years, premium-weighted. The per-line tab **solves** (what
@@ -207,12 +216,12 @@ Log and the Mod Log are never candidates however little a light reader opens the
 alone hosts 21 named cells that ten surviving sheets read. Excel cannot hide tabs from a
 formula, so this is a build-time choice rather than a switch inside the file.
 
-At v3.10.0 every artifact is green through **phase D**, from a single
+At v3.11.0 every artifact is green through **phase D**, from a single
 `python tools/release.py --full --force-full`: the five 12-month lines **318 checks / 0
 failed** each, the 6-month-term Inland Marine **316 / 0**, and the combined book **65 / 0**
 (`tools/verify_book.py`, including the source-freshness phase, the Pivot Data ties and the
-Net Delivery grids). pytest 369/369. Build, recalculate, roll up the book and verify all
-seven — **8.3 minutes**, of which 1.9 is pytest. Verification alone is about 3.
+Net Delivery grids). pytest 370/370. Build, recalculate, roll up the book and verify all
+seven — **8.9 minutes**, of which 2.5 is pytest. Verification alone is about 3.
 
 The book's 61st check is the D106 regression: where the filters resolve a state row to one
 combo, a rate-change slot that combo never filed must read BLANK. It used to read as the zero
