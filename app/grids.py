@@ -24,7 +24,7 @@ from .paste import coerce
 
 LR_SCHEMA = [
     ("bu", "BU", "text"), ("state", "State", "text"),
-    ("ep", "Plan EP", "dollar"),
+    ("ep", "Plan EP (000s)", "dollar"),
     ("lr_proj", "Projected LR", "pct"),
     ("prem_trend", "Prem trend", "pct"), ("loss_trend", "Loss trend", "pct"),
     ("expense", "Expense", "pct"), ("alae", "ALAE", "num"),

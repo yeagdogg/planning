@@ -77,21 +77,50 @@ def coerce(kind: str, raw: Any) -> Optional[Any]:
     return v
 
 
-def apply_block(schema: list, text: str, skip_header: bool = True) -> list:
+def _headerish(schema: list, cells: list) -> bool:
+    """Does this row look like a copied HEADER rather than data? Content-
+    based, vocabulary-independent (the first version matched the app's own
+    column titles and missed the WORKBOOK's — 'Adj plan EP (000s)' is a
+    header whatever it is called): count the TYPED columns (numeric/date)
+    whose cells are non-empty and fail coercion. A header fails nearly all
+    of them; a data row with a couple of typos fails a couple — and those
+    should be reported, not silently dropped."""
+    fails = nonempty = 0
+    for j, (_key, _title, kind) in enumerate(schema):
+        if kind == "text" or kind.startswith("choice"):
+            continue
+        raw = cells[j] if j < len(cells) else None
+        if raw is None:
+            continue
+        nonempty += 1
+        try:
+            coerce(kind, raw)
+        except ValueError:
+            fails += 1
+    return fails >= 2 and fails * 2 >= nonempty
+
+
+def apply_block(schema: list, text: str, skip_header: bool = True,
+                notes: list | None = None) -> list:
     """Pasted rectangle -> row dicts in ``schema`` order. ``schema`` is
     [(key, title, kind), ...]; extra pasted columns are ignored, short rows
     pad with None. Raises ValueError naming the cell on a bad value.
 
     ``skip_header``: people copy the header row along with the block more
-    often than not — a first line whose cells match the column titles is
-    dropped rather than reported as 'cannot read number: BU'."""
+    often than not — a first line whose typed cells do not read as data is
+    dropped (and recorded in ``notes``) rather than reported as
+    'cannot read number: Adj plan EP (000s)'."""
     lines = parse_block(text)
     if skip_header and lines:
         titles = {t.strip().lower() for _k, t, _kind in schema}
-        first = [c.strip().lower() for c in lines[0] if isinstance(c, str)]
-        hits = sum(1 for c in first if c in titles)
-        if first and hits >= max(2, len(first) // 2):
+        first_txt = [c.strip().lower() for c in lines[0]
+                     if isinstance(c, str)]
+        title_hit = (first_txt and sum(1 for c in first_txt if c in titles)
+                     >= max(2, len(first_txt) // 2))
+        if title_hit or _headerish(schema, lines[0]):
             lines = lines[1:]
+            if notes is not None:
+                notes.append("header row skipped")
     out = []
     for i, cells in enumerate(lines):
         row = {}

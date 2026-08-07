@@ -78,8 +78,9 @@ def build(session):
                                 "box and Ctrl+V the copied block, then "
                                 "Apply.")
                 return
+            notes: list = []
             try:
-                rows = apply_block(schema, text)
+                rows = apply_block(schema, text, notes=notes)
             except ValueError as e:
                 flash.object = f"⚠ **{md_safe(e)}** — nothing was applied."
                 return
@@ -89,9 +90,10 @@ def build(session):
             grid.value = rows_to_df(schema, rows)   # -> same write-back path
             ta.value = ""
             ta.value_input = ""
-            flash.object = (f"✓ Applied **{len(rows)} row(s)** to {label} — "
-                            f"blank/incomplete rows drop out per the "
-                            f"populated-row rule.")
+            extra = f" ({'; '.join(notes)})" if notes else ""
+            flash.object = (f"✓ Applied **{len(rows)} row(s)** to {label}"
+                            f"{extra} — blank/incomplete rows drop out per "
+                            f"the populated-row rule.")
 
         apply_btn.on_click(_apply)
         paste_card = pn.Card(

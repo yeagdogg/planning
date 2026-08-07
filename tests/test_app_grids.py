@@ -59,6 +59,40 @@ def test_apply_block_skips_a_copied_header_row():
     assert len(rows) == 1 and rows[0]["bu"] == "ABD"
 
 
+def test_apply_block_skips_the_workbooks_own_headers():
+    """John's live repro: the WORKBOOK's headers ('Adj plan EP (000s)' etc.)
+    share no vocabulary with the app's titles — detection must be
+    content-based, not title-matching."""
+    from app.grids import LR_SCHEMA
+    from app.paste import apply_block
+    hdr = "\t".join(["Business unit", "State", "Adj plan EP (000s)",
+                     "Projected loss ratio (current rate level)",
+                     "Prospective premium trend", "Prospective loss trend",
+                     "Expense ratio", "ALAE factor", "ULAE factor",
+                     "Combined ratio", "Target loss ratio", "Cat load",
+                     "Large loss load", "Mod assumed in indication",
+                     "Mod ~1yr before as-of", "Current avg written mod",
+                     "Current mod as-of date", "Projected mod end current yr",
+                     "Projected mod end plan yr", "Projected mod end plan+1",
+                     "Net trend", "A_other", "Mod adj", "Net rate P",
+                     "Net rate P+1"])
+    data = ("ABD\tAZ\t36,000\t65.0%\t3.0%\t4.0%\t28.0%\t1.10\t1.05\t95.0%"
+            "\t58.0%\t2.0%\t1.0%\t1.008\t\t1.052\t9/30/2026\t\t1.052\t"
+            "\t\t1.0\t\t\t")
+    notes: list = []
+    rows = apply_block(LR_SCHEMA, hdr + "\n" + data, notes=notes)
+    assert notes == ["header row skipped"]
+    assert len(rows) == 1
+    assert rows[0]["ep"] == 36000.0
+    assert rows[0]["m0_asof"] == dt.date(2026, 9, 30)
+
+    # a DATA row with a couple of typos is NOT mistaken for a header —
+    # it errors loudly, naming the cell
+    bad = data.replace("36,000", "thirty-six")
+    with pytest.raises(ValueError, match="Plan EP"):
+        apply_block(LR_SCHEMA, bad)
+
+
 # ------------------------------------------------------- df/rows round trip
 
 def test_lr_rows_survive_the_grid_round_trip():
