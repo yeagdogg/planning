@@ -29,7 +29,8 @@ def build(session):
         return session.page.config
 
     # ---- one table section -------------------------------------------------
-    tables = []          # (schema, grid, get_rows, set_rows) for reseeds
+    tables = []          # (label, schema, grid, get_rows) for reseeds
+    paste_parts = {}     # label -> (textarea, apply button, flash pane)
 
     def section(label, schema, get_rows, set_rows, note):
         grid = make_grid(schema, get_rows() if scn() is not None else [])
@@ -55,8 +56,9 @@ def build(session):
         grid.param.watch(_write_back, "value")
 
         ta = pn.widgets.TextAreaInput(
-            placeholder="Paste the block copied from the workbook "
-                        "(same column order) …",
+            placeholder="Click here, then Ctrl+V the block copied from the "
+                        "workbook (same column order; a copied header row "
+                        "is skipped automatically) …",
             height=84, sizing_mode="stretch_width")
         apply_btn = pn.widgets.Button(
             label=f"Apply paste — replaces every {label} row",
@@ -64,21 +66,44 @@ def build(session):
 
         def _apply(_event):
             s = scn()
-            if s is None or not (ta.value or "").strip():
+            # value syncs on BLUR; value_input syncs per keystroke — read
+            # the live one so paste-then-click cannot race to an empty read
+            text = (ta.value_input or ta.value or "").strip()
+            if s is None:
+                flash.object = ("⚠ **No scenario open** — open a workbook "
+                                "on the Combo page first.")
+                return
+            if not text:
+                flash.object = ("⚠ **Nothing to paste** — click into the "
+                                "box and Ctrl+V the copied block, then "
+                                "Apply.")
                 return
             try:
-                rows = apply_block(schema, ta.value)
+                rows = apply_block(schema, text)
             except ValueError as e:
                 flash.object = f"⚠ **{md_safe(e)}** — nothing was applied."
                 return
-            flash.object = ""
+            if not rows:
+                flash.object = "⚠ **The pasted text held no rows.**"
+                return
             grid.value = rows_to_df(schema, rows)   # -> same write-back path
             ta.value = ""
+            ta.value_input = ""
+            flash.object = (f"✓ Applied **{len(rows)} row(s)** to {label} — "
+                            f"blank/incomplete rows drop out per the "
+                            f"populated-row rule.")
 
         apply_btn.on_click(_apply)
-        paste_card = pn.Card(ta, apply_btn, title="📋 Paste from Excel",
-                             collapsed=True, sizing_mode="stretch_width")
+        paste_card = pn.Card(
+            ta, apply_btn,
+            pn.pane.Markdown(
+                "*Ctrl+V pastes into the box above — pasting directly into "
+                "the grid is not supported (the grid does support Ctrl+C "
+                "copy-out).*"),
+            title="📋 Paste a block from Excel",
+            collapsed=False, sizing_mode="stretch_width")
         tables.append((label, schema, grid, get_rows))
+        paste_parts[label] = (ta, apply_btn, flash)
         body = pn.Column(pn.pane.Markdown(note), paste_card, flash, grid,
                          sizing_mode="stretch_width")
         return body
@@ -195,4 +220,4 @@ def build(session):
     return {"main": pn.Column(strip, sizing_mode="stretch_both"),
             "sidebar": sidebar, "bag": bag,
             "tables": {label: grid for label, _s, grid, _g in tables},
-            "rail": rail}
+            "paste": paste_parts, "rail": rail}

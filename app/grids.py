@@ -194,6 +194,9 @@ def make_grid(schema, rows: list, *, height: int = 440):
         layout="fit_data_table",
         height=height,
         sizing_mode="stretch_width",
-        configuration={"clipboard": True},
+        # copy OUT works (Ctrl+C a selection); paste-IN deliberately does
+        # not: Tabulator's client-side paste never reaches Panel's model, so
+        # advertising it would eat user edits — the paste card is the path
+        configuration={"clipboard": "copy"},
     )
     return grid

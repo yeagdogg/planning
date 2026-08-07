@@ -77,12 +77,23 @@ def coerce(kind: str, raw: Any) -> Optional[Any]:
     return v
 
 
-def apply_block(schema: list, text: str) -> list:
+def apply_block(schema: list, text: str, skip_header: bool = True) -> list:
     """Pasted rectangle -> row dicts in ``schema`` order. ``schema`` is
     [(key, title, kind), ...]; extra pasted columns are ignored, short rows
-    pad with None. Raises ValueError naming the cell on a bad value."""
+    pad with None. Raises ValueError naming the cell on a bad value.
+
+    ``skip_header``: people copy the header row along with the block more
+    often than not — a first line whose cells match the column titles is
+    dropped rather than reported as 'cannot read number: BU'."""
+    lines = parse_block(text)
+    if skip_header and lines:
+        titles = {t.strip().lower() for _k, t, _kind in schema}
+        first = [c.strip().lower() for c in lines[0] if isinstance(c, str)]
+        hits = sum(1 for c in first if c in titles)
+        if first and hits >= max(2, len(first) // 2):
+            lines = lines[1:]
     out = []
-    for i, cells in enumerate(parse_block(text)):
+    for i, cells in enumerate(lines):
         row = {}
         for j, (key, title, kind) in enumerate(schema):
             raw = cells[j] if j < len(cells) else None

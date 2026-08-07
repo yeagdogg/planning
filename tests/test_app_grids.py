@@ -49,6 +49,16 @@ def test_apply_block_names_the_bad_cell():
         apply_block(RL_SCHEMA, "ABD\tAZ\tnot-a-date\t10%\ttaken")
 
 
+def test_apply_block_skips_a_copied_header_row():
+    from app.paste import apply_block
+    from app.grids import RL_SCHEMA
+    text = ("BU\tState\tEffective\tFiled %\tStatus\tConsidered"
+            "\tAchievement\tComment\n"
+            "ABD\tAZ\t3/31/2026\t10.3%\ttaken\tY\t\t")
+    rows = apply_block(RL_SCHEMA, text)
+    assert len(rows) == 1 and rows[0]["bu"] == "ABD"
+
+
 # ------------------------------------------------------- df/rows round trip
 
 def test_lr_rows_survive_the_grid_round_trip():
@@ -142,3 +152,46 @@ def _snap(session):
     """compute.results wants only the plain attribute surface."""
     return SimpleNamespace(page=session.page, bus=session.bus,
                            ctx=SimpleNamespace(results_rev=0))
+
+
+@pytest.mark.skipif(
+    __import__("importlib").util.find_spec("panel") is None,
+    reason="panel not installed (system interpreter — app venv runs this)")
+def test_paste_card_button_flow():
+    """The user's actual motion: paste into the box (value_input — the
+    keystroke-synced param, since ``value`` only syncs on blur and can race
+    the click), press Apply, rows land, feedback shows. Plus the two
+    failure paths that must never be silent."""
+    from app import importers
+    from app.glue.session import PlanSession
+    from app.pages import inputs as inputs_page
+
+    session = PlanSession()
+    page = inputs_page.build(session)
+    ta, btn, flash = page["paste"]["Rate Log"]
+
+    # no scenario yet -> loud, not silent
+    ta.value_input = "ABD\tAZ\t3/31/2026\t10.3%\ttaken"
+    btn.clicks += 1
+    assert "No scenario open" in flash.object
+
+    session.replace_config(importers.from_workbook(WB))
+    scn = session.page.config
+
+    # empty box -> loud, not silent
+    ta.value_input = ""
+    btn.clicks += 1
+    assert "Nothing to paste" in flash.object
+
+    # the real motion: header row + one data row, via value_input only
+    ta.value_input = ("BU\tState\tEffective\tFiled %\tStatus\tConsidered"
+                      "\tAchievement\tComment\n"
+                      f"ABD\tAZ\t{scn.plan_year}-05-01\t12.0%\ttaken\t\t\t")
+    rev0 = session.bus.rev
+    btn.clicks += 1
+    assert "Applied" in flash.object and "1 row" in flash.object
+    assert session.bus.rev == rev0 + 1
+    assert len(scn.rate_rows) == 1                 # paste REPLACES the table
+    assert scn.rate_rows[0]["filed"] == pytest.approx(0.12)
+    assert scn.rate_rows[0]["eff"] == dt.date(scn.plan_year, 5, 1)
+    assert ta.value_input == "" and ta.value == ""  # box cleared after apply
