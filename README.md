@@ -132,8 +132,15 @@ python tools/recalc.py output/Plan_LR_Workbook_2027_Property.xlsx
 The recalc tool uses desktop Excel through COM automation when available (the authoritative
 calculation engine), falling back to LibreOffice headless (`soffice --convert-to xlsx`).
 LibreOffice was not installed on the build machine; Excel 16.0 via COM was used for all
-verification. Classic formula mode (Excel-2007-era functions only) is used throughout, so the
-workbook also recalculates in LibreOffice and any corporate Excel build.
+verification. **Classic formula mode** (Excel-2007-era functions only) is the default
+dialect, so the workbook recalculates in LibreOffice and any corporate Excel build. Since
+v3.13 (D113) a second dialect exists: **modern**, the same arithmetic with `LET` — named
+intermediate steps that make the long formulas readable, at the cost of an Excel
+2021+/M365 floor. Both dialects emit from one template per formula (`xlstyle.let_`),
+`tools/ab_compare.py` proves them value-identical cell by cell, and a modern build carries
+a Read Me banner plus a Checks FAIL that fire on an older Excel instead of letting it show
+stale numbers. The volatile/indirect functions, the error-swallowers, and the spill family
+stay banned in *both* dialects — the verification model depends on them staying out.
 
 ## The whole pipeline, one command
 
@@ -229,11 +236,13 @@ Log and the Mod Log are never candidates however little a light reader opens the
 alone hosts 21 named cells that ten surviving sheets read. Excel cannot hide tabs from a
 formula, so this is a build-time choice rather than a switch inside the file.
 
-At v3.12.0 every artifact is green through **phase D**, from a single
-`python tools/release.py --full --force-full`: the five 12-month lines **320 checks / 0
-failed** each, the 6-month-term Inland Marine **318 / 0**, and the combined book **65 / 0**
+At v3.13.0 every artifact is green through **phase D**, from a single
+`python tools/release.py --full --force-full`: the five 12-month lines **321 checks / 0
+failed** each, the 6-month-term Inland Marine **319 / 0**, and the combined book **65 / 0**
 (`tools/verify_book.py`, including the source-freshness phase, the Pivot Data ties and the
-Net Delivery grids). pytest 370/370. Build, recalculate, roll up the book and verify all
+Net Delivery grids). pytest 380/380. The D113 pilot pair sits beside the fleet:
+`..._Property_MODERN.xlsx` is the same Property built in the LET dialect from identical
+inputs — 223,668 cell values proven identical to classic, 321/0 through phase D itself. Build, recalculate, roll up the book and verify all
 seven — **8.9 minutes**, of which 2.5 is pytest. Verification alone is about 3.
 
 The book's 61st check is the D106 regression: where the filters resolve a state row to one

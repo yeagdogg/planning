@@ -12,13 +12,13 @@ from openpyxl.formatting.rule import ColorScaleRule, DataBarRule, FormulaRule
 from openpyxl.styles import Alignment, Border, Font, Side
 
 from .build_workbook import (Ctx, Layout as L, SHEETS, SOLVER_MAX_MOD_STEP,
-                             mod_adj_on, slot_rank)
+                             mod_adj_on)
 from .xlstyle import (ALIGN_C, ALIGN_WRAP, BORDER_THIN, DOWN_BAR, FAIL_RED, FILL_GREY,
     FILL_NAVY, FILL_PANEL, FMT_DATE, FMT_DATE_S, FMT_EP_Z, FMT_GEN, FMT_IDX,
     FMT_IDX_Z, FMT_INT, FMT_MOD, FMT_PCT, FMT_PCT_SIGNED, FMT_PCT_Z, FMT_PTS_COL,
     F_HEADER, F_LABEL, F_SMALL_IT, GREY_DARK, NAVY, STEEL, STEEL_LIGHT, TOTAL_BAR,
     UP_BAR, WARN_AMBER, add_dv, chart_legend, col, dv_decimal, dv_plan_year_date,
-    font, formula, header_row, input_cell, jump, label, link, nav_bar, note,
+    font, formula, header_row, input_cell, jump, label, let_, link, nav_bar, note,
     presentation_setup, print_setup, prose, put, section, set_widths, title,
 )
 
@@ -956,22 +956,33 @@ def build_state_summary(ctx: Ctx):
         for j in range(1, 5):
             # the LAST four, not the first (D95): a combo with six filings keeps
             # its plan-year actions at ranks 5 and 6, and those are the ones a
-            # planning exhibit exists to show
-            sq = slot_rank(f"${KY}{r}", j)
-            cnt = f"COUNTIFS(rl_key,${KY}{r},rl_seq,{sq})"
+            # planning exhibit exists to show. One template, two dialects
+            # (D113): classic expands the pairs inline — byte-identical to the
+            # pre-LET formula, three copies of the COUNTIFS and all — while
+            # modern names them once each (n = filings, seq = displayed rank,
+            # cnt = does that rank exist).
+            key = f"${KY}{r}"
+            slot_pairs = [
+                ("n", f'COUNTIFS(rl_key,{key},rl_eff,"<>")'),
+                ("seq", f"IF({{n}}>4,{{n}}-4+{j},{j})"),
+                ("cnt", f"COUNTIFS(rl_key,{key},rl_seq,{{seq}})"),
+            ]
             formula(ws, f"{ss_l(f'chg{j}_date')}{r}",
-                    f'=IF(${KY}{r}="","",IF({cnt}=0,"",'
-                    f"SUMIFS(rl_eff,rl_key,${KY}{r},rl_seq,{sq})))",
+                    "=" + let_(ctx.modern, slot_pairs,
+                               f'IF({key}="","",IF({{cnt}}=0,"",'
+                               f"SUMIFS(rl_eff,rl_key,{key},rl_seq,{{seq}})))"),
                     fmt=FMT_DATE_S, align=ALIGN_C, fill=band, border=BORDER_THIN)
             formula(ws, f"{ss_l(f'chg{j}_pct')}{r}",
-                    f'=IF(${KY}{r}="","",IF({cnt}=0,"",'
-                    f"SUMIFS(rl_reff,rl_key,${KY}{r},rl_seq,{sq})))",
+                    "=" + let_(ctx.modern, slot_pairs,
+                               f'IF({key}="","",IF({{cnt}}=0,"",'
+                               f"SUMIFS(rl_reff,rl_key,{key},rl_seq,{{seq}})))"),
                     fmt=FMT_PCT_SIGNED, align=ALIGN_C, fill=band, border=BORDER_THIN)
             formula(ws, f"{ss_l(f'chg{j}_tok')}{r}",
-                    f'=IF(${KY}{r}="","",IF({cnt}=0,"",'
-                    f'IF(COUNTIFS(rl_key,${KY}{r},rl_seq,{sq},rl_status,"planned")>0,'
-                    f'"P","T")&'
-                    f'IF(COUNTIFS(rl_key,${KY}{r},rl_seq,{sq},rl_cons,"Y")>0,"","*")))',
+                    "=" + let_(ctx.modern, slot_pairs,
+                               f'IF({key}="","",IF({{cnt}}=0,"",'
+                               f'IF(COUNTIFS(rl_key,{key},rl_seq,{{seq}},rl_status,"planned")>0,'
+                               f'"P","T")&'
+                               f'IF(COUNTIFS(rl_key,{key},rl_seq,{{seq}},rl_cons,"Y")>0,"","*")))'),
                     align=ALIGN_C, fill=band, border=BORDER_THIN)
         # counts split by status — these work in the All view too, where the
         # per-change slots are necessarily blank (they are single-BU)

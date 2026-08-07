@@ -55,8 +55,17 @@ BANNED_FUNCS = [
     "LAMBDA", "IFERROR", "IFNA", "TEXTJOIN", "IFS", "SWITCH", "MAXIFS",
     "MINIFS", "CONCAT", "TOCOL", "TOROW", "VSTACK", "HSTACK", "TAKE", "DROP",
 ]
+# D113: what the MODERN dialect un-bans, and nothing else. The volatile /
+# indirect functions stay banned in every dialect — Application.Calculate
+# sufficiency (tools/live.py) depends on the static dependency graph — as do
+# the error-swallowers (the zero-error sweep is only meaningful because an
+# error cannot hide) and the spill family (openpyxl cannot author cm metadata,
+# and every tie and paste block here is address-pinned).
+MODERN_OK = {"LET"}
 # word-boundary match so COUNTIFS/SUMIFS don't false-positive on IFS, etc.
 BANNED_RE = re.compile(r"(?<![A-Z0-9_.])(" + "|".join(BANNED_FUNCS) + r")\(")
+BANNED_RE_MODERN = re.compile(
+    r"(?<![A-Z0-9_.])(" + "|".join(f for f in BANNED_FUNCS if f not in MODERN_OK) + r")\(")
 
 PASS = 0
 FAIL = 0
@@ -169,7 +178,14 @@ def phase_a(path: Path):
               if len(ws.merged_cells.ranges)}
     check("no merged cells anywhere", not merged, str(merged))
 
-    banned_hits, ext_hits, longest = [], [], 0
+    # D113: the file declares its own dialect — the canary name exists only in
+    # a modern build, so the scan judges the workbook in front of it (the D109
+    # principle), not the config it was supposedly built from.
+    modern = "nr_ModernCanary" in wb.defined_names
+    banned_re = BANNED_RE_MODERN if modern else BANNED_RE
+    if modern:
+        print("  formula dialect: MODERN — LET allowed (nr_ModernCanary present, D113)")
+    banned_hits, ext_hits, marker_hits, longest = [], [], [], 0
     n_formulas = 0
     for ws in wb.worksheets:
         for row in ws.iter_rows():
@@ -178,12 +194,25 @@ def phase_a(path: Path):
                 if isinstance(v, str) and v.startswith("="):
                     n_formulas += 1
                     longest = max(longest, len(v))
-                    for hit in BANNED_RE.findall(v.upper()):
+                    for hit in banned_re.findall(v.upper()):
                         banned_hits.append(f"{ws.title}!{c.coordinate}: {hit}(")
                     if "[" in v and "]" in v:
                         ext_hits.append(f"{ws.title}!{c.coordinate}")
+                    # storage-prefix discipline: classic tolerates NO post-2007
+                    # marker at all; modern tolerates exactly _xlfn.LET plus
+                    # its _xlpm. variables (BANNED_RE cannot see prefixed
+                    # names — the lookbehind excludes the dot — so this scan
+                    # is what actually polices them)
+                    if "_xlfn." in v or "_xlpm." in v:
+                        for tok in re.findall(r"_xlfn\.[A-Za-z0-9_.]+", v):
+                            if not (modern and tok.upper().startswith("_XLFN.LET")):
+                                marker_hits.append(f"{ws.title}!{c.coordinate}: {tok}")
+                        if "_xlpm." in v and not modern:
+                            marker_hits.append(f"{ws.title}!{c.coordinate}: _xlpm.")
     check("no volatile / dynamic-array / prohibited functions", not banned_hits,
           "; ".join(banned_hits[:5]))
+    check("storage-prefix discipline (_xlfn/_xlpm match the declared dialect)",
+          not marker_hits, "; ".join(marker_hits[:5]))
     check("no external-workbook references", not ext_hits, "; ".join(ext_hits[:5]))
     check("defined names all present and unbroken",
           all("#REF" not in (wb.defined_names[n].attr_text or "")

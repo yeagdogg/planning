@@ -37,7 +37,7 @@ from . import engine
 from .engine import ComboInputs, ModInputs, RateChange
 from .xlstyle import quote_sheet
 
-GENERATOR_VERSION = "3.12.0"
+GENERATOR_VERSION = "3.13.0"
 
 # Leads every seeded Mod Log comment so the Checks tripwire can spot a sample
 # action left in a real book (D80). Kept short and unmistakable — a real
@@ -206,10 +206,13 @@ def load_config(path: str | Path) -> Config:
     for name, weights in profiles.items():
         if len(weights) != 12 or min(weights) < 0 or sum(weights) <= 0:
             raise ValueError(f"seasonality profile {name!r} must be 12 non-negative weights")
-    fmode = raw.get("formula_mode", "classic")
-    if fmode != "classic":
+    # D113 (supersedes the compatibility half of D18): "modern" is now a real
+    # dialect — classic formulas plus LET, for an all-M365 fleet. Classic stays
+    # the default and the two dialects build from one source (xlstyle.let_).
+    fmode = str(raw.get("formula_mode", "classic")).strip().lower()
+    if fmode not in ("classic", "modern"):
         raise ValueError(
-            f"formula_mode {fmode!r} is not implemented; only 'classic' ships (DECISIONS.md D18)."
+            f"formula_mode {fmode!r} is not recognised; 'classic' (default) or 'modern' (D113)."
         )
     bus = tuple(str(b) for b in raw["business_units"])
     states = tuple(str(s) for s in raw["states"])
@@ -673,8 +676,14 @@ class Ctx:
     we_key: str                        # worked-example combo key "BU-A|<state>"
     we_row: dict
     carried: object | None = None      # carry.CarriedInputs when rebuilt from a file (D82)
+    fmode: str = "classic"             # "classic" | "modern" — formula dialect (D113)
     names: dict = field(default_factory=dict)   # name -> (ref, description)
     lay_dyn: dict = field(default_factory=dict)  # dynamic anchors shared between builders
+
+    @property
+    def modern(self) -> bool:
+        """True when this workbook emits the LET dialect (D113)."""
+        return self.fmode == "modern"
 
     @property
     def light(self) -> bool:
@@ -775,8 +784,11 @@ HIDDEN_SHEETS = {SHEETS.LISTS, SHEETS.CALC, SHEETS.NETCALC, SHEETS.ORACLE}
 # ---------------------------------------------------------------------------
 
 
-def build(cfg: Config, lob_name: str, carried=None) -> Workbook:
+def build(cfg: Config, lob_name: str, carried=None, formula_mode=None) -> Workbook:
     """Assemble one LOB workbook.
+
+    ``formula_mode`` overrides ``cfg.formula_mode`` for THIS build — the D113
+    pilot builds the same LOB in both dialects from identical inputs.
 
     ``carried`` (a carry.CarriedInputs) replaces the sample seeds with inputs
     read out of an existing workbook, so a rebuild keeps the user's book (D82).
@@ -862,7 +874,7 @@ def build(cfg: Config, lob_name: str, carried=None) -> Workbook:
         cfg=cfg, lob=lob, wb=wb, lr_rows=lr_rows, rate_rows=rate_rows,
         mod_rows=mod_rows, season_rows=season_rows, oracle_m=oracle_m, oracle_c=oracle_c,
         oracle_solver_r=solver_res.required_change, we_key=we_key, we_row=we_row,
-        carried=carried,
+        carried=carried, fmode=(formula_mode or cfg.formula_mode),
     )
     # Build order: reference data first, then engines, then presentation.
     sheets_inputs.build_lists(ctx)
@@ -948,6 +960,11 @@ def main(argv=None) -> int:
                     help="overwrite a workbook holding real inputs (a .bak is still kept)")
     ap.add_argument("--no-backup", action="store_true",
                     help="skip the .bak copy (not recommended)")
+    ap.add_argument("--formula-mode", choices=("classic", "modern"), default=None,
+                    help="override the config's formula dialect for this build (D113)")
+    ap.add_argument("--tag", default=None,
+                    help="append _TAG to the output filename — keeps a pilot build "
+                         "(e.g. --formula-mode modern --tag MODERN) beside the real one")
     args = ap.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -965,6 +982,8 @@ def main(argv=None) -> int:
 
     for name in lob_names:
         path = output_path(cfg, out_dir, name)
+        if args.tag:
+            path = path.with_name(f"{path.stem}_{args.tag}{path.suffix}")
         carried = None
         if args.carry_forward:
             src = (path if args.carry_forward == "auto" else Path(args.carry_forward))
@@ -999,7 +1018,7 @@ def main(argv=None) -> int:
                 shutil.copy2(path, bak)
                 print(f"  {name}: backed up existing workbook -> {bak.name}")
 
-        wb = build(cfg, name, carried=carried)
+        wb = build(cfg, name, carried=carried, formula_mode=args.formula_mode)
         wb.save(path)
         print(f"wrote {path}")
     print(

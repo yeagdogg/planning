@@ -90,8 +90,14 @@ output:
   directory: output
   filename: "Plan_LR_Workbook_{plan_year}_{lob}"
 
-# classic (default): Excel-2007-era functions only â€” LibreOffice-verifiable.
-# modern is reserved (not implemented; the generator will refuse it).
+# classic (default): Excel-2007-era functions only — opens correctly on any
+#   Excel build (and LibreOffice).
+# modern (D113): the same arithmetic with LET — named intermediate steps make
+#   the long formulas readable, at the cost of an Excel 2021+/M365 floor.
+#   A modern build carries a Read Me banner + Checks FAIL that fire on older
+#   Excel instead of showing stale values. Both dialects emit from one
+#   template (xlstyle.let_) and are proven value-identical by
+#   tools/ab_compare.py. Per-build override: --formula-mode / --tag.
 formula_mode: classic
 
 solver:
@@ -102,4 +108,4 @@ theme:
   font: Calibri
 
 # Version stamped on Read Me; bump when regenerating with structural changes.
-version: 3.12.0
+version: 3.13.0

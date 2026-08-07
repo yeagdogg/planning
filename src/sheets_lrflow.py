@@ -33,7 +33,7 @@ from .xlstyle import (
     ALIGN_C, BORDER_THIN, FAIL_RED, FILL_NAVY, FILL_PANEL, FILL_STEEL,
     FMT_IDX, FMT_MOD, FMT_PCT, FMT_PTS_COL, F_LABEL, F_SMALL_IT, GREY_DARK,
     NAVY, STEEL, chart_legend, col, dv_decimal, font, formula, header_row,
-    input_cell, jump, label, link, nav_bar, presentation_setup, print_setup,
+    input_cell, jump, label, let_, link, nav_bar, presentation_setup, print_setup,
     put, quote_sheet, section, set_widths, title,
 )
 
@@ -69,18 +69,23 @@ def build_lr_flow(ctx: Ctx):
     jump(ws, "D5", "Control!C7", "Change BU/state selection >")
 
     # ---- the race, in one sentence -----------------------------------------
+    # D113: the formatted January/December endpoints each render twice in
+    # classic; modern names them once
     formula(ws, "A6",
-            '=IF(NOT(nr_SelOK),"Select a BU and state that exist in tbl_LR.",'
-            'IF(NOT(ISNUMBER(lrf_tstar)),'
-            '"Rate and price do not move this year, so there is no race to run — '
-            'the loss ratio walks with trend alone.",'
-            '"At "&TEXT(nr_Trend,"0.0%")&" net trend the year "'
-            '&IF(ABS(nr_Trend-lrf_tstar)<0.0005,"is FLAT: trend and earn-in cancel",'
-            'IF(nr_Trend>lrf_tstar,"DETERIORATES from "&TEXT(lrf_jan,"0.0%")&" in January '
-            'to "&TEXT(lrf_dec,"0.0%")&" in December — trend is winning",'
-            '"IMPROVES from "&TEXT(lrf_jan,"0.0%")&" in January to "&TEXT(lrf_dec,"0.0%")'
-            '&" in December — earn-in is winning"))'
-            '&".  They break even at "&TEXT(lrf_tstar,"0.0%")&" trend."))')
+            "=" + let_(ctx.modern,
+                       [("jan", 'TEXT(lrf_jan,"0.0%")'),
+                        ("dec", 'TEXT(lrf_dec,"0.0%")')],
+                       'IF(NOT(nr_SelOK),"Select a BU and state that exist in tbl_LR.",'
+                       'IF(NOT(ISNUMBER(lrf_tstar)),'
+                       '"Rate and price do not move this year, so there is no race to run — '
+                       'the loss ratio walks with trend alone.",'
+                       '"At "&TEXT(nr_Trend,"0.0%")&" net trend the year "'
+                       '&IF(ABS(nr_Trend-lrf_tstar)<0.0005,"is FLAT: trend and earn-in cancel",'
+                       'IF(nr_Trend>lrf_tstar,"DETERIORATES from "&{jan}&" in January '
+                       'to "&{dec}&" in December — trend is winning",'
+                       '"IMPROVES from "&{jan}&" in January to "&{dec}'
+                       '&" in December — earn-in is winning"))'
+                       '&".  They break even at "&TEXT(lrf_tstar,"0.0%")&" trend."))'))
     ws["A6"].font = font(NAVY, bold=True, size=12)
     for cc in range(1, 12):
         ws.cell(row=6, column=cc).fill = FILL_PANEL

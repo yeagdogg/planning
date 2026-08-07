@@ -8,3 +8,4 @@ output/verify_*/
 *.bak.xlsx
 .claude/*.lock
 output/release-state.json
+output/*_ABBASE.xlsx

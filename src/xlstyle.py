@@ -447,6 +447,73 @@ def assert_formulas_balanced(wb):
             f"file:\n" + "\n".join(bad))
 
 
+# ---------------------------------------------------------------------------
+# One formula, two dialects (D113)
+# ---------------------------------------------------------------------------
+
+
+def _let_atomic(e: str) -> bool:
+    """Is ``e`` safe to substitute inline without parentheses? A bare name /
+    cell ref, or a single function call spanning the whole string."""
+    import re
+    if re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_.$]*", e):
+        return True
+    m = re.match(r"[A-Za-z_][A-Za-z0-9_.]*\(", e)
+    if not (m and e.endswith(")")):
+        return False
+    depth, in_str = 0, False
+    for i in range(m.end() - 1, len(e)):
+        ch = e[i]
+        if ch == '"':
+            in_str = not in_str
+        elif not in_str:
+            depth += (ch == "(") - (ch == ")")
+            if depth == 0:
+                return i == len(e) - 1
+    return False
+
+
+def _let_subst(s: str, repl: dict) -> str:
+    for n, v in repl.items():
+        s = s.replace("{" + n + "}", v)
+    return s
+
+
+def let_(modern: bool, pairs, body: str) -> str:
+    """Build one formula in either dialect from a single template (D113).
+
+    ``pairs`` is [(name, expr), ...] evaluated in order; ``expr`` and ``body``
+    reference variables as ``{name}``. Modern emits Excel's LET with the
+    storage prefixes openpyxl must write verbatim (``_xlfn.LET`` on the
+    function, ``_xlpm.`` on EVERY variable occurrence — one miss and Excel
+    repair-strips the formula, proven in the S0 spike). Classic substitutes
+    each variable's expression inline, innermost first — the repeated-inline
+    shape these formulas always had, so the two dialects are the same
+    arithmetic by construction and the A/B harness proves it cell by cell.
+
+    Returns the bare expression (no leading ``=``) so it can sit inside a
+    larger formula; callers writing whole cells prepend ``=`` as usual.
+    """
+    names = [n for n, _ in pairs]
+    if len(set(names)) != len(names):
+        raise ValueError(f"let_: duplicate variable in {names}")
+    if modern:
+        pm = {n: f"_xlpm.{n}" for n in names}
+        parts = []
+        for n, expr in pairs:
+            parts.append(f"_xlpm.{n},{_let_subst(expr, pm)}")
+        out = f"_xlfn.LET({','.join(parts)},{_let_subst(body, pm)})"
+    else:
+        repl: dict = {}
+        for n, expr in pairs:              # earlier names available to later exprs
+            e = _let_subst(expr, repl)
+            repl[n] = e if _let_atomic(e) else f"({e})"
+        out = _let_subst(body, repl)
+    if "{" in out or "}" in out:
+        raise ValueError(f"let_: unresolved variable token in output: {out[:200]}")
+    return out
+
+
 def presentation_setup(ws, gridlines_off=True, zoom=100, freeze=None, tab_color=None):
     ws.sheet_view.showGridLines = not gridlines_off
     ws.sheet_view.zoomScale = zoom

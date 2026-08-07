@@ -44,7 +44,7 @@ from .xlstyle import (ALIGN_C, ALIGN_L, BORDER_THIN, FAIL_RED, FILL_GREY, FILL_N
     FILL_PANEL, FILL_STEEL, FMT_DATE, FMT_DATE_S, FMT_IDX, FMT_INT, FMT_MOD, FMT_PCT,
     FMT_PTS_COL, F_LABEL, F_SMALL_IT, GREY_DARK, NAVY, STEEL, WARN_AMBER,
     chart_legend, col, dv_decimal, dv_plan_year_date, font, formula, header_row,
-    input_cell, jump, label, link,
+    input_cell, jump, label, let_, link,
     nav_bar, presentation_setup, print_setup, prose, put, quote_sheet, section,
     set_widths, title,
 )
@@ -683,11 +683,15 @@ def build_net_delivery(ctx: Ctx):
                 f'=IF($A{r}="","",IF(nd_BU="All",SUMIFS(calc_ep,calc_state,$A{r}),'
                 f"SUMIFS(calc_ep,calc_state,$A{r},calc_bu,nd_BU)))",
                 fmt="#,##0;-#,##0;\"\"", align=ALIGN_C, fill=band_fill, border=BORDER_THIN)
+        # D113: the state's net-mode count runs twice in classic (guard +
+        # denominator); modern names it once
         formula(ws, f"C{r}",
-                f'=IF($A{r}="","",IF(nd_BU="All",'
-                f'IF(SUMIFS(calc_netmode,calc_state,$A{r})=0,"—",'
-                f'SUMIFS(calc_netx,calc_state,$A{r})/SUMIFS(calc_netmode,calc_state,$A{r})),'
-                f"IF('{NC}'!$D${t}=0,\"—\",'{NC}'!$E${t})))",
+                "=" + let_(ctx.modern,
+                           [("nm", f"SUMIFS(calc_netmode,calc_state,$A{r})")],
+                           f'IF($A{r}="","",IF(nd_BU="All",'
+                           f'IF({{nm}}=0,"—",'
+                           f'SUMIFS(calc_netx,calc_state,$A{r})/{{nm}}),'
+                           f"IF('{NC}'!$D${t}=0,\"—\",'{NC}'!$E${t})))"),
                 fmt=PCT_S, align=ALIGN_C, fill=band_fill, border=BORDER_THIN)
         input_cell(ws, f"D{r}", None, fmt=FMT_DATE_S, required=False)
         input_cell(ws, f"E{r}", None, fmt="0.0%", required=False)

@@ -16,7 +16,7 @@ from .xlstyle import (ALIGN_C, ALIGN_WRAP, BAND_FILL, BORDER_THIN, FAIL_RED,
     FMT_DATE, FMT_DATE_S, FMT_GEN, FMT_IDX, FMT_INT, FMT_MOD, FMT_MONTH, FMT_PCT,
     FMT_PCT_SIGNED, F_HEADER, F_INPUT, F_LABEL, F_LINK, F_SMALL_IT, GREY_DARK,
     LINK_GREEN, NAVY, PASS_GREEN, STEEL, chart_legend, col, font, formula, header_row,
-    jump, label, link, nav_bar, note, presentation_setup, print_setup, prose, put,
+    jump, label, let_, link, nav_bar, note, presentation_setup, print_setup, prose, put,
     quote_sheet as _q, section, set_widths, status_banner_cf, text_height, title,
 )
 
@@ -362,11 +362,16 @@ def build_flow_dashboard(ctx: Ctx):
     absmi = f"{RE}!$G${L.RE_COH_FIRST}:$G${L.RE_COH_LAST}"
 
     def _share(r, ec):
-        mj = f"YEAR($C{r})*12+MONTH($C{r})-1"
-        frac = f"(EOMONTH($C{r},0)-$C{r}+1)/DAY(EOMONTH($C{r},0))"
-        return (f'=IF($C{r}="","",(SUMPRODUCT(({absmi}>{mj})*{wrng},{ec})'
-                f"+{frac}*SUMPRODUCT(({absmi}={mj})*{wrng},{ec}))"
-                f"/SUMPRODUCT({wrng},{ec}))")
+        # D113: month serial and month-end each compute twice in classic;
+        # modern names them (and the denominator) once
+        return "=" + let_(ctx.modern,
+                          [("mo", f"YEAR($C{r})*12+MONTH($C{r})-1"),
+                           ("eom", f"EOMONTH($C{r},0)"),
+                           ("den", f"SUMPRODUCT({wrng},{ec})")],
+                          f'IF($C{r}="","",(SUMPRODUCT(({absmi}>{{mo}})*{wrng},{ec})'
+                          f"+({{eom}}-$C{r}+1)/DAY({{eom}})"
+                          f"*SUMPRODUCT(({absmi}={{mo}})*{wrng},{ec}))"
+                          f"/{{den}})")
 
     for j in range(1, 9):
         r = cl + 2 + j
@@ -520,6 +525,12 @@ def build_checks(ctx: Ctx):
     sel = "br_selrow"
 
     # --- structural (always on) ---
+    if ctx.modern:
+        # D113: the dialect sentinel. On any Excel without LET, fullCalcOnLoad
+        # forces a recalc on open, the canary turns #NAME?, and this row goes
+        # FAIL alongside the Read Me banner — silent staleness made loud.
+        A(("Structure", "Formula dialect: modern (LET) — canary recalculates on this Excel",
+           "=0", "=IF(ISERROR(nr_ModernCanary),1,0)", 0, "FAIL"))
     A(("Structure", "Earning-profile row sums = 1 for every in-window cohort",
        "=0", "=MAX(re_rowsum_chk)", 1e-9, "FAIL"))
     A(("Structure", "Monthly earned index within [min W, max W] of contributing cohorts",
@@ -1626,11 +1637,29 @@ def build_readme(ctx: Ctx):
     ws = ctx.wb["Read Me"]
     p = ctx.p
     PROSE_W = 100  # column C hosts all paragraphs
+    dialect = ("modern formula mode (LET; requires Excel 2021+/M365)" if ctx.modern
+               else "classic formula mode (Excel-2007-era functions only)")
     title(ws, "B2", f"Calendar-Year Plan Loss Ratio Workbook — {ctx.lob.name}",
           f"Plan year {p}  |  one workbook per LOB; rows are BU x state  |  version "
           f"{ctx.cfg.version}  |  built "
           f"{dt.date.today():%m/%d/%Y} by src/build_workbook.py (generator v{GENERATOR_VERSION})"
-          f"  |  classic formula mode (Excel-2007-era functions only)")
+          f"  |  {dialect}")
+    if ctx.modern:
+        # D113 degradation sentinel. The canary is the workbook's one-cell
+        # LET; the banner is CLASSIC (IF/ISERROR), so it computes on any
+        # Excel. fullCalcOnLoad (D88) forces the recalc that trips it: an
+        # old-Excel reader sees this line in red instead of quietly stale
+        # numbers.
+        formula(ws, "Z1", "=_xlfn.LET(_xlpm.x,1,_xlpm.x)", fmt=FMT_INT)
+        ws["Z1"].font = font(GREY_DARK, size=8)
+        ctx.define("nr_ModernCanary", "Read Me", "$Z$1",
+                   "D113 dialect canary: computes 1 via LET; #NAME? on any Excel "
+                   "without LET, which trips the banner below and a Checks FAIL")
+        formula(ws, "C4",
+                '=IF(ISERROR(nr_ModernCanary),"⚠ THIS WORKBOOK REQUIRES EXCEL 2021+ / '
+                'MICROSOFT 365. On this Excel its formulas cannot calculate — values '
+                'shown are the last saved results and edits will show #NAME?.","")')
+        ws["C4"].font = font(FAIL_RED, bold=True, size=11)
 
     def para(row, text, size=10, bold=False, color=None):
         prose(ws, f"C{row}", text, size=size, bold=bold, color=color, width=PROSE_W)

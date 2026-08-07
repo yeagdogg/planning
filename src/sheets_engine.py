@@ -21,7 +21,7 @@ from .xlstyle import (ALIGN_C, BORDER_THIN, FILL_GREY, FILL_NAVY, FILL_PANEL,
     FMT_DATE, FMT_DATETIME, FMT_DATE_S, FMT_GEN, FMT_IDX, FMT_INT, FMT_MOD, FMT_MONTH,
     FMT_PCT, FMT_PCT_SIGNED, FMT_PTS_COL, F_HEADER, F_LABEL, F_SMALL_IT, GREY_DARK,
     NAVY, STEEL, STEEL_LIGHT, chart_legend, col, font, formula, header_row, jump,
-    label, link, note,
+    label, let_, link, note,
     presentation_setup, print_setup, put, section, set_widths, title,
 )
 
@@ -760,10 +760,25 @@ def build_mod_engine(ctx: Ctx):
     label(ws, "A11", "Mod actions logged for this combo")
     formula(ws, "C11", "=COUNTIF(ml_key,nr_SelKey)", fmt=FMT_INT, border=BORDER_THIN)
     label(ws, "A12", "Projected mod, end of CURRENT yr (M_endPrior)")
-    formula(ws, "C12",
-            "=IF(br_selrow=0,nr_M0,IF(N(INDEX(lr_mendprior,br_selrow))=0,"
-            + mod_drift_at_switch("nr_M0", "nr_M0Asof", "nr_M1", "N(nr_MPrior)")
-            + ",INDEX(lr_mendprior,br_selrow)))", fmt=FMT_MOD, border=BORDER_THIN)
+    # D113: classic keeps the shared mod_drift_at_switch expansion verbatim
+    # (other sites emit it too); modern names the pieces once each — the input
+    # lookup, the two boundary dates, and the drift value itself.
+    if ctx.modern:
+        c12 = "=" + let_(True, [
+            ("mep", "INDEX(lr_mendprior,br_selrow)"),
+            ("sw", "DATE(nr_PlanYear-1,12,31)+1"),
+            ("xa", "nr_M0Asof+1"),
+            ("xp", "EDATE(nr_M0Asof,-12)+1"),
+            ("drift",
+             "IF(AND({sw}<{xa},N(nr_MPrior)<>0),"
+             "nr_MPrior+(nr_M0-nr_MPrior)/({xa}-{xp})*({sw}-{xp}),"
+             "nr_M0+(nr_M1-nr_M0)/(DATE(nr_PlanYear,12,31)+1-{xa})*({sw}-{xa}))"),
+        ], "IF(br_selrow=0,nr_M0,IF(N({mep})=0,{drift},{mep}))")
+    else:
+        c12 = ("=IF(br_selrow=0,nr_M0,IF(N(INDEX(lr_mendprior,br_selrow))=0,"
+               + mod_drift_at_switch("nr_M0", "nr_M0Asof", "nr_M1", "N(nr_MPrior)")
+               + ",INDEX(lr_mendprior,br_selrow)))")
+    formula(ws, "C12", c12, fmt=FMT_MOD, border=BORDER_THIN)
     for rr in ("C11", "C12"):
         ws[rr].font = font(GREY_DARK, size=10)
     # one flat line, no wrap: column A is 6 wide and a wrapped note here would

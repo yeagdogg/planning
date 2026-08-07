@@ -16,8 +16,8 @@ from .build_workbook import Ctx, Layout as L, SHEETS
 from .sheets_inputs import RL_HELPER_HEADERS, TABLE_STYLE, _dv, rl_headers
 from .xlstyle import (ALIGN_C, ALIGN_L, BORDER_THIN, FAIL_RED, FILL_GREY, FMT_DATE,
     FMT_IDX, FMT_INT, FMT_PCT, FMT_PTS_COL, F_SMALL_IT, GREY_DARK, WARN_AMBER, font,
-    formula, header_row, input_cell, nav_bar, presentation_setup, print_setup, put,
-    quote_sheet, set_widths, title,
+    formula, header_row, input_cell, let_, nav_bar, presentation_setup, print_setup,
+    put, quote_sheet, set_widths, title,
 )
 
 RE = quote_sheet(SHEETS.RATE_ENGINE)
@@ -118,17 +118,28 @@ def build_rate_log(ctx: Ctx):
         formula(ws, f"V{r}",
                 f'=IF($J{r}="","",IF(COUNTIF(lr_key,$J{r})=0,"not in tbl_LR",'
                 f"INDEX(calc_cylr_p,MATCH($J{r},lr_key,0))))", fmt=FMT_PCT, align=ALIGN_C)
+        # D113: the same-row combo lookup runs twice in classic (once per
+        # INDEX); modern names the MATCH once
         formula(ws, f"W{r}",
-                f'=IF(OR($J{r}="",COUNTIF(lr_key,$J{r})=0),"",'
-                f"(INDEX(calc_cylr_p,MATCH($J{r},lr_key,0))"
-                f"-INDEX(calc_lrcur,MATCH($J{r},lr_key,0)))*100)",
+                "=" + let_(ctx.modern,
+                           [("m", f"MATCH($J{r},lr_key,0)")],
+                           f'IF(OR($J{r}="",COUNTIF(lr_key,$J{r})=0),"",'
+                           f"(INDEX(calc_cylr_p,{{m}})"
+                           f"-INDEX(calc_lrcur,{{m}}))*100)"),
                 fmt=FMT_PTS_COL, align=ALIGN_C)
+        # D113: classic recomputes the change's month serial twice, the
+        # month-end date twice, and the earned-exposure denominator inline;
+        # modern names each once (mo / eom / den)
         formula(ws, f"X{r}",
-                f'=IF(OR($C{r}="",$J{r}<>nr_SelKey),"",'
-                f"(SUMPRODUCT(({absmi}>YEAR($C{r})*12+MONTH($C{r})-1)*{wrng},{ecp})"
-                f"+(EOMONTH($C{r},0)-$C{r}+1)/DAY(EOMONTH($C{r},0))"
-                f"*SUMPRODUCT(({absmi}=YEAR($C{r})*12+MONTH($C{r})-1)*{wrng},{ecp}))"
-                f"/SUMPRODUCT({wrng},{ecp}))", fmt="0%", align=ALIGN_C)
+                "=" + let_(ctx.modern,
+                           [("mo", f"YEAR($C{r})*12+MONTH($C{r})-1"),
+                            ("eom", f"EOMONTH($C{r},0)"),
+                            ("den", f"SUMPRODUCT({wrng},{ecp})")],
+                           f'IF(OR($C{r}="",$J{r}<>nr_SelKey),"",'
+                           f"(SUMPRODUCT(({absmi}>{{mo}})*{wrng},{ecp})"
+                           f"+({{eom}}-$C{r}+1)/DAY({{eom}})"
+                           f"*SUMPRODUCT(({absmi}={{mo}})*{wrng},{ecp}))"
+                           f"/{{den}})"), fmt="0%", align=ALIGN_C)
         formula(ws, f"Y{r}",
                 f'=IF($C{r}="","",IF(AND($E{r}="taken",$G{r}<>"",$G{r}<>1),'
                 f'"achievement ignored — restate Filed %",""))')
