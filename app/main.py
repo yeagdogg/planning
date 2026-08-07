@@ -107,7 +107,7 @@ for _brand_css in brand_raw_css():
     if _brand_css not in pn.config.raw_css:
         pn.config.raw_css.append(_brand_css)
 
-APP_TITLE = "Planning Workbench — CY Plan Loss Ratio"
+APP_TITLE = "Westfield Planning Workbench"
 
 
 def _placeholder(title: str, blurb: str):
@@ -123,10 +123,10 @@ def _placeholder(title: str, blurb: str):
 
 
 from app.pages import combo as _combo_page  # noqa: E402
+from app.pages import inputs as _inputs_page  # noqa: E402
 
 _PAGES = {
-    "✏️ Inputs": _placeholder(
-        "Inputs", "The tbl_LR / Rate Log / Mod Log grids land here (wave P2)."),
+    "✏️ Inputs": _inputs_page.build,
     "🔬 Combo": _combo_page.build,
     "📚 Book": _placeholder(
         "Book roll-up", "All-combo view with premium-weighted aggregates (wave P4)."),
