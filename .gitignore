@@ -9,3 +9,4 @@ output/verify_*/
 .claude/*.lock
 output/release-state.json
 output/*_ABBASE.xlsx
+app/.venv/

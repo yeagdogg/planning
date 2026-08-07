@@ -1,0 +1,16 @@
+# Planning Workbench (app/) — pinned to the wfmodelingworkbench-proven stack:
+# these exact versions run Panel 1.9 on this machine's Python 3.14 and pass the
+# corporate AppControl DLL gate. The workbook pipeline does NOT use this file —
+# it keeps the system interpreter untouched (plan: non-interference).
+panel==1.9.3
+param==2.4.1
+bokeh==3.9.1
+holoviews==1.23.1
+hvplot==0.12.2
+pandas==2.3.3
+numpy==2.4.6
+openpyxl==3.1.5
+pyyaml>=6
+pywin32
+watchfiles
+pytest
