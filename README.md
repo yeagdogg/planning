@@ -205,20 +205,33 @@ one net-mode combo and is dashed elsewhere rather than approximated; and targets
 over the combos that assert one, while delivered is weighted across every combo in view.
 The Solver's *suggested* filings are not injected, so a gap means work outstanding.
 
+**The earning parallelogram, made visible (D112).** The Rate Engine's e(k, m) matrix —
+48 writing cohorts x 36 months of earned shares — renders as a shaded heatmap: zeros
+blank, intensity = share earned, headers banded navy for the plan year and steel for its
+neighbours, so the diagonal band is the classic earning diagram, live for the selected
+combo. An area chart above it walks Jan (P-1) through Dec P: the shaded area is the
+earned rate level, the navy line the written level, and the gap between them is the
+unearned runway. The shading is conditional formatting over cells that were already
+formulas, so it adds zero calculation surface — and the harness ties a cross-section of
+the matrix itself to the oracle's e(k, m). Net Delivery's microscope band gains a "share
+earned within plan yr" row from the same block. And every single-cell defined name on a
+visible sheet now carries its Methodology description as a hover note — 107 notes emitted
+from the same registry the harness binds by, so `=nr_Arate_P` explains itself in place.
+
 **A LIGHT workbook, for a reader rather than an analyst.** Set `profile: light` on any
 line in `config/config.yaml` and that workbook is built without Portfolio, Scenarios,
 Solver, Attribution, Compare and One-Pager — nor the three hidden `_calc` sections that
 exist only to serve them. Everything left is computed identically: same inputs, same
 engines, same exhibits, same Checks panel, and it verifies through phase D like any other
-file (285 checks / 0 failed, with the five exercises that drive the dropped tabs skipped
-by name). Property goes 26 sheets to 20 and 229,650 formulas to 200,471. Bridge, the Rate
+file (285 checks / 0 failed as measured at v3.9.0, with the five exercises that drive the
+dropped tabs skipped by name). Property goes 26 sheets to 20 and 229,650 formulas to 200,471. Bridge, the Rate
 Log and the Mod Log are never candidates however little a light reader opens them — Bridge
 alone hosts 21 named cells that ten surviving sheets read. Excel cannot hide tabs from a
 formula, so this is a build-time choice rather than a switch inside the file.
 
-At v3.11.0 every artifact is green through **phase D**, from a single
-`python tools/release.py --full --force-full`: the five 12-month lines **318 checks / 0
-failed** each, the 6-month-term Inland Marine **316 / 0**, and the combined book **65 / 0**
+At v3.12.0 every artifact is green through **phase D**, from a single
+`python tools/release.py --full --force-full`: the five 12-month lines **320 checks / 0
+failed** each, the 6-month-term Inland Marine **318 / 0**, and the combined book **65 / 0**
 (`tools/verify_book.py`, including the source-freshness phase, the Pivot Data ties and the
 Net Delivery grids). pytest 370/370. Build, recalculate, roll up the book and verify all
 seven — **8.9 minutes**, of which 2.5 is pytest. Verification alone is about 3.

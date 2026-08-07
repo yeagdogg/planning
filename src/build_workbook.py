@@ -37,7 +37,7 @@ from . import engine
 from .engine import ComboInputs, ModInputs, RateChange
 from .xlstyle import quote_sheet
 
-GENERATOR_VERSION = "3.11.0"
+GENERATOR_VERSION = "3.12.0"
 
 # Leads every seeded Mod Log comment so the Checks tripwire can spot a sample
 # action left in a real book (D80). Kept short and unmistakable — a real
@@ -728,6 +728,33 @@ class Ctx:
         return (net or self.we_row)["bu"]
 
 
+def _emit_name_notes(ctx: "Ctx"):
+    """Every defined name's description, as a hover note on its own cell (D112).
+
+    The descriptions have existed since D32 — but only on Methodology, a tab a
+    reader has to know to visit. A note puts the explanation where the reader
+    already is: hovering the cell a formula just pointed them at. Rules keep it
+    mechanical: single-cell names only (column ranges would stamp data grids),
+    visible sheets only, first name on a cell wins, and the text is generated
+    from the same registry the oracle harness binds by — so it cannot drift
+    from the formula it explains. Notes are calc-inert: no effect on the
+    dependency graph, recalc, or any oracle tie.
+    """
+    from openpyxl.comments import Comment
+
+    for name, (full, desc) in sorted(ctx.names.items()):
+        sheet, _, ref = full.partition("!")
+        if sheet.startswith("'"):
+            sheet = sheet[1:-1].replace("''", "'")
+        if ":" in ref or sheet in HIDDEN_SHEETS or sheet not in ctx.wb.sheetnames:
+            continue
+        cell = ctx.wb[sheet][ref.replace("$", "")]
+        if cell.comment is not None:
+            continue
+        cell.comment = Comment(f"{name}\n{desc}", "Plan LR generator",
+                               height=100, width=230)
+
+
 # Final tab order (approved redesign): orientation -> inputs -> the all-combo
 # answers -> the selected-combo deep-dive chain -> what-ifs -> audit -> docs.
 SHEET_ORDER = [
@@ -872,6 +899,7 @@ def build(cfg: Config, lob_name: str, carried=None) -> Workbook:
     sheets_report.build_readme(ctx)
 
     ctx.flush_names()
+    _emit_name_notes(ctx)
     # D71: every chart is built by now, so sweep their titles out of the plot
     # area in one place — a per-chart fix is a thing the next chart forgets.
     from .xlstyle import assert_formulas_balanced, unoverlay_titles

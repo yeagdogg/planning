@@ -17,9 +17,11 @@ from dataclasses import dataclass
 
 from .build_workbook import Ctx, Layout as L
 from .xlstyle import (ALIGN_C, BORDER_THIN, FILL_GREY, FILL_NAVY, FILL_PANEL,
+    FILL_STEEL,
     FMT_DATE, FMT_DATETIME, FMT_DATE_S, FMT_GEN, FMT_IDX, FMT_INT, FMT_MOD, FMT_MONTH,
     FMT_PCT, FMT_PCT_SIGNED, FMT_PTS_COL, F_HEADER, F_LABEL, F_SMALL_IT, GREY_DARK,
-    STEEL, chart_legend, col, font, formula, header_row, jump, label, link, note,
+    NAVY, STEEL, STEEL_LIGHT, chart_legend, col, font, formula, header_row, jump,
+    label, link, note,
     presentation_setup, print_setup, put, section, set_widths, title,
 )
 
@@ -532,14 +534,19 @@ def build_rate_engine(ctx: Ctx):
             formula(ws, f"{cL}{L.RE_COH_HDR}", f"=EDATE({prev}{L.RE_COH_HDR},1)", fmt=FMT_MONTH)
         c = ws[f"{cL}{L.RE_COH_HDR}"]
         c.font = F_HEADER
-        c.fill = FILL_NAVY
+        # D112 year banding, house convention: navy = the plan year, steel =
+        # its neighbours (Program Flow tints P-1 steel; Net Delivery tints P+1
+        # steel — this matrix spans both, so both sides go steel)
+        c.fill = FILL_NAVY if 12 <= j < 24 else FILL_STEEL
         c.alignment = ALIGN_C
         ws[f"{cL}{L.RE_ROW_MIDX}"].font = font(GREY_DARK, size=8)
         for i in range(L.N_COH):
             r = L.RE_COH_FIRST + i
+            # "0.000;;" blanks the zeros (D112): with the colour scale below,
+            # the populated diagonal band IS the earning parallelogram
             formula(ws, f"{cL}{r}",
                     f"=IF(OR({cL}$15<$G{r},{cL}$15>$G{r}+$F$5),0,"
-                    f"IF(OR({cL}$15=$G{r},{cL}$15=$G{r}+$F$5),0.5,1)/$F$5)", fmt="0.000")
+                    f"IF(OR({cL}$15=$G{r},{cL}$15=$G{r}+$F$5),0.5,1)/$F$5)", fmt="0.000;;")
             ws[f"{cL}{r}"].font = font(GREY_DARK, size=8)
         wrng = f"$H${L.RE_COH_FIRST}:$H${L.RE_COH_LAST}"
         Wrng = f"$U${L.RE_COH_FIRST}:$U${L.RE_COH_LAST}"  # in-force index (D39)
@@ -604,6 +611,68 @@ def build_rate_engine(ctx: Ctx):
     ctx.define("re_rowsum_chk", "Rate Engine",
                f"${ckL}${L.RE_COH_FIRST}:${ckL}${L.RE_COH_LAST}",
                "Per-cohort earning-profile row sums minus 1 (in-window cohorts; should be 0)")
+
+    # ------------------------------------------------------------------
+    # D112: the earning parallelogram, made visible. The matrix cells are
+    # untouched — one colour scale shades every cohort-month by its earned
+    # share, and zeros render blank ("0.000;;" above), so the shaded diagonal
+    # band IS the classic earning diagram, live for the selected combo.
+    from openpyxl.formatting.rule import ColorScaleRule
+    ws.conditional_formatting.add(
+        f"{col(mcol0)}{L.RE_COH_FIRST}:{col(mcol1)}{L.RE_COH_LAST}",
+        ColorScaleRule(start_type="num", start_value=0, start_color="FFFFFF",
+                       end_type="max", end_color=STEEL))
+
+    # Chart staging: written vs earned rate level over Jan (P-1) .. Dec P —
+    # the "current year + plan year" window (D112). Column C re-reads the
+    # in-force index (cohort column U; cohorts start Jan (P-2), so month j of
+    # the window is cohort row +12+j) and column D links the matrix E_m strip.
+    # Staging rows are outline-hidden like every other chart block, so the
+    # chart must plot hidden cells (visible_cells_only = False).
+    sh = L.RE_ROW_MODNUM + 2
+    put(ws, f"A{sh - 1}", "Chart staging (grouped) — written vs earned level, 24 months",
+        fnt=font(GREY_DARK, size=9))
+    for cidx, hdr in ((2, "Month"), (3, "Written level (in force)"),
+                      (4, "Earned level E_m"), (5, "Unearned gap")):
+        put(ws, f"{col(cidx)}{sh}", hdr, fnt=font(GREY_DARK, bold=True, size=9))
+    for j in range(24):
+        r = sh + 1 + j
+        formula(ws, f"B{r}", f"={col(mcol0 + j)}${L.RE_COH_HDR}", fmt=FMT_MONTH)
+        formula(ws, f"C{r}", f"=$U${L.RE_COH_FIRST + 12 + j}", fmt=FMT_IDX)
+        formula(ws, f"D{r}", f"={col(mcol0 + j)}${L.RE_ROW_EM}", fmt=FMT_IDX)
+        formula(ws, f"E{r}", f"=$C{r}-$D{r}", fmt="0.000")
+        for cL in "BCDE":
+            ws[f"{cL}{r}"].font = font(GREY_DARK, size=9)
+    for rr in range(sh - 1, sh + 25):
+        ws.row_dimensions[rr].outlineLevel = 1
+        ws.row_dimensions[rr].hidden = True
+
+    from openpyxl.chart import AreaChart, LineChart, Reference
+    from openpyxl.chart.marker import Marker
+    ac = AreaChart()
+    ac.add_data(Reference(ws, min_col=4, min_row=sh, max_row=sh + 24),
+                titles_from_data=True)
+    ac.set_categories(Reference(ws, min_col=2, min_row=sh + 1, max_row=sh + 24))
+    ac.series[0].graphicalProperties.solidFill = STEEL_LIGHT
+    ac.series[0].graphicalProperties.line.solidFill = STEEL
+    lc = LineChart()
+    lc.add_data(Reference(ws, min_col=3, min_row=sh, max_row=sh + 24),
+                titles_from_data=True)
+    lc.series[0].graphicalProperties.line.solidFill = NAVY
+    lc.series[0].graphicalProperties.line.width = int(2.25 * 12700)
+    lc.series[0].marker = Marker(symbol="none")
+    lc.series[0].smooth = False
+    ac += lc
+    ac.title = "Rate level, current yr + plan yr — shaded area = earned level"
+    ac.style = 2
+    ac.height = 6.6
+    ac.width = 15
+    ac.y_axis.number_format = FMT_IDX
+    ac.visible_cells_only = False
+    ac.x_axis.delete = False
+    ac.y_axis.delete = False
+    chart_legend(ac)
+    ws.add_chart(ac, f"{col(mcol0)}1")
 
     set_widths(ws, {"A": 5, "B": 11, "C": 11, "D": 6, "E": 5, "F": 10, "G": 8, "H": 6,
                     "I": 9, "J": 9, "K": 6, "L": 10, "M": 7, "N": 9, "O": 9, "P": 8,

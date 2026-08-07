@@ -189,6 +189,13 @@ def phase_a(path: Path):
           all("#REF" not in (wb.defined_names[n].attr_text or "")
               for n in wb.defined_names) and len(list(wb.defined_names)) > 80,
           f"{len(list(wb.defined_names))} names")
+    # D112: defined-name hover notes must survive the build AND Excel's resave
+    # (phase A runs on the recalculated file in the release flow). Bridge and
+    # Control alone carry well over 20 single-cell names.
+    n_notes = sum(1 for wsx in (wb["Bridge"], wb["Control"])
+                  for row in wsx.iter_rows() for c in row if c.comment)
+    check("defined-name notes present on Bridge+Control (D112)", n_notes >= 20,
+          f"{n_notes} notes")
     print(f"  formulas: {n_formulas:,}; longest: {longest} chars")
     check("automatic calculation mode",
           wb.calculation.calcMode in (None, "auto"), str(wb.calculation.calcMode))
@@ -323,6 +330,28 @@ def tie_default_state(path: Path, cfg, lob, do_recalc=True):
     check("48 cohort written-index values tie oracle", ok_w)
     check("48 cohort written-mod values tie oracle", ok_m)
     check("36 monthly earned-index values tie oracle", ok_e)
+
+    # D112: the earning-parallelogram heatmap shades the e(k, m) matrix cells —
+    # tie a cross-section of the matrix itself to the oracle's e(k, m): both
+    # half-month edges (offset 0 and t), an interior month, and the first
+    # out-of-window zero, in a prior-year and a plan-year month.
+    eng = engine.MonthlyEngine(p, combo)
+    t = combo.term_months
+    k0 = engine.month_index(p - 2, 1)              # matrix row 0 cohort
+    m0 = engine.month_index(p - 1, 1)              # matrix col 0 month
+    ok_ekm, n_ekm = True, 0
+    for j in (5, 17):                              # Jun (P-1), Jun P
+        mth = m0 + j
+        for off in (0, 1, max(1, t // 2), t, t + 1):
+            k = mth - off
+            i = k - k0
+            if not 0 <= i < L.N_COH:
+                continue
+            got = re_ws.cell(row=L.RE_COH_FIRST + i,
+                             column=L.RE_MATRIX_COL + j).value
+            ok_ekm &= approx(got if got is not None else 0.0, eng.e(k, mth), 1e-9)
+            n_ekm += 1
+    check(f"{n_ekm} earning-matrix e(k,m) cells tie oracle (D112)", ok_ekm)
 
     # EVERY BU x state combo vs oracle (via the _calc results table)
     calc = wb["_calc"]

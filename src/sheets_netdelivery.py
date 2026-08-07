@@ -860,6 +860,10 @@ def build_net_delivery(ctx: Ctx):
         cell.alignment = ALIGN_C
     band_rows = [
         ("Written weight w(m)", "H", "0.00", "t3"),
+        # D112: column Q of the cohort block is ec(k, P) — how much of this
+        # month's writings the plan year itself gets to keep. Free context for
+        # the delivery conversation: a December filing rates 1/24th of a year.
+        ("Share earned within plan yr — ec(k,P)", "Q", "0.0%", "plan"),
         ("YoY rate leg on renewals", "AG", PCT_S, "plan"),
         ("Required YoY pricing leg", "AH", PCT_S, "plan"),
         ("Required written mod level", "AI", FMT_MOD, "plan"),
