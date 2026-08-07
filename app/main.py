@@ -122,12 +122,12 @@ def _placeholder(title: str, blurb: str):
     return build
 
 
+from app.pages import combo as _combo_page  # noqa: E402
+
 _PAGES = {
     "✏️ Inputs": _placeholder(
         "Inputs", "The tbl_LR / Rate Log / Mod Log grids land here (wave P2)."),
-    "🔬 Combo": _placeholder(
-        "One combo under the microscope",
-        "Live bridge, earning parallelogram and delivery walk (waves P1/P3)."),
+    "🔬 Combo": _combo_page.build,
     "📚 Book": _placeholder(
         "Book roll-up", "All-combo view with premium-weighted aggregates (wave P4)."),
     "🗂 Scenarios": _placeholder(
