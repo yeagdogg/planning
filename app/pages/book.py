@@ -21,6 +21,7 @@ import panel as pn
 from app import compute, importers, masters
 from app.glue.bindings import WatcherBag, debounce, sync_options
 from app.glue.engineio import run_async
+from app.glue.exhibit import note_list
 from app.glue.format import (DASH, fmt_count, fmt_dollar, fmt_pct, md_safe,
                              tab_formatters)
 from app.glue.theme import FAIL_RED, NAVY
@@ -77,6 +78,21 @@ def _display(frame: pd.DataFrame) -> pd.DataFrame:
     df = frame.drop(columns=["key"]).copy()
     df["net"] = df["net"].map(lambda v: "net" if v else "")
     return df
+
+
+def _book_styles(df: pd.DataFrame) -> pd.DataFrame:
+    """The W2d chrome: the summary module's pure style helpers on the
+    all-combo table — plan-LR color scales + the EP bar (D104's look)."""
+    from app.summary import ep_bar, three_color_scale
+    css = pd.DataFrame("", index=df.index, columns=df.columns)
+    for col_ in ("lr_p", "lr_p1"):
+        for i, s in zip(df.index, three_color_scale(df[col_])):
+            if s:
+                css.loc[i, col_] = s
+    for i, s in zip(df.index, ep_bar(df["ep"])):
+        if s:
+            css.loc[i, "ep"] = s
+    return css
 
 
 def build(session):
@@ -268,7 +284,9 @@ def build(session):
         roll.insert(0, "on",
                     roll["lob"].map(lambda l: "▶" if l == active else ""))
         line_tbl.value = roll
-        table.value = _display(view)
+        disp = _display(view)
+        table.value = disp
+        table.style = disp.style.apply(_book_styles, axis=None)
 
     def _open_row(event):
         """Combo click-through: activate the line, focus the combo, go."""
@@ -306,9 +324,16 @@ def build(session):
         pn.pane.Markdown("**Filters** — empty means everything"),
         line_f, bu_f, state_f,
         sizing_mode="stretch_width")
+    book_notes = note_list([
+        "Color scale spans the combos in view (green low → red high plan "
+        "LR); the EP bar is proportional to the largest combo in view.",
+        "Rows the engine rejected carry no weight anywhere and show their "
+        "reason in the Problem column.",
+    ])
     main = pn.Column(cards, master_card,
                      pn.pane.Markdown("### By line"), line_tbl,
                      pn.pane.Markdown("### Every combo"), mix_md, table,
+                     book_notes,
                      sizing_mode="stretch_both")
     return {"main": main, "sidebar": sidebar, "bag": bag,
             "table": table, "line_tbl": line_tbl, "cards": cards,

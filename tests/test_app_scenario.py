@@ -128,7 +128,7 @@ def test_combo_page_renders_live_bridge(scenario):
     page = combo_page.build(session)
     assert set(page) >= {"main", "sidebar"}
     session.replace_config(scenario)            # data_rev fires sync/render
-    card = page["main"][0]
+    card = page["card"]                         # W2d put chips above it
     key = scenario.combo_keys()[0]
     assert "plw-bridge" in card.object
     assert key.split("|")[0] in card.object

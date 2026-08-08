@@ -18,11 +18,13 @@ from src import engine
 from app import compute, importers
 from app.glue.bindings import WatcherBag, debounce, sync_options
 from app.glue.engineio import run_async
+from app.glue.exhibit import chip, chips_html
 from app.glue.format import DASH, fmt_dollar, fmt_idx, fmt_pct, md_safe
 from app.glue.theme import FAIL_RED, NAVY, PASS_GREEN, STEEL
 from app.views import bridge as v_bridge
 from app.views import delivery as v_delivery
 from app.views import earning as v_earning
+from app.views import onlevel as v_onlevel
 
 _CARD_CSS = f"""
 <style>
@@ -155,7 +157,10 @@ def build(session):
     card = pn.pane.HTML(_bridge_html("", session.page.config, None),
                         sizing_mode="stretch_width")
 
-    # ---- deep-dive visuals (P3) --------------------------------------------
+    # ---- deep-dive visuals (P3 + the W2d on-level rectangle) ---------------
+    chips_pane = pn.pane.HTML("", sizing_mode="stretch_width")
+    ol_pane = pn.pane.HoloViews(sizing_mode="stretch_width")
+    ol_note = pn.pane.Markdown("", sizing_mode="stretch_width")
     wf_p = pn.pane.Bokeh(sizing_mode="stretch_width")
     wf_p1 = pn.pane.Bokeh(sizing_mode="stretch_width")
     lag_pane = pn.pane.HoloViews(sizing_mode="stretch_width")
@@ -166,6 +171,9 @@ def build(session):
     vis_note = pn.pane.Markdown("", sizing_mode="stretch_width")
 
     tabs = pn.Tabs(
+        # the whole reason this app exists, first (W2d, user direction)
+        ("On-level", pn.Column(ol_pane, ol_note,
+                               sizing_mode="stretch_width")),
         ("Waterfall", pn.Row(wf_p, wf_p1, sizing_mode="stretch_width")),
         ("Earning", pn.Column(lag_pane, para_pane,
                               sizing_mode="stretch_width")),
@@ -176,9 +184,12 @@ def build(session):
         sizing_mode="stretch_width")
 
     def _clear_visuals(msg: str = ""):
-        for pane in (wf_p, wf_p1, lag_pane, para_pane, walk_pane, band_pane):
+        for pane in (ol_pane, wf_p, wf_p1, lag_pane, para_pane, walk_pane,
+                     band_pane):
             pane.object = None
         race_md.object = ""
+        ol_note.object = ""
+        chips_pane.object = ""
         vis_note.object = msg
 
     def _render_visuals(key, scn, res):
@@ -186,6 +197,30 @@ def build(session):
         ci = compute.combo_inputs(scn, row)
         eng = engine.MonthlyEngine(scn.plan_year, ci)
         p = scn.plan_year
+
+        # KPI chips: verbatim EngineResult fields + the one disclosed
+        # subtraction (vs target, in points)
+        target = row.get("target")
+        vs = ((res.cy_lr_p - float(target)) * 100.0
+              if isinstance(target, (int, float)) else None)
+        chips_pane.object = chips_html(
+            chip(f"CY {p} plan LR", fmt_pct(res.cy_lr_p)),
+            chip("vs target", DASH if vs is None else f"{vs:+.1f} pts",
+                 sub=(DASH if target is None
+                      else f"target {fmt_pct(target)}"),
+                 bad=bool(vs is not None and vs > 0)),
+            chip(f"CY {p + 1} plan LR", fmt_pct(res.cy_lr_p1),
+                 sub="indicative"),
+            chip("earned chg vs indication",
+                 fmt_pct(res.earned_chg_vs_ind, signed=True)),
+            chip(f"YoY earned {p - 1}→{p}",
+                 fmt_pct(res.yoy_earned_p, signed=True)))
+
+        fr = v_onlevel.onlevel_frame(ci, res)
+        ol_pane.object = v_onlevel.onlevel(ci, res, frame=fr)
+        ol_note.object = ("\n".join(f"*{md_safe(n)}*" for n in fr.notes)
+                          if fr.notes else "")
+
         start, steps_p, steps_p1, _net = v_bridge.chain(scn, key, res)
         wf_p.object = v_bridge.waterfall_figure(
             f"CY {p}: how the plan LR is built",
@@ -239,10 +274,12 @@ def build(session):
         pn.layout.Divider(),
         combo_sel,
         sizing_mode="stretch_width")
-    main = pn.Column(card, vis_note, tabs, sizing_mode="stretch_both")
+    main = pn.Column(chips_pane, card, vis_note, tabs,
+                     sizing_mode="stretch_both")
     return {"main": main, "sidebar": sidebar, "bag": bag,
-            "combo_sel": combo_sel,
+            "card": card, "combo_sel": combo_sel,
             "panes": {"waterfall_p": wf_p, "waterfall_p1": wf_p1,
                       "earn_lag": lag_pane, "parallelogram": para_pane,
                       "race": race_md, "walk": walk_pane, "band": band_pane,
+                      "onlevel": ol_pane, "chips": chips_pane,
                       "note": vis_note}}

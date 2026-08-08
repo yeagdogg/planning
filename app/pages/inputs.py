@@ -14,6 +14,7 @@ import panel as pn
 
 from app import validate as validate_mod
 from app.glue.bindings import WatcherBag, debounce
+from app.glue.exhibit import note_list
 from app.glue.format import md_safe
 from app.grids import (LR_SCHEMA, ML_SCHEMA, RL_SCHEMA, SE_SCHEMA,
                        grid_to_season, make_grid, rows_equal, rows_to_df,
@@ -222,7 +223,18 @@ def build(session):
         pn.layout.Divider(),
         rail,
         sizing_mode="stretch_width")
-    return {"main": pn.Column(strip, sizing_mode="stretch_both"),
+    page_notes = note_list([
+        "Blank and 0 are DIFFERENT values: a blank Net rate P means no "
+        "net selection; 0% means net mode ON at a zero target. Blanks "
+        "render blank (W2a).",
+        "Percent columns hold FRACTIONS (0.103 = 10.3%) — pasting "
+        "'10.3%' or '0.103' both land as 0.103.",
+        "Paste replaces the whole table; blank/incomplete rows drop out "
+        "per the populated-row rule (BU + State, plus a date for the "
+        "logs).",
+    ])
+    return {"main": pn.Column(strip, page_notes,
+                              sizing_mode="stretch_both"),
             "sidebar": sidebar, "bag": bag,
             "tables": {label: grid for label, _s, grid, _g in tables},
             "paste": paste_parts, "rail": rail,

@@ -47,9 +47,13 @@ def chip(label: str, value: str, sub: str = "", bad: bool = False) -> str:
             f"<div class='{cls}'>{md_safe(value)}</div>{s}</div>")
 
 
+def chips_html(*chips: str) -> str:
+    """The full chip-row html — for panes that update in place."""
+    return _CSS + "<div class='plw-chips'>" + "".join(chips) + "</div>"
+
+
 def chip_row(*chips: str) -> pn.pane.HTML:
-    return pn.pane.HTML(_CSS + "<div class='plw-chips'>" + "".join(chips)
-                        + "</div>", sizing_mode="stretch_width")
+    return pn.pane.HTML(chips_html(*chips), sizing_mode="stretch_width")
 
 
 def exhibit_header(title: str, subtitle: str) -> pn.pane.HTML:
