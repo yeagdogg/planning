@@ -116,3 +116,69 @@ def band(eng, plan_year: int):
         title=(f"Share earned within the plan year — ec(k, P): what "
                f"CY {plan_year} keeps of each month it writes"),
         fontsize={"title": "9pt"})
+
+
+# --------------------------------------------------- W3d: the walk, deeper
+
+def walk_table_frame(flow: LrFlowResult, target=None) -> pd.DataFrame:
+    """The LR Flow walk TABLE: the 24 engine rows verbatim plus the one
+    disclosed subtraction (vs target, in points). Dead months keep None
+    everywhere (rendered em-dash, never zero)."""
+    rows = []
+    for r in flow.rows:
+        ts = pd.Timestamp(mi_year(r["mi"]), mi_month(r["mi"]), 1)
+        vs = (None if r["lr"] is None or target is None
+              else (r["lr"] - float(target)) * 100.0)
+        rows.append(dict(
+            label=f"{ts:%b %Y}", trend_factor=r["trend_factor"],
+            a_rate=r["a_rate"], a_mod=r["a_mod"], lr=r["lr"],
+            vs_target=vs, den=r["den"], weight=r["weight"]))
+    return pd.DataFrame(rows)
+
+
+def headroom(flow: LrFlowResult, trend: float):
+    """(points, bad): trend minus breakeven — positive means trend beats
+    earn-in and the year deteriorates. None when there is no race."""
+    if flow.breakeven_trend is None:
+        return None, False
+    pts = (trend - flow.breakeven_trend) * 100.0
+    return pts, pts > 0
+
+
+def recon_rows(flow: LrFlowResult) -> list:
+    """The LR Flow reconciliation strip: premium-weighted mean vs the CY
+    headline, the residual in bp decomposed into covariance + trend
+    centre-of-gravity tilt + convexity, and the identity check — which
+    must be zero to floating point, and is (mean = head x (1+tilt) x
+    (1+convexity) / (1+cov))."""
+    bp = 10_000.0
+    ident = flow.mean_p - flow.head_p * (1.0 + flow.cog_tilt_p) \
+        * (1.0 + flow.convexity_p) / (1.0 + flow.cov_rate_price)
+    return [
+        ("Premium-weighted mean, CY P", f"{flow.mean_p:.2%}"),
+        ("CY P headline", f"{flow.head_p:.2%}"),
+        ("Residual", f"{flow.resid_p * bp:+.1f} bp"),
+        ("…of which rate × price covariance",
+         f"{flow.cov_rate_price * bp:+.1f} bp"),
+        ("…of which trend centre-of-gravity tilt",
+         f"{flow.cog_tilt_p * bp:+.1f} bp"),
+        ("…of which trend convexity (Jensen)",
+         f"{flow.convexity_p * bp:+.1f} bp"),
+        ("Unexplained (identity check — must be zero)",
+         f"{ident * bp:+.2f} bp"),
+        ("Mean vs headline, CY P+1",
+         f"{flow.mean_p1:.2%} vs {flow.head_p1:.2%}"),
+    ]
+
+
+def recon_html(flow: LrFlowResult) -> str:
+    rows = "".join(
+        f"<tr><td style='padding:1px 10px 1px 0; color:#595959'>{k}</td>"
+        f"<td style='text-align:right; font-weight:600'>{v}</td></tr>"
+        for k, v in recon_rows(flow))
+    return (f"<div style='font-variant-numeric:tabular-nums; "
+            f"color:{NAVY}; font-size:0.9em'>"
+            f"<div style='font-weight:700; margin:6px 0 2px'>Mean vs "
+            f"headline — the D46 reconciliation (disclosed, never "
+            f"normalised away)</div>"
+            f"<table style='border-collapse:collapse'>{rows}</table></div>")

@@ -19,11 +19,13 @@ from app import compute, importers
 from app.glue.bindings import WatcherBag, debounce, sync_options
 from app.glue.engineio import run_async
 from app.glue.exhibit import chip, chips_html
-from app.glue.format import DASH, fmt_dollar, fmt_idx, fmt_pct, md_safe
-from app.glue.theme import FAIL_RED, NAVY, PASS_GREEN, STEEL
+from app.glue.format import DASH, TAB_SPECS, fmt_dollar, fmt_idx, fmt_pct, \
+    md_safe
+from app.glue.theme import FAIL_RED, NAVY, PASS_GREEN, STEEL, TABLE_CSS
 from app.views import bridge as v_bridge
 from app.views import delivery as v_delivery
 from app.views import earning as v_earning
+from app.views import flow as v_flow
 from app.views import onlevel as v_onlevel
 
 _CARD_CSS = f"""
@@ -179,6 +181,49 @@ def build(session):
     band_pane = pn.pane.HoloViews(sizing_mode="stretch_width")
     vis_note = pn.pane.Markdown("", sizing_mode="stretch_width")
 
+    # ---- W3d: the Flow tab (per-combo Flow Dashboard) ----------------------
+    fl_chips = pn.pane.HTML("", sizing_mode="stretch_width")
+    fl_idx = pn.pane.HoloViews(sizing_mode="stretch_width")
+    fl_yoy = pn.pane.HoloViews(sizing_mode="stretch_width")
+    fl_run = pn.pane.HoloViews(sizing_mode="stretch_width")
+    fl_mod = pn.pane.HoloViews(sizing_mode="stretch_width")
+    fl_deliv = pn.pane.HoloViews(sizing_mode="stretch_width")
+    fl_ledger = pn.pane.HTML("", sizing_mode="stretch_width")
+    fl_note = pn.pane.Markdown("", sizing_mode="stretch_width")
+
+    # ---- W3d: the walk, deeper (chips + table + reconciliation) ------------
+    import pandas as pd
+    from bokeh.models.widgets.tables import NumberFormatter
+
+    walk_chips = pn.pane.HTML("", sizing_mode="stretch_width")
+    _WALK_COLS = ["label", "trend_factor", "a_rate", "a_mod", "lr",
+                  "vs_target", "den", "weight"]
+    _WALK_KINDS = {"trend_factor": "idx", "a_rate": "idx", "a_mod": "idx",
+                   "lr": "pct", "vs_target": "pts", "den": "idx",
+                   "weight": "idx"}
+    walk_tbl = pn.widgets.Tabulator(
+        pd.DataFrame(columns=_WALK_COLS),
+        disabled=True, show_index=False,
+        titles={"label": "Month", "trend_factor": "Trend factor",
+                "a_rate": "Rate earn-in", "a_mod": "Mod earn-in",
+                "lr": "Plan LR", "vs_target": "vs target (pts)",
+                "den": "Earned exposure", "weight": "Premium weight"},
+        formatters={k: NumberFormatter(format=TAB_SPECS[kind],
+                                       nan_format="—", null_format="—")
+                    for k, kind in _WALK_KINDS.items()},
+        text_align={k: "right" for k in _WALK_KINDS},
+        layout="fit_data_table", max_height=760,
+        selectable=False, stylesheets=[TABLE_CSS],
+        hidden_columns=["_index"],
+        configuration={"clipboard": "copy"},
+        sizing_mode="stretch_width")
+    recon_pane = pn.pane.HTML("", sizing_mode="stretch_width")
+
+    def _walk_styles(d):
+        css = pd.DataFrame("", index=d.index, columns=d.columns)
+        css.iloc[12:, :] = "background-color: #EDF1F6"   # P+1 tinted
+        return css
+
     tabs = pn.Tabs(
         # the whole reason this app exists, first (W2d, user direction)
         ("On-level", pn.Column(pn.Row(ol_window, ol_basis),
@@ -187,7 +232,11 @@ def build(session):
         ("Waterfall", pn.Row(wf_p, wf_p1, sizing_mode="stretch_width")),
         ("Earning", pn.Column(lag_pane, para_pane,
                               sizing_mode="stretch_width")),
-        ("Monthly walk", pn.Column(race_md, walk_pane,
+        ("Flow", pn.Column(fl_chips, fl_idx, fl_yoy, fl_run, fl_mod,
+                           fl_deliv, fl_ledger, fl_note,
+                           sizing_mode="stretch_width")),
+        ("Monthly walk", pn.Column(race_md, walk_chips, walk_pane,
+                                   walk_tbl, recon_pane,
                                    sizing_mode="stretch_width")),
         ("Delivery", pn.Column(band_pane, sizing_mode="stretch_width")),
         dynamic=False,                       # dynamic=True makes deaf cards
@@ -195,12 +244,16 @@ def build(session):
 
     def _clear_visuals(msg: str = ""):
         for pane in (ol_pane, wf_p, wf_p1, lag_pane, para_pane, walk_pane,
-                     band_pane):
+                     band_pane, fl_idx, fl_yoy, fl_run, fl_mod, fl_deliv):
             pane.object = None
         race_md.object = ""
         ol_note.object = ""
         ol_basis.visible = False
         chips_pane.object = ""
+        for h in (fl_chips, fl_ledger, walk_chips, recon_pane):
+            h.object = ""
+        fl_note.object = ""
+        walk_tbl.value = walk_tbl.value.iloc[0:0]
         vis_note.object = msg
 
     def _render_visuals(key, scn, res):
@@ -258,12 +311,63 @@ def build(session):
                                     f"CY {p + 1} plan LR"))
         lag_pane.object = v_earning.earn_lag(res)
         para_pane.object = v_earning.parallelogram(eng, p)
+
+        # ---- the Flow tab (W3d): the Excel Flow Dashboard, live ------------
+        pf = engine.program_flow_by_month(p, ci)
+        fdf = v_flow.dashboard_frame(res, pf, ci)
+        dec_run = float(fdf.loc[fdf["mi"] == engine.month_index(p, 12),
+                                "runway"].iloc[0])
+        fl_chips.object = chips_html(
+            chip(f"avg YoY delivered, CY {p}",
+                 fmt_pct(pf.avg_delivered_ratio - 1.0, signed=True),
+                 sub="w-weighted mean of monthly ratios"),
+            chip(f"avg YoY delivered, CY {p - 1}",
+                 fmt_pct(pf.avg_delivered_ratio_prior - 1.0, signed=True),
+                 sub="the year currently flowing"),
+            chip(f"carryover into CY {p + 1}",
+                 fmt_pct(res.yoy_earned_p1, signed=True),
+                 sub="earned rate chg, next year"),
+            chip(f"runway at Dec {p}", fmt_pct(dec_run, signed=True),
+                 sub="written / earned − 1"))
+        fl_idx.object = v_flow.index_chart(fdf, p)
+        fl_yoy.object = v_flow.yoy_bars(fdf, p, net_mode=ci.net_mode)
+        fl_run.object = v_flow.runway_line(fdf, p)
+        mp = v_flow.mod_price_chart(fdf, ci, p)
+        fl_mod.object = mp
+        fl_mod.visible = mp is not None
+        fl_deliv.object = v_flow.delivery_chart(fdf, ci, p)
+        ldf, totals = v_flow.ledger_frame(eng, ci, res)
+        fl_ledger.object = v_flow.ledger_html(ldf, totals, p)
+        if ci.net_mode:
+            fl_note.object = ("*Mod path & price index not drawn: the net "
+                              "path already combines rate and price — one "
+                              "combined series, never two.*")
+        elif not ci.mod_adjustment_enabled:
+            fl_note.object = ("*Mod path & price index not drawn: the mod "
+                              "adjustment is OFF — the program is "
+                              "rate-only.*")
+        else:
+            fl_note.object = ""
+
+        # ---- the walk, deeper (W3d) ----------------------------------------
         flow = engine.lr_flow_by_month(p, ci)
         race_md.object = "**" + v_delivery.race_sentence(flow,
                                                          ci.net_trend) + "**"
         target = row.get("target")
-        walk_pane.object = v_delivery.walk(
-            flow, target if isinstance(target, (int, float)) else None)
+        t_ok = target if isinstance(target, (int, float)) else None
+        pts, bad = v_delivery.headroom(flow, ci.net_trend)
+        walk_chips.object = chips_html(
+            chip("breakeven net trend",
+                 DASH if flow.breakeven_trend is None
+                 else fmt_pct(flow.breakeven_trend)),
+            chip("headroom", DASH if pts is None else f"{pts:+.1f} pts",
+                 sub="trend − breakeven; positive = trend wins", bad=bad),
+            chip("trend in force", fmt_pct(ci.net_trend, signed=True)))
+        walk_pane.object = v_delivery.walk(flow, t_ok)
+        wdf = v_delivery.walk_table_frame(flow, t_ok)
+        walk_tbl.value = wdf
+        walk_tbl.style = wdf.style.apply(_walk_styles, axis=None)
+        recon_pane.object = v_delivery.recon_html(flow)
         band_pane.object = v_delivery.band(eng, p)
         vis_note.object = ""
 
@@ -310,6 +414,12 @@ def build(session):
                       "earn_lag": lag_pane, "parallelogram": para_pane,
                       "race": race_md, "walk": walk_pane, "band": band_pane,
                       "onlevel": ol_pane, "chips": chips_pane,
-                      "note": vis_note},
+                      "note": vis_note,
+                      "flow_chips": fl_chips, "flow_index": fl_idx,
+                      "flow_yoy": fl_yoy, "flow_runway": fl_run,
+                      "flow_mod": fl_mod, "flow_delivery": fl_deliv,
+                      "flow_ledger": fl_ledger, "flow_note": fl_note,
+                      "walk_chips": walk_chips, "recon": recon_pane},
+            "walk_tbl": walk_tbl,
             "ol_window": ol_window, "ol_basis": ol_basis,
             "ol_note": ol_note}
