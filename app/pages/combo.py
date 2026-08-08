@@ -18,7 +18,7 @@ from src import engine
 from app import compute, importers
 from app.glue.bindings import WatcherBag, debounce, sync_options
 from app.glue.engineio import run_async
-from app.glue.exhibit import chip, chips_html
+from app.glue.exhibit import chip, chips_html, html_pane as ex_html_pane
 from app.glue.format import DASH, TAB_SPECS, fmt_dollar, fmt_idx, fmt_pct, \
     md_safe
 from app.glue.theme import FAIL_RED, NAVY, PASS_GREEN, STEEL, TABLE_CSS
@@ -29,27 +29,6 @@ from app.views import earning as v_earning
 from app.views import flow as v_flow
 from app.views import netdeliv as v_nd
 from app.views import onlevel as v_onlevel
-
-_CARD_CSS = f"""
-<style>
-.plw-bridge {{ font-family: var(--body-font, Segoe UI), sans-serif; }}
-.plw-bridge h3 {{ color: {NAVY}; margin: 0 0 2px 0; }}
-.plw-bridge .sub {{ color: #666; font-size: 0.85em; margin-bottom: 10px; }}
-.plw-bridge table {{ border-collapse: collapse; min-width: 460px; }}
-.plw-bridge td, .plw-bridge th {{ padding: 5px 14px; text-align: right;
-  border-bottom: 1px solid #e3e6ea; font-variant-numeric: tabular-nums; }}
-.plw-bridge td:first-child {{ text-align: left; }}
-.plw-bridge tr.total td {{ border-top: 2px solid {NAVY}; font-weight: 700;
-  color: {NAVY}; }}
-.plw-bridge .pts {{ color: #777; }}
-.plw-badge {{ display: inline-block; padding: 1px 8px; border-radius: 9px;
-  font-size: 0.78em; color: #fff; background: {STEEL};
-  vertical-align: middle; margin-left: 8px; }}
-.plw-badge.net {{ background: {PASS_GREEN}; }}
-.plw-err {{ color: {FAIL_RED}; font-weight: 600; }}
-</style>
-"""
-
 
 def _chain_rows(start, steps, total_label):
     """(label, factor, running) rows for one bridge chain plus its total."""
@@ -63,10 +42,10 @@ def _chain_rows(start, steps, total_label):
 
 def _bridge_html(key: str, scn, res) -> str:
     if res is None:
-        return (_CARD_CSS + "<div class='plw-bridge'><h3>No result</h3>"
+        return ("<div class='plw-bridge'><h3>No result</h3>"
                 "<div class='sub'>Open a workbook and pick a combo.</div></div>")
     if compute.is_error(res):
-        return (_CARD_CSS + f"<div class='plw-bridge'><h3>{md_safe(key)}</h3>"
+        return (f"<div class='plw-bridge'><h3>{md_safe(key)}</h3>"
                 f"<div class='plw-err'>engine rejected this row: "
                 f"{md_safe(res[1])}</div></div>")
     p = scn.plan_year
@@ -94,7 +73,7 @@ def _bridge_html(key: str, scn, res) -> str:
            f"EP {fmt_dollar(ep) if ep else DASH} · "
            f"CRL_ind {fmt_idx(res.crl_ind)} · "
            f"E_CY({p}) {fmt_idx(res.e_cy[p])}")
-    return (_CARD_CSS + f"<div class='plw-bridge'><h3>{md_safe(key)}{badge}"
+    return (f"<div class='plw-bridge'><h3>{md_safe(key)}{badge}"
             f"</h3><div class='sub'>{sub}</div>"
             + table(f"CY {p}", rows_p, tot_p, f"CY {p} plan loss ratio")
             + "<div style='height:12px'></div>"
@@ -158,11 +137,11 @@ def build(session):
     _adopt_focus()
 
     # ---- main: the live bridge card ---------------------------------------
-    card = pn.pane.HTML(_bridge_html("", session.page.config, None),
-                        sizing_mode="stretch_width")
+    card = ex_html_pane()
+    card.object = _bridge_html("", session.page.config, None)
 
     # ---- deep-dive visuals (P3 + the W2d on-level rectangle) ---------------
-    chips_pane = pn.pane.HTML("", sizing_mode="stretch_width")
+    chips_pane = ex_html_pane()
     ol_pane = pn.pane.HoloViews(sizing_mode="stretch_width")
     ol_note = pn.pane.Markdown("", sizing_mode="stretch_width")
     # W3b interaction: the P-1 strip halves horizontal resolution, so it
@@ -184,7 +163,7 @@ def build(session):
     vis_note = pn.pane.Markdown("", sizing_mode="stretch_width")
 
     # ---- W3d: the Flow tab (per-combo Flow Dashboard) ----------------------
-    fl_chips = pn.pane.HTML("", sizing_mode="stretch_width")
+    fl_chips = ex_html_pane()
     fl_idx = pn.pane.HoloViews(sizing_mode="stretch_width")
     fl_yoy = pn.pane.HoloViews(sizing_mode="stretch_width")
     fl_run = pn.pane.HoloViews(sizing_mode="stretch_width")
@@ -197,7 +176,7 @@ def build(session):
     import pandas as pd
     from bokeh.models.widgets.tables import NumberFormatter
 
-    walk_chips = pn.pane.HTML("", sizing_mode="stretch_width")
+    walk_chips = ex_html_pane()
     _WALK_COLS = ["label", "trend_factor", "a_rate", "a_mod", "lr",
                   "vs_target", "den", "weight"]
     _WALK_KINDS = {"trend_factor": "idx", "a_rate": "idx", "a_mod": "idx",
@@ -231,7 +210,7 @@ def build(session):
     nd_ovr = pn.widgets.TextInput(
         name="Filed % override",
         placeholder="blank = planned filing / suggested")
-    nd_chips = pn.pane.HTML("", sizing_mode="stretch_width")
+    nd_chips = ex_html_pane()
     nd_share = pn.pane.HoloViews(sizing_mode="stretch_width")
     _MIC_KINDS = {"w": "idx", "rate_leg": "pct_signed",
                   "price_req": "pct_signed", "m_required": "mod",

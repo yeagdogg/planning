@@ -12,7 +12,7 @@ import pandas as pd
 
 from src.engine import mi_month, mi_year, month_index
 
-from app.glue.theme import NAVY, STEEL, STEEL_LIGHT
+from app.glue.theme import GREY_LINE, NAVY, STEEL, STEEL_LIGHT
 from . import ensure_hv
 
 
@@ -71,7 +71,7 @@ def parallelogram(eng, plan_year: int):
         cmap=WHITE_TO_STEEL, colorbar=False, responsive=True,
         height=min(640, max(320, 15 * n_rows + 110)), invert_yaxis=True,
         xrotation=90, xlabel="earning month", ylabel="written cohort",
-        line_color="#eeeeee", line_width=0.5,
+        line_color=GREY_LINE, line_width=0.5,
         title=(f"Earning parallelogram — share of each written cohort "
                f"earned by month (term {eng.t} mo)"),
         fontsize={"title": "9pt"}, tools=["hover"],

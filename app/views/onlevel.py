@@ -43,7 +43,8 @@ from dataclasses import dataclass, field
 from src.engine import continuous_earned_index, continuous_net_q, \
     month_coord, month_index
 
-from app.glue.theme import NAVY, STEEL, STEEL_LIGHT, WARN_AMBER
+from app.glue.theme import GREY_TEXT, NAVY, STEEL, STEEL_LIGHT, \
+    WARN_AMBER
 from . import ensure_hv
 
 
@@ -361,7 +362,7 @@ def onlevel(ci, res, frame: OnlevelFrame | None = None):
             **_DIAG_STYLE.get(d["kind"], _DIAG_STYLE["filing"]))
         for d in fr.diagonals]) if fr.diagonals else hv.Overlay([])
 
-    vlines = hv.Overlay([hv.VLine(x).opts(color="#666666", line_width=1.4,
+    vlines = hv.Overlay([hv.VLine(x).opts(color=GREY_TEXT, line_width=1.4,
                                           line_dash="dotted")
                          for x in (wx0, 0.0, 12.0, 24.0) if x >= wx0])
 

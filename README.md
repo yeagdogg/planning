@@ -478,14 +478,27 @@ app\serve.bat 8600            serve locally (own venv in app/.venv)
 python -m app.make_masters    paste-ready master blocks from the fleet -> output/masters/
 ```
 
-- **Book** — load every line in one click, or paste three **master tables** (the
-  per-line paste blocks with a leading `Line` column — a BU can write several lines, so
-  the line is always explicit). EP-weighted roll-up by the Book workbook's own `wtd()`
-  rule, filters, and click-through to any combo.
-- **Combo** — the live bridge plus its deep dives: waterfalls, the earning
-  parallelogram, the monthly race (D93), the ec(k,P) delivery band.
-- **Inputs** — the four editable grids and paste blocks (workbook column order), with
+The page architecture is the workbook's own doctrine — **Flow reports, the Summary
+edits, the Deep dive prescribes** (D116):
+
+- **Inputs** — where the book starts: the three **master tables** span every line (a
+  leading `Line` column — a BU can write several lines, so the line is always explicit)
+  and work on an empty book; below them the four per-line grids and paste blocks, with
   the Checks rules running live as you type.
+- **Book** — load every line in one click; EP-weighted roll-up by the Book workbook's
+  own `wtd()` rule, filters, click-through to any combo.
+- **State Summary** — the flagship: one row per state, levers → inputs → outputs with
+  the two plan-LR columns frozen at the right edge, live what-if with fan-out + undo,
+  and a last-change impact strip (your edit's effect on the state and TOTAL, on
+  screen). Driven by importing the workbook's own `SS_COLS` declaration (D90).
+- **Flow** — what the program delivers, month by month, across the whole book: the
+  Program Flow state×month grids with the BOOK AVG row (the engine's EP×w rule) and
+  the Net Delivery targets-vs-delivered report.
+- **Deep dive** — one combo under the microscope: the on-leveling rectangle (net
+  combos draw the NET path — restart sawtooth + anniversary echoes, D115), the live
+  bridge, waterfalls, earning, the Flow Dashboard (runway, delivered-vs-locked, the
+  carryover ledger), the monthly race with its walk table + reconciliation, and the
+  Net Delivery solve microscope (suggested change, required mod step).
 - **Scenarios** — the whole book saves to one yaml in `scenarios/`; every save appends a
   changelog entry diffed against the file it replaces, and git carries the version
   control. Load sits behind a two-step confirm. Generate real fleet workbooks from the
@@ -493,7 +506,7 @@ python -m app.make_masters    paste-ready master blocks from the fleet -> output
   `output/app/` — recalculated end to end via the system python's Excel COM session.
 
 Workbook → app → workbook → app round-trips exactly, and no app path ever overwrites
-the verified fleet in `output/`. See D114 in DECISIONS.md for the full design record.
+the verified fleet in `output/`. See D114–D116 in DECISIONS.md for the design records.
 
 ## First-open checklist
 

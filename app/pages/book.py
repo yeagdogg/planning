@@ -18,26 +18,13 @@ from __future__ import annotations
 import pandas as pd
 import panel as pn
 
-from app import compute, importers, masters
+from app import compute, importers
 from app.glue.bindings import WatcherBag, debounce, sync_options
 from app.glue.engineio import run_async
-from app.glue.exhibit import note_list
+from app.glue.exhibit import html_pane as ex_html_pane, note_list
 from app.glue.format import (DASH, fmt_count, fmt_dollar, fmt_pct, md_safe,
                              tab_formatters)
 from app.glue.theme import FAIL_RED, NAVY, TABLE_CSS
-
-_CARD_CSS = f"""
-<style>
-.plw-cards {{ display: flex; flex-wrap: wrap; gap: 10px;
-  font-family: var(--body-font, Segoe UI), sans-serif; }}
-.plw-cards .c {{ border: 1px solid #e3e6ea; border-radius: 8px;
-  padding: 8px 16px; min-width: 128px; }}
-.plw-cards .v {{ font-size: 1.35em; font-weight: 700; color: {NAVY};
-  font-variant-numeric: tabular-nums; }}
-.plw-cards .l {{ color: #777; font-size: 0.8em; }}
-.plw-cards .bad {{ color: {FAIL_RED}; }}
-</style>
-"""
 
 _FRAME_COLS = ["lob", "bu", "state", "ep", "lr_p", "lr_p1", "a_rate",
                "a_mod", "crl", "ecy", "net", "error"]
@@ -65,13 +52,13 @@ def _cards_html(w, plan_year) -> str:
     if w["errors"]:
         cards.append(card("rows the engine rejected", fmt_count(w["errors"]),
                           bad=True))
-    return _CARD_CSS + "<div class='plw-cards'>" + "".join(cards) + "</div>"
+    return "<div class='plw-cards'>" + "".join(cards) + "</div>"
 
 
-_EMPTY_HTML = (_CARD_CSS + "<div class='plw-cards'><div class='c'>"
-               "<div class='v'>—</div><div class='l'>No lines loaded — use "
-               "<b>Load every line</b>, or open one workbook on the Combo "
-               "page.</div></div></div>")
+_EMPTY_HTML = ("<div class='plw-cards'><div class='c'>"
+               "<div class='v'>—</div><div class='l'>No lines loaded — paste the "
+               "masters on the <b>Inputs</b> page, or use "
+               "<b>Load every line</b> here.</div></div></div>")
 
 
 def _display(frame: pd.DataFrame) -> pd.DataFrame:
@@ -161,7 +148,8 @@ def build(session):
     sync_options(state_f, _state_opts, session.ctx.param.data_rev, bag=bag)
 
     # ---- main: cards, per-line roll-up, all combos -------------------------
-    cards = pn.pane.HTML(_EMPTY_HTML, sizing_mode="stretch_width")
+    cards = ex_html_pane()
+    cards.object = _EMPTY_HTML
 
     line_tbl = pn.widgets.Tabulator(
         pd.DataFrame(columns=["on", "lob", "combos", "ep", "lr_p", "lr_p1",
@@ -205,69 +193,6 @@ def build(session):
         "the weighted plan LR; the difference is mix, disclosed rather than "
         "normalised away (D103). Click a combo row to open it on the Combo "
         "page.*", sizing_mode="stretch_width")
-
-    # ---- master paste (P5): the paste-first on-ramp ------------------------
-    master_parts = {}
-
-    def _master_section(label):
-        ta = pn.widgets.TextAreaInput(
-            placeholder=(f"Ctrl+V the {label} MASTER here — the per-line "
-                         "columns with a leading Line column. A copied "
-                         "header row is skipped automatically."),
-            # Panel's default max_length is 5000; the tbl_LR master alone
-            # is ~60KB and the browser truncates silently (W2a)
-            max_length=2_000_000,
-            height=84, sizing_mode="stretch_width")
-        apply_btn = pn.widgets.Button(
-            label=f"Apply master — replaces {label} for every pasted line",
-            button_type="warning")
-        flash = pn.pane.Markdown("", sizing_mode="stretch_width")
-
-        def _apply(_event):
-            # value syncs on BLUR; value_input per keystroke (the P2 scar)
-            text = (ta.value_input or ta.value or "").strip()
-            if not text:
-                flash.object = ("⚠ **Nothing to paste** — click into the "
-                                "box, Ctrl+V the master block, then Apply.")
-                return
-            notes: list = []
-            try:
-                by, created = masters.apply_master(session, label, text,
-                                                   notes=notes)
-            except ValueError as e:
-                flash.object = f"⚠ **{md_safe(e)}** — nothing was applied."
-                return
-            if not by:
-                flash.object = "⚠ **The pasted text held no populated rows.**"
-                return
-            ta.value = ""
-            ta.value_input = ""
-            parts = ", ".join(f"{md_safe(ln)} ({len(rows)})"
-                              for ln, rows in by.items())
-            newly = ("" if not created else
-                     " — new line(s): " + ", ".join(md_safe(c)
-                                                    for c in created))
-            extra = f" ({'; '.join(notes)})" if notes else ""
-            flash.object = (f"✓ Applied **{label}** to {len(by)} line(s): "
-                            f"{parts}{newly}{extra}. Lines not in the paste "
-                            f"kept theirs.")
-
-        apply_btn.on_click(_apply)
-        master_parts[label] = (ta, apply_btn, flash)
-        return pn.Column(ta, apply_btn, flash, sizing_mode="stretch_width")
-
-    master_card = pn.Card(
-        pn.pane.Markdown(
-            "*One table per master, spanning every line — column order is "
-            "the per-line paste block with a leading **Line** column "
-            "(a BU can write several lines, so the line is never "
-            "inferred). Lines present in a paste get that table replaced; "
-            "absent lines keep theirs.*"),
-        pn.Tabs(*[(lbl, _master_section(lbl)) for lbl in masters.MASTERS],
-                dynamic=False, sizing_mode="stretch_width"),
-        title="📋 Master paste — start or update the whole book from "
-              "three tables",
-        collapsed=True, sizing_mode="stretch_width")
 
     def _view(frame: pd.DataFrame) -> pd.DataFrame:
         view = frame
@@ -340,7 +265,7 @@ def build(session):
         "Rows the engine rejected carry no weight anywhere and show their "
         "reason in the Problem column.",
     ])
-    main = pn.Column(cards, master_card,
+    main = pn.Column(cards,
                      pn.pane.Markdown("### By line"), line_tbl,
                      pn.pane.Markdown("### Every combo"), mix_md, table,
                      book_notes,
@@ -349,7 +274,6 @@ def build(session):
             "table": table, "line_tbl": line_tbl, "cards": cards,
             "filters": {"line": line_f, "bu": bu_f, "state": state_f},
             "open_row": _open_row, "load_btn": load_btn, "status": status,
-            "masters": master_parts,
             # Tabulator's virtual renderer tears its rows down while the
             # page is hidden and never redraws on the visibility flip —
             # main._switch calls this after re-showing (found live in P4)

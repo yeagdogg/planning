@@ -12,7 +12,8 @@ import pandas as pd
 
 from src.engine import LrFlowResult, mi_month, mi_year, month_index
 
-from app.glue.theme import FAIL_RED, NAVY, STEEL, STEEL_LIGHT
+from app.glue.theme import FAIL_RED, GREY_TEXT, NAVY, STEEL, \
+    STEEL_LIGHT
 from . import ensure_hv
 from .earning import _ym
 
@@ -173,7 +174,7 @@ def recon_rows(flow: LrFlowResult) -> list:
 
 def recon_html(flow: LrFlowResult) -> str:
     rows = "".join(
-        f"<tr><td style='padding:1px 10px 1px 0; color:#595959'>{k}</td>"
+        f"<tr><td style='padding:1px 10px 1px 0; color:{GREY_TEXT}'>{k}</td>"
         f"<td style='text-align:right; font-weight:600'>{v}</td></tr>"
         for k, v in recon_rows(flow))
     return (f"<div style='font-variant-numeric:tabular-nums; "

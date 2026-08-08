@@ -87,7 +87,7 @@ def _surface_error(exc: BaseException) -> None:
 # restart, laptop sleep) otherwise LOOKS alive while silently ignoring
 # every click. The watcher JS below sees this banner and reloads
 # automatically; the ?sid= session store brings the state back.
-pn.extension("tabulator", "floatpanel", "filedropper", notifications=True,
+pn.extension("tabulator", notifications=True,
              throttled=True,
              exception_handler=_surface_error,
              disconnect_notification=(
@@ -118,20 +118,25 @@ from app.pages import inputs as _inputs_page  # noqa: E402
 from app.pages import scenarios as _scenarios_page  # noqa: E402
 from app.pages import state_summary as _summary_page  # noqa: E402
 
+# W3g: labels dropped the emoji and the jargon; the ORDER is the flow —
+# start on Inputs (the masters live there), monitor the Book, work the
+# State Summary, watch delivery on Flow, deep-dive one combo. SLUGS ARE
+# UNCHANGED (inputs/book/summary/flow/combo/…) — bookmarks survive.
 _PAGES = {
-    "✏️ Inputs": _inputs_page.build,
-    "🔬 Combo": _combo_page.build,
-    "📚 Book": _book_page.build,
-    "🧭 Summary": _summary_page.build,
-    "🌊 Flow": _flow_page.build,
-    "🗂 Scenarios": _scenarios_page.build,
-    "📖 Guide": _guide_page.build,
+    "Inputs": _inputs_page.build,
+    "Book": _book_page.build,
+    "State Summary": _summary_page.build,
+    "Flow": _flow_page.build,
+    "Deep dive": _combo_page.build,
+    "Scenarios": _scenarios_page.build,
+    "Guide": _guide_page.build,
 }
 # nav VALUES are URL-safe slugs so the current page lives in ?page=… —
 # reloads land back where the user was, and pages become bookmarkable
-_PAGE_SLUGS = {"✏️ Inputs": "inputs", "🔬 Combo": "combo", "📚 Book": "book",
-               "🧭 Summary": "summary", "🌊 Flow": "flow",
-               "🗂 Scenarios": "scenarios", "📖 Guide": "guide"}
+_PAGE_SLUGS = {"Inputs": "inputs", "Book": "book",
+               "State Summary": "summary", "Flow": "flow",
+               "Deep dive": "combo",
+               "Scenarios": "scenarios", "Guide": "guide"}
 _SLUG_BUILDERS = {slug: _PAGES[label] for label, slug in _PAGE_SLUGS.items()}
 
 # ---- sessions that survive reloads ----------------------------------------
@@ -426,7 +431,10 @@ def build() -> pn.template.FastListTemplate:
 
     nav = pn.widgets.RadioButtonGroup(
         options=dict(_PAGE_SLUGS), value="inputs",
-        button_type="primary", orientation="vertical",
+        # outline (W3g): quiet navy outlines with the active page filled —
+        # navigation should say "where I am", not stack six solid slabs
+        button_type="primary", button_style="outline",
+        orientation="vertical",
         sizing_mode="stretch_width")
     session.goto = lambda name: setattr(nav, "value",
                                         _PAGE_SLUGS.get(name, name))

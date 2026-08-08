@@ -31,16 +31,19 @@ broken.
 
 ## The hub flow
 
-1. **Start** — Book page. Either **Load every line** (pull the current
-   fleet workbooks in) or expand **Master paste** and paste the three
-   master tables. Masters span every line with a leading **Line** column
-   (a BU can write several lines, so the line is always explicit).
+1. **Start** — Inputs page (where the app opens). Paste the three
+   MASTER tables — they span every line with a leading **Line** column
+   (a BU can write several lines, so the line is always explicit) and
+   work on an empty book — or Book page → **Load every line** to pull
+   the current fleet workbooks in.
 2. **Work** — the Book shows every combo, EP-weighted the way the Book
-   workbook aggregates. Click a row to open its Combo deep-dive
-   (bridge, waterfalls, earning parallelogram, monthly race, delivery
-   band). Edit on the Inputs page — grids or paste blocks — and every
-   surface moves through one debounced signal, with the Checks rules
-   running live in the sidebar.
+   workbook aggregates; the State Summary is the flagship (levers, the
+   pinned plan LRs, the impact strip); the Flow page shows what the
+   program delivers month by month. Click any row to open its Deep dive
+   (on-level rectangle, bridge, waterfalls, earning, flow dashboard,
+   monthly walk, net-delivery microscope). Edits move every surface
+   through one debounced signal, with the Checks rules live in the
+   Inputs sidebar.
 3. **Remember** — Scenarios page. Save the whole book to one yaml in
    `scenarios/`; each save appends a changelog entry diffed against the
    file it replaces ("Property · ABD|AZ: Net rate P 2.0% → 2.5%").
@@ -61,7 +64,7 @@ CONTENT and skipped, so copy them or don't.
 - **Rate Log**: {_cols(RL_SCHEMA)}
 - **Mod Log**: {_cols(ML_SCHEMA)}
 
-Masters (Book page) are the same blocks with a leading `Line` column:
+Masters (Inputs page) are the same blocks with a leading `Line` column:
 
 {masters_fmt}
 

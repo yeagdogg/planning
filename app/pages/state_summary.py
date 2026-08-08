@@ -27,7 +27,7 @@ from app.glue.bindings import WatcherBag, debounce, sync_options
 from app.glue.exhibit import banner, echo_html, echo_pane, exhibit_header, \
     note_list
 from app.glue.format import TAB_SPECS, fmt_pct, md_safe
-from app.glue.theme import NAVY, TABLE_CSS
+from app.glue.theme import GREY_LINE, NAVY, TABLE_CSS
 from app.paste import coerce
 from app.undo import UndoStack, entry
 
@@ -272,7 +272,8 @@ def build(session):
             f"<b>TOTAL</b> CY{p} {pair(b[2], a[2])} · "
             f"CY{p + 1} {pair(b[3], a[3])}",
         ]
-        return ("<div style='border:1px solid #e3e6ea; border-radius:8px; "
+        return (f"<div style='border:1px solid {GREY_LINE}; "
+                "border-radius:8px; "
                 "padding:6px 12px; font-variant-numeric:tabular-nums; "
                 f"font-size:0.95em; color:{NAVY};'>"
                 + "&nbsp; │ &nbsp;".join(parts) + "</div>")

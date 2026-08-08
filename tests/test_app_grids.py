@@ -243,10 +243,10 @@ def test_paste_card_button_flow():
     page = inputs_page.build(session)
     ta, btn, flash = page["paste"]["Rate Log"]
 
-    # no scenario yet -> loud, not silent
+    # no line active yet -> loud, not silent (W3g points at the masters)
     ta.value_input = "ABD\tAZ\t3/31/2026\t10.3%\ttaken"
     btn.clicks += 1
-    assert "No scenario open" in flash.object
+    assert "No line active" in flash.object and "MASTERS" in flash.object
 
     session.replace_config(importers.from_workbook(WB))
     scn = session.page.config

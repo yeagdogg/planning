@@ -144,3 +144,71 @@ def test_input_grid_chrome_keeps_selection():
     assert grid.height is None
     assert grid.max_height == 560
     assert grid.selectable                          # default kept ON
+
+
+# ------------------------------------------------------------- W3g shell
+
+@_needs_panel
+def test_nav_labels_dropped_emoji_and_slugs_survived():
+    """Renames are display-only: slugs are the bookmark contract."""
+    from app.main import _PAGE_SLUGS, _PAGES
+
+    assert set(_PAGE_SLUGS.values()) == {"inputs", "book", "summary",
+                                         "flow", "combo", "scenarios",
+                                         "guide"}
+    assert list(_PAGE_SLUGS.values())[0] == "inputs"    # the start page
+    for label in _PAGES:
+        assert label.isascii(), label                   # no emoji carriers
+    assert list(_PAGES) == ["Inputs", "Book", "State Summary", "Flow",
+                            "Deep dive", "Scenarios", "Guide"]
+
+
+@_needs_panel
+def test_theme_consolidation_is_real():
+    """The four-step grey ramp exists; the dead palette is gone; the one
+    exhibit stylesheet opens with an explicit font and rides every helper
+    pane."""
+    from app.glue import theme
+    from app.glue.exhibit import EXHIBIT_CSS
+
+    for name in ("INK", "GREY_TEXT", "GREY_LINE", "GREY_FILL"):
+        assert hasattr(theme, name), name
+    for dead in ("series_color", "PALETTE", "CHIP_CSS", "FLOAT_CSS",
+                 "float_styles", "force_float_skin", "line_color"):
+        assert not hasattr(theme, dead), dead
+    assert "font-family" in EXHIBIT_CSS and ":host" in EXHIBIT_CSS
+    assert theme.GREY_TEXT in EXHIBIT_CSS
+    cc = theme.chart_colors()
+    assert set(cc) >= {"actual", "bar", "bar_alpha", "up", "down",
+                       "total", "ref"}
+
+
+@_needs_panel
+def test_exhibit_helpers_carry_the_stylesheet():
+    from app.glue.exhibit import EXHIBIT_CSS, banner, exhibit_header, \
+        html_pane, note_list
+
+    for pane in (exhibit_header("t", "s"), banner("b"), note_list(["n"]),
+                 html_pane()):
+        assert EXHIBIT_CSS in pane.stylesheets
+    # markup builders are PURE — the style block never re-sends per update
+    from app.glue.exhibit import chip, chips_html, echo_html
+    assert "<style" not in chips_html(chip("l", "v"))
+    assert "<style" not in echo_html("x")
+
+
+@_needs_panel
+def test_inputs_is_the_cold_start_and_context_bar_names_the_line():
+    from app import importers
+    from app.glue.session import PlanSession
+    from app.pages import inputs as inputs_page
+
+    session = PlanSession()
+    page = inputs_page.build(session)
+    assert "No line active" in page["context"].object
+    assert "masters above" in page["rail"].object.lower() or \
+        "masters" in page["rail"].object.lower()
+
+    session.replace_config(importers.from_workbook(
+        ROOT / "output" / "Plan_LR_Workbook_2027_Property.xlsx"))
+    assert "Editing: Property" in page["context"].object

@@ -23,7 +23,8 @@ import pandas as pd
 
 from src.engine import mi_month, mi_year, month_index
 
-from app.glue.theme import NAVY, STEEL, STEEL_LIGHT, FAIL_RED, chart_colors
+from app.glue.theme import FAIL_RED, GREY_LINE, GREY_TEXT, NAVY, \
+    STEEL, STEEL_LIGHT, chart_colors
 from . import ensure_hv
 
 _LEG_KEYS = ("rate_leg", "mod_leg", "delivered", "locked_leg",
@@ -206,7 +207,7 @@ def runway_line(df, p):
     line = hv.Curve(d, "month", ["runway", "label", "r_txt"]).opts(
         color=NAVY, line_width=2.2, tools=["hover"],
         hover_tooltips=[("month", "@label"), ("runway", "@r_txt")])
-    zero = hv.HLine(0.0).opts(color="#666666", line_dash="dotted",
+    zero = hv.HLine(0.0).opts(color=GREY_TEXT, line_dash="dotted",
                               line_width=1.2)
     return (_band(p) * zero * line).opts(
         responsive=True, height=280, xlabel="",
@@ -270,7 +271,7 @@ def delivery_chart(df, combo, p):
     rate = hv.Curve(d, "month", ["rate_leg", "label"]).relabel(
         "Rate leg").opts(color=STEEL, line_width=2)
     locked = hv.Curve(d, "month", ["locked_delivered", "label"]).relabel(
-        "Locked delivered").opts(color="#9a9a9a", line_width=1.8,
+        "Locked delivered").opts(color=GREY_TEXT, line_width=1.8,
                                  line_dash="dashed")
     overlay = _band(p) * rate * locked * deliv
     if combo.net_mode and combo.net_sel_p is not None:
@@ -323,10 +324,10 @@ def ledger_html(ldf, totals, p) -> str:
         f"<div style='font-weight:700; color:{NAVY}; margin:6px 0 2px'>"
         f"Carryover ledger — where the head start into CY {p + 1} comes "
         f"from</div>"
-        f"<div style='font-style:italic; color:#595959; font-size:0.85em; "
+        f"<div style='font-style:italic; color:{GREY_TEXT}; font-size:0.85em; "
         f"margin-bottom:4px'>{cap}</div>"
         f"<table style='border-collapse:collapse; font-size:0.9em'>"
-        f"<tr style='color:#595959; border-bottom:1px solid #e3e6ea'>"
+        f"<tr style='color:{GREY_TEXT}; border-bottom:1px solid {GREY_LINE}'>"
         f"{head}</tr>{rows}{foot}</table></div>")
 
 

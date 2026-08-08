@@ -294,17 +294,16 @@ def dataclasses_replace_year(scn, year):
 def test_every_paste_box_takes_a_fleet_sized_block():
     """W2a: Panel's default max_length (5000) silently truncated pasted
     masters in the browser — every paste box must be uncapped far beyond
-    any real block (tbl_LR master ≈ 60KB)."""
+    any real block (tbl_LR master ≈ 60KB). W3g moved the masters to the
+    Inputs page, so every box now lives there."""
     from app.glue.session import PlanSession
-    from app.pages import book as book_page
     from app.pages import inputs as inputs_page
 
     session = PlanSession()
     inputs = inputs_page.build(session)
     for label, (ta, _btn, _fl) in inputs["paste"].items():
         assert ta.max_length == 2_000_000, label
-    book = book_page.build(session)
-    for label, (ta, _btn, _fl) in book["masters"].items():
+    for label, (ta, _btn, _fl) in inputs["masters"].items():
         assert ta.max_length == 2_000_000, label
 
 
@@ -324,12 +323,16 @@ def test_guide_page_renders_from_the_schemas():
 @pytest.mark.skipif(
     __import__("importlib").util.find_spec("panel") is None,
     reason="panel not installed (system interpreter — app venv runs this)")
-def test_book_page_master_paste_flow():
+def test_inputs_page_master_paste_flow():
+    """W3g: the masters live on Inputs and work on an EMPTY book — the
+    true cold start. The Book page no longer carries them."""
     from app.glue.session import PlanSession
     from app.pages import book as book_page
+    from app.pages import inputs as inputs_page
 
     session = PlanSession()
-    page = book_page.build(session)
+    page = inputs_page.build(session)
+    assert page["master_card"].collapsed is False  # cold start: open
     ta, btn, flash = page["masters"]["Rate Log"]
 
     btn.clicks += 1                                # empty box -> loud
@@ -340,11 +343,13 @@ def test_book_page_master_paste_flow():
     assert "Applied" in flash.object and "2 line(s)" in flash.object
     assert set(session.page.book) == {"Property", "General Liability"}
     assert ta.value_input == "" and ta.value == ""
-    assert len(page["table"].value) == 0           # no combos yet (no tbl_LR)
 
     ta.value_input = "Umbrela\tABD\tAZ\t3/31/2026\t10%\ttaken"
     btn.clicks += 1
     assert "unknown line" in flash.object and "nothing was applied" in flash.object
+
+    book = book_page.build(PlanSession())
+    assert "masters" not in book                   # the Book slimmed (W3g)
 
 
 @pytest.mark.skipif(
