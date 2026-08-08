@@ -188,6 +188,9 @@ def build(session):
             placeholder=(f"Ctrl+V the {label} MASTER here — the per-line "
                          "columns with a leading Line column. A copied "
                          "header row is skipped automatically."),
+            # Panel's default max_length is 5000; the tbl_LR master alone
+            # is ~60KB and the browser truncates silently (W2a)
+            max_length=2_000_000,
             height=84, sizing_mode="stretch_width")
         apply_btn = pn.widgets.Button(
             label=f"Apply master — replaces {label} for every pasted line",

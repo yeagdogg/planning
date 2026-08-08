@@ -291,6 +291,26 @@ def dataclasses_replace_year(scn, year):
 @pytest.mark.skipif(
     __import__("importlib").util.find_spec("panel") is None,
     reason="panel not installed (system interpreter — app venv runs this)")
+def test_every_paste_box_takes_a_fleet_sized_block():
+    """W2a: Panel's default max_length (5000) silently truncated pasted
+    masters in the browser — every paste box must be uncapped far beyond
+    any real block (tbl_LR master ≈ 60KB)."""
+    from app.glue.session import PlanSession
+    from app.pages import book as book_page
+    from app.pages import inputs as inputs_page
+
+    session = PlanSession()
+    inputs = inputs_page.build(session)
+    for label, (ta, _btn, _fl) in inputs["paste"].items():
+        assert ta.max_length == 2_000_000, label
+    book = book_page.build(session)
+    for label, (ta, _btn, _fl) in book["masters"].items():
+        assert ta.max_length == 2_000_000, label
+
+
+@pytest.mark.skipif(
+    __import__("importlib").util.find_spec("panel") is None,
+    reason="panel not installed (system interpreter — app venv runs this)")
 def test_guide_page_renders_from_the_schemas():
     from app.glue.session import PlanSession
     from app.pages import guide

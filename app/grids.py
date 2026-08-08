@@ -170,8 +170,26 @@ def _formatters(schema) -> dict:
     for k, _t, kind in schema:
         spec = _FMT_BY_KIND.get(kind)
         if spec:
-            out[k] = NumberFormatter(format=spec)
+            # blanks render BLANK, not Bokeh's default "-": with the
+            # editorEmptyValue fix a None cell must read exactly like it did
+            # before the user ever clicked it (W2a)
+            out[k] = NumberFormatter(format=spec, nan_format="",
+                                     null_format="")
     return out
+
+
+def _empty_value_columns(schema) -> list:
+    """Per-column ``editorEmptyValue: None`` for every column whose blank
+    means "no value" (numerics and dates). Tabulator 6.4.0's number editor
+    otherwise commits "" on blur for an untouched blank cell — which
+    NumberFormatter renders as 0, and on 'Net rate P' a displayed 0% is a
+    methodology flip (blank = no net selection, 0% = net mode ON at zero).
+    Tabulator converts ""→null BEFORE the edit event, so the CDS never
+    sees the empty string. Choice/text columns are excluded: "" is a
+    legitimate value there (choice:,ON,OFF / choice:,Y)."""
+    return [{"field": k, "editorEmptyValue": None}
+            for k, _t, kind in schema
+            if kind != "text" and not kind.startswith("choice")]
 
 
 def make_grid(schema, rows: list, *, height: int = 440):
@@ -199,7 +217,12 @@ def make_grid(schema, rows: list, *, height: int = 440):
         hidden_columns=["_index"],
         # copy OUT works (Ctrl+C a selection); paste-IN deliberately does
         # not: Tabulator's client-side paste never reaches Panel's model, so
-        # advertising it would eat user edits — the paste card is the path
-        configuration={"clipboard": "copy"},
+        # advertising it would eat user edits — the paste card is the path.
+        # The columns entry is the W2a blank-integrity fix (see
+        # _empty_value_columns); NOTE configuration["columns"] cannot
+        # coexist with Panel's `groups` on the same table — these grids
+        # have no groups.
+        configuration={"clipboard": "copy",
+                       "columns": _empty_value_columns(schema)},
     )
     return grid

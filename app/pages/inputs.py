@@ -59,6 +59,9 @@ def build(session):
             placeholder="Click here, then Ctrl+V the block copied from the "
                         "workbook (same column order; a copied header row "
                         "is skipped automatically) …",
+            # Panel's default max_length is 5000 and the browser clamps a
+            # paste SILENTLY at it (W2a — a fleet-sized block is ~60KB)
+            max_length=2_000_000,
             height=84, sizing_mode="stretch_width")
         apply_btn = pn.widgets.Button(
             label=f"Apply paste — replaces every {label} row",

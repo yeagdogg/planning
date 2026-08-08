@@ -135,6 +135,45 @@ def test_validators_flag_the_planted_problems():
     assert any("taken/planned" in m for m in fails)
 
 
+# ----------------------------------------------------- blank integrity (W2a)
+
+def test_empty_value_columns_cover_numerics_and_dates_only():
+    """The zero-commit fix: every column whose blank means 'no value' gets
+    editorEmptyValue None; choice/text columns — where '' is a legitimate
+    value — must NOT (a table-wide rule would rewrite them to None)."""
+    from app.grids import LR_SCHEMA, RL_SCHEMA, _empty_value_columns
+    lr = {c["field"]: c for c in _empty_value_columns(LR_SCHEMA)}
+    assert all(c["editorEmptyValue"] is None for c in lr.values())
+    assert {"netp", "netp1", "ep", "m0_asof", "trend"} <= set(lr)
+    assert "bu" not in lr and "state" not in lr and "modadj" not in lr
+    rl = {c["field"] for c in _empty_value_columns(RL_SCHEMA)}
+    assert "eff" in rl and "filed" in rl
+    assert "status" not in rl and "considered" not in rl and "comment" not in rl
+
+
+@pytest.mark.skipif(
+    __import__("importlib").util.find_spec("bokeh") is None,
+    reason="bokeh not installed (system interpreter — app venv runs this)")
+def test_blank_cells_render_blank_not_dash_or_zero():
+    from app.grids import LR_SCHEMA, _formatters
+    fmt = _formatters(LR_SCHEMA)
+    assert fmt["netp"].null_format == "" and fmt["netp"].nan_format == ""
+
+
+@pytest.mark.skipif(
+    __import__("importlib").util.find_spec("panel") is None,
+    reason="panel not installed (system interpreter — app venv runs this)")
+def test_grid_configuration_carries_the_empty_value_fix():
+    from app.grids import LR_SCHEMA, make_grid
+    grid = make_grid(LR_SCHEMA, [])
+    # the constructor kwarg is popped into the private _configuration attr
+    # (panel/widgets/tables.py Tabulator.__init__) — no public param exists
+    cols = {c["field"]: c for c in grid._configuration["columns"]}
+    assert cols["netp"]["editorEmptyValue"] is None
+    assert "modadj" not in cols
+    assert grid._configuration["clipboard"] == "copy"
+
+
 # ------------------------------------------------------- live edit loop (UI)
 
 @pytest.mark.skipif(
