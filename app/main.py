@@ -115,17 +115,20 @@ from app.pages import combo as _combo_page  # noqa: E402
 from app.pages import guide as _guide_page  # noqa: E402
 from app.pages import inputs as _inputs_page  # noqa: E402
 from app.pages import scenarios as _scenarios_page  # noqa: E402
+from app.pages import state_summary as _summary_page  # noqa: E402
 
 _PAGES = {
     "✏️ Inputs": _inputs_page.build,
     "🔬 Combo": _combo_page.build,
     "📚 Book": _book_page.build,
+    "🧭 Summary": _summary_page.build,
     "🗂 Scenarios": _scenarios_page.build,
     "📖 Guide": _guide_page.build,
 }
 # nav VALUES are URL-safe slugs so the current page lives in ?page=… —
 # reloads land back where the user was, and pages become bookmarkable
 _PAGE_SLUGS = {"✏️ Inputs": "inputs", "🔬 Combo": "combo", "📚 Book": "book",
+               "🧭 Summary": "summary",
                "🗂 Scenarios": "scenarios", "📖 Guide": "guide"}
 _SLUG_BUILDERS = {slug: _PAGES[label] for label, slug in _PAGE_SLUGS.items()}
 

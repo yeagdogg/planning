@@ -107,6 +107,47 @@ def book_results(session) -> dict:
     return out
 
 
+def program_results(session) -> dict:
+    """{lob: {combo key: (lr_p, lr_p1)}} on the PROGRAM basis — the logged
+    rate program and projected mod path instead of any asserted net target
+    (engine.program_basis_plan_lr, D65) — computed for NET combos only:
+    for a non-net combo the program basis IS the headline (the engine's
+    own invariant, tie-tested), so callers reuse the bridge result there.
+    Cache discipline mirrors book_results: per line on (data_version,
+    bus.rev); only the active line invalidates on a bus bump."""
+    book = session.page.book
+    cache = session.page.caches.setdefault("prog_results", {})
+    dv, rev = session.page.data_version, session.bus.rev
+    active = session.page.config
+    out: dict = {}
+    for lob, scn in book.items():
+        is_active = scn is active
+        ent = cache.get(lob)
+        if ent is not None and ent[0] == dv and (not is_active
+                                                 or ent[1] == rev):
+            out[lob] = ent[2]
+            continue
+        res: dict = {}
+        for r in scn.lr_rows:
+            if r.get("netp") is None:
+                continue                      # non-net: program == headline
+            ck = f"{r.get('bu')}|{r.get('state')}"
+            if not (r.get("bu") and r.get("state")):
+                continue
+            try:
+                res[ck] = engine.program_basis_plan_lr(
+                    scn.plan_year, combo_inputs(scn, r))
+            except Exception:                           # noqa: BLE001
+                # the headline path already carries this row's error
+                continue
+        cache[lob] = (dv, rev, res)
+        out[lob] = res
+    for lob in list(cache):
+        if lob not in book:
+            del cache[lob]
+    return out
+
+
 def book_frame(session):
     """One row per line × BU × state across the loaded book — the app's twin
     of the Book workbook's hidden _book sheet. Errors ride along as text so
