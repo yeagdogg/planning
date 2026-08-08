@@ -18,10 +18,12 @@ from pathlib import Path
 
 import panel as pn
 
-from app import exporters, importers, scenarios_io
+from app import (compute, exporters, importers, scenarios_io, targetbook,
+                 targets_io)
 from app.glue.bindings import WatcherBag, debounce, gate_hidden
 from app.glue.engineio import run_async
 from app.glue.format import fmt_dollar, md_safe
+from app.undo import UndoStack
 
 _DIFF_CAP = 40
 
@@ -71,6 +73,30 @@ def build(session):
         button_type="success")
     gen_flash = pn.pane.Markdown("", sizing_mode="stretch_width")
     log_md = pn.pane.Markdown("", sizing_mode="stretch_width")
+
+    # ---- field targets (W4a): the small file that goes OUT to the field ----
+    targets_btn = pn.widgets.Button(
+        label="Generate field targets files → output/targets/",
+        button_type="success")
+    targets_flash = pn.pane.Markdown("", sizing_mode="stretch_width")
+
+    # ---- collecting them back (W4b) ----------------------------------------
+    folder_in = pn.widgets.TextInput(
+        label="Also scan this folder (optional)",
+        placeholder=r"e.g. \\share\plan\returned targets",
+        sizing_mode="stretch_width")
+    scan_btn = pn.widgets.Button(label="Scan for returned files")
+    coll_sel = pn.widgets.Select(label="Returned file", options={},
+                                 sizing_mode="stretch_width")
+    rows_ms = pn.widgets.MultiChoice(label="Rows to apply", options=[],
+                                     sizing_mode="stretch_width")
+    apply_btn = pn.widgets.Button(label="Apply selected targets",
+                                  button_type="success", disabled=True)
+    coll_undo = pn.widgets.Button(label="↶ Undo", disabled=True)
+    coll_flash = pn.pane.Markdown("", sizing_mode="stretch_width")
+    coll_preview = pn.pane.Markdown("", sizing_mode="stretch_width")
+    coll_undo_stack = UndoStack()
+    coll_held: dict = {"tf": None, "changes": []}
 
     def _refresh_files(keep=None):
         file_sel.options = scenarios_io.scenario_files()
@@ -242,6 +268,170 @@ def build(session):
 
     gen_btn.on_click(_generate)
 
+    def _generate_targets(_event):
+        """One small workbook per line: net targets in, plan LRs live out.
+        The constants are engine output baked at build time, so the file
+        needs no add-in and no trip back here to compute."""
+        book = session.page.book
+        if not book:
+            targets_flash.object = ("⚠ **Nothing to generate** — the book "
+                                    "is empty.")
+            return
+        sel = list(lines_ms.value) or list(book)
+        do_recalc = bool(recalc_cb.value)
+        prog = compute.program_results(session)
+        targets_btn.loading = True
+
+        def _work():
+            paths = targetbook.build_all(
+                {lob: book[lob] for lob in sel}, prog_by_lob=prog)
+            if do_recalc:
+                exporters.recalc_files(paths)
+                tail = "values recalculated in Excel."
+            else:
+                tail = "values populate on first open in Excel."
+            return paths, tail
+
+        def _done(res):
+            targets_btn.loading = False
+            paths, tail = res
+            files = "\n".join(f"- `{md_safe(p.name)}`" for p in paths)
+            targets_flash.object = (
+                f"✓ **Built {len(paths)} targets file(s)** — {tail} Only the "
+                f"net-target cells are editable; hand them back and use "
+                f"Collect below.\n{files}")
+
+        def _err(e):
+            targets_btn.loading = False
+            targets_flash.object = f"⚠ **Targets build failed** — {md_safe(e)}"
+
+        run_async(_work, _done, _err)
+
+    targets_btn.on_click(_generate_targets)
+
+    # ---- collect the returned files ----------------------------------------
+    def _fmt_target(v):
+        return "—" if v is None else f"{v:+.1%}"
+
+    def _scan(*_events):
+        found = targets_io.scan_targets(folder_in.value or None)
+        opts, labels = {}, []
+        for p in found:
+            try:
+                tf = targets_io.read_targets(p)
+            except targets_io.TargetsReadError:
+                continue
+            scn = session.page.book.get(tf.lob)
+            tail = ""
+            if scn is None:
+                tail = " · line NOT loaded"
+            elif targets_io.is_stale(tf, scn):
+                tail = " · STALE inputs"
+            labels.append(f"{p.name} — {tf.lob} {tf.plan_year} · "
+                          f"generated {tf.generated}{tail}")
+            opts[labels[-1]] = str(p)
+        coll_sel.options = opts
+        coll_flash.object = (
+            f"Found **{len(opts)}** returned file(s)." if opts else
+            "*No returned targets files found — generate some above, or "
+            "point at the folder they came back to.*")
+        _preview()
+
+    scan_btn.on_click(_scan)
+
+    def _preview(*_events):
+        path = coll_sel.value
+        coll_held["tf"], coll_held["changes"] = None, []
+        rows_ms.options, rows_ms.value = [], []
+        apply_btn.disabled = True
+        if not path:
+            coll_preview.object = ""
+            return
+        try:
+            tf = targets_io.read_targets(path)
+        except targets_io.TargetsReadError as e:
+            coll_preview.object = f"⚠ **{md_safe(e)}**"
+            return
+        scn = session.page.book.get(tf.lob)
+        if scn is None:
+            coll_preview.object = (
+                f"⚠ **{md_safe(tf.lob)} is not loaded** — load that line "
+                f"before applying its targets.")
+            return
+        if tf.plan_year != scn.plan_year:
+            coll_preview.object = (
+                f"⚠ **Plan year mismatch** — the file is {tf.plan_year}, the "
+                f"book's {md_safe(tf.lob)} is {scn.plan_year}. Nothing can "
+                f"be applied.")
+            return
+        changes, skipped = targets_io.diff_targets(tf, scn)
+        coll_held["tf"], coll_held["changes"] = tf, changes
+        rows_ms.options = [c.key for c in changes]
+        rows_ms.value = [c.key for c in changes]
+        apply_btn.disabled = not changes
+
+        head = []
+        if targets_io.is_stale(tf, scn):
+            head.append(
+                "⚠ **Stale inputs** — this file was built before the current "
+                "dates/mods/loss ratios, so the loss ratios shown IN it were "
+                "computed from older inputs. The targets are still what the "
+                "field asked for; applying them recomputes from truth.")
+        if tf.problems:
+            head.append("**Cells skipped:**\n"
+                        + "\n".join(f"- {md_safe(m)}" for m in tf.problems))
+        if skipped:
+            head.append("\n".join(f"- {md_safe(m)}" for m in skipped))
+        if not changes:
+            head.append("*No target changes — this file matches the book.*")
+        else:
+            lines = targets_io.diff_sentences(tf, scn, changes)[:_DIFF_CAP]
+            head.append(f"**{len(changes)} row(s) changed:**\n"
+                        + "\n".join(f"- {md_safe(s)}" for s in lines))
+            warns = [c for c in changes if c.warn]
+            if warns:
+                head.append("\n".join(
+                    f"- ⚠ {md_safe(c.key)}: {md_safe(c.warn)}"
+                    for c in warns))
+        coll_preview.object = "\n\n".join(head)
+
+    coll_sel.param.watch(_preview, "value")
+
+    def _apply_targets(_event):
+        tf = coll_held["tf"]
+        if tf is None:
+            return
+        scn = session.page.book.get(tf.lob)
+        applied, msgs = targets_io.apply_targets(
+            session, tf, list(rows_ms.value), undo=coll_undo_stack)
+        tail = ("" if not msgs else " — "
+                + "; ".join(md_safe(m) for m in msgs[:3]))
+        coll_flash.object = (
+            f"✓ **Applied {applied} row(s)** from `{md_safe(tf.path.name)}` "
+            f"to {md_safe(tf.lob)}{tail}" if applied
+            else f"⚠ **Nothing applied**{tail}")
+        _undo_sync()
+        _preview()                       # the file now matches the book
+
+    apply_btn.on_click(_apply_targets)
+
+    def _undo_sync():
+        d = coll_undo_stack.peek()
+        coll_undo.label = f"↶ Undo: {d}" if d else "↶ Undo"
+        coll_undo.disabled = d is None
+
+    def _coll_undo(_event):
+        n, skipped = coll_undo_stack.pop_apply(session)
+        msg = f"restored {n} row(s)"
+        if skipped:
+            msg += " — " + "; ".join(skipped[:2])
+        coll_flash.object = ("↶ " if not skipped else "⚠ ") + \
+            f"**{md_safe(msg)}**"
+        _undo_sync()
+        _preview()
+
+    coll_undo.on_click(_coll_undo)
+
     def _generate_book(_event):
         book = dict(session.page.book)
         if not book:
@@ -298,6 +488,22 @@ def build(session):
                          "fleet's own files.*"),
         lines_ms, dialect, recalc_cb, gen_btn, book_btn, gen_flash,
         pn.layout.Divider(),
+        pn.pane.Markdown(
+            "### Field targets\n*The small file that goes OUT: one workbook "
+            "per line, one tab per business unit, and exactly one editable "
+            "column — the net rate target. Type a target in Excel and the "
+            "plan loss ratios move, because the engine's own constants are "
+            "baked in. Dates are baked too: regenerate to move one.*"),
+        targets_btn, targets_flash,
+        pn.pane.Markdown(
+            "**Collect them back** — *read the returned files, see exactly "
+            "what each person changed, apply the rows you approve. Blank "
+            "means 'no net selection' (the logged program), not zero.*"),
+        pn.Row(folder_in, scan_btn, sizing_mode="stretch_width"),
+        coll_sel, coll_preview, rows_ms,
+        pn.Row(apply_btn, coll_undo, sizing_mode="stretch_width"),
+        coll_flash,
+        pn.layout.Divider(),
         log_md,
         sizing_mode="stretch_both")
     summary_g.attach(main)
@@ -307,7 +513,15 @@ def build(session):
                         "file": file_sel, "load": load_btn, "diff": diff_btn,
                         "lines": lines_ms, "dialect": dialect,
                         "recalc": recalc_cb, "generate": gen_btn,
-                        "book": book_btn},
+                        "book": book_btn, "targets": targets_btn,
+                        "scan": scan_btn, "collect": coll_sel,
+                        "rows": rows_ms, "apply": apply_btn,
+                        "coll_undo": coll_undo, "folder": folder_in},
+            "collect": {"scan": _scan, "preview": _preview,
+                        "apply": _apply_targets, "held": coll_held,
+                        "undo": coll_undo_stack},
             "flashes": {"save": save_flash, "load": load_flash,
-                        "gen": gen_flash, "log": log_md},
+                        "gen": gen_flash, "log": log_md,
+                        "targets": targets_flash, "collect": coll_flash,
+                        "preview": coll_preview},
             "summary": summary}

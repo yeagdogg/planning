@@ -307,3 +307,113 @@ def test_book_table_carries_the_chrome_styles():
     assert table.style is not None
     css = summary.three_color_scale(table.value["lr_p"])
     assert any(css)                                     # scale has colors
+
+
+# ------------------------------------------------- W4c: indicated level
+
+def test_indicated_levels_are_the_stated_arithmetic():
+    """The system's FIRST computed indication (the workbook's indication
+    fields are carry-through by design, D111), so the definitions live in
+    one place and this pins both of them."""
+    from app import compute, importers
+    from app.views.onlevel import indicated_levels
+    from src import engine
+    scn = importers.from_workbook(WB_PROP)
+    row = scn.lr_rows[0]
+    ci = compute.combo_inputs(scn, row)
+    res = engine.run_bridge(scn.plan_year, ci, "monthly")
+    target = row["target"]
+
+    rate, bridge = indicated_levels(ci, res, target)
+    assert rate == pytest.approx(res.crl_ind * ci.lr_proj / target, abs=1e-12)
+    assert bridge == pytest.approx(rate * res.a_mod_p * ci.a_other, abs=1e-12)
+    # the full bridge asks rate to do LESS exactly when the mod path helps
+    assert (bridge > rate) == (res.a_mod_p * ci.a_other > 1.0)
+
+
+def test_indicated_level_dashes_rather_than_guesses():
+    """No target, no indication — and never a divide by zero."""
+    from app import compute, importers
+    from app.views.onlevel import indicated_levels, onlevel_frame
+    from src import engine
+    scn = importers.from_workbook(WB_PROP)
+    row = scn.lr_rows[0]
+    ci = compute.combo_inputs(scn, row)
+    res = engine.run_bridge(scn.plan_year, ci, "monthly")
+    for bad in (None, 0.0, -0.1, "", "0.6"):
+        assert indicated_levels(ci, res, bad) == (None, None), bad
+    fr = onlevel_frame(ci, res)                     # target defaults to None
+    assert fr.ind_rate is None and fr.ind_bridge is None
+    assert not any("INDICATED LEVEL" in n for n in fr.notes)
+
+
+def test_the_frame_carries_the_level_and_discloses_its_footing():
+    from app import compute, importers
+    from app.views.onlevel import onlevel_frame
+    from src import engine
+    scn = importers.from_workbook(WB_PROP)
+    row = scn.lr_rows[0]
+    ci = compute.combo_inputs(scn, row)
+    res = engine.run_bridge(scn.plan_year, ci, "monthly")
+    fr = onlevel_frame(ci, res, target=row["target"])
+    assert fr.ind_rate is not None and fr.ind_bridge is not None
+    notes = " ".join(fr.notes)
+    assert "INDICATED LEVEL" in notes and "rate-only" in notes
+    # the honest footing: CRL_ind counts only the CONSIDERED changes while
+    # the bands compound every logged one
+    assert "flagged IN the indication" in notes
+
+
+@pytest.mark.skipif(
+    __import__("importlib").util.find_spec("holoviews") is None,
+    reason="holoviews not installed (system interpreter — app venv runs this)")
+def test_both_renderers_show_the_level_where_it_belongs():
+    """The on-level diagram's y-axis is TERM ELAPSED, so it carries a
+    labeled comparison; earn_lag's y-axis IS the rate index, so it carries
+    the literal rules."""
+    from app import compute, importers
+    from app.views import earning as v_earning
+    from app.views.onlevel import onlevel, onlevel_frame
+    from src import engine
+    scn = importers.from_workbook(WB_PROP)
+    row = scn.lr_rows[0]
+    ci = compute.combo_inputs(scn, row)
+    res = engine.run_bridge(scn.plan_year, ci, "monthly")
+    fr = onlevel_frame(ci, res, target=row["target"])
+
+    import holoviews as hv
+    plot = onlevel(ci, res, frame=fr)
+    texts = " ".join(
+        str(v) for el in plot.traverse(lambda e: e, [hv.Labels])
+        for v in el.dimension_values("text"))
+    assert "indicated rate level" in texts
+    assert f"{fr.ind_rate:.4f}" in texts and f"{fr.ind_bridge:.4f}" in texts
+    # the per-year annotation carries the gap in the exhibit's own terms
+    assert "vs indicated" in texts
+
+    lag = v_earning.earn_lag(res, ind_rate=fr.ind_rate,
+                             ind_bridge=fr.ind_bridge)
+    lines = [el for el in lag if isinstance(el, hv.HLine)]
+    assert len(lines) == 2
+    assert {round(float(el.data), 10) for el in lines} == {
+        round(fr.ind_rate, 10), round(fr.ind_bridge, 10)}
+    # ...and without a target the chart is exactly what it was before
+    assert not [el for el in v_earning.earn_lag(res)
+                if isinstance(el, hv.HLine)]
+
+
+def test_coinciding_lines_say_why_rather_than_look_broken():
+    """On a net combo the engine pins A_mod = 1, so the full-bridge line
+    lands exactly on the rate-only one. A reader seeing one line where the
+    note promised two deserves the reason, not a mystery."""
+    from app import compute, importers
+    from app.views.onlevel import onlevel_frame
+    from src import engine
+    scn = importers.from_workbook(WB_PROP)
+    row = next(r for r in scn.lr_rows if r.get("netp") is not None)
+    ci = compute.combo_inputs(scn, row)
+    res = engine.run_bridge(scn.plan_year, ci, "monthly")
+    fr = onlevel_frame(ci, res, target=row["target"])
+    assert fr.ind_bridge == pytest.approx(fr.ind_rate, abs=1e-12)
+    notes = " ".join(fr.notes)
+    assert "COINCIDE" in notes and "net mode pins A_mod = 1" in notes

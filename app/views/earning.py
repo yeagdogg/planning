@@ -12,7 +12,7 @@ import pandas as pd
 
 from src.engine import mi_month, mi_year, month_index
 
-from app.glue.theme import GREY_LINE, NAVY, STEEL, STEEL_LIGHT
+from app.glue.theme import GREY_LINE, NAVY, STEEL, STEEL_LIGHT, WARN_AMBER
 from . import ensure_hv
 
 
@@ -100,10 +100,16 @@ def earn_lag_frame(res) -> pd.DataFrame:
     return df
 
 
-def earn_lag(res):
+def earn_lag(res, ind_rate=None, ind_bridge=None):
     """Written level vs earned level — the lag the whole methodology is
     about. The area is what the book has actually banked; the navy line is
-    what the newest cohort is being written at."""
+    what the newest cohort is being written at.
+
+    W4c: this chart's y-axis IS the rate index, so the indicated rate
+    levels can be drawn where they literally belong — amber rules the
+    written and earned lines are climbing toward (rate-only solid,
+    full-bridge dashed; see ``onlevel.indicated_levels`` for what each
+    one means and what it assumes)."""
     hv = ensure_hv()
 
     df = earn_lag_frame(res)
@@ -121,7 +127,19 @@ def earn_lag(res):
         color=NAVY, line_width=2.5, tools=["hover"],
         hover_tooltips=[("month", "@label"),
                         ("written level", "@written_txt")])
-    return (area * earned * written).opts(
+    layers = [area, earned, written]
+    if isinstance(ind_rate, (int, float)):
+        layers.append(hv.HLine(float(ind_rate)).relabel(
+            "Indicated level (rate-only)").opts(
+            color=WARN_AMBER, line_width=2, line_dash="solid"))
+    if isinstance(ind_bridge, (int, float)):
+        layers.append(hv.HLine(float(ind_bridge)).relabel(
+            "Indicated level (full bridge)").opts(
+            color=WARN_AMBER, line_width=1.8, line_dash="dashed"))
+    out = layers[0]
+    for layer in layers[1:]:
+        out = out * layer
+    return out.opts(
         responsive=True, height=320, ylabel="rate index", xlabel="",
         legend_position="top_left",
         title=(f"Written vs earned level, Jan {p} – Dec {p + 1} "

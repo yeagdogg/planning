@@ -101,6 +101,48 @@ class OnlevelFrame:
     diagonals: list = field(default_factory=list)
     years: list = field(default_factory=list)
     notes: list = field(default_factory=list)
+    # W4c: the two indicated rate LEVELS, on the same index scale as the
+    # bands (None when the row carries no target or projected LR)
+    ind_rate: float | None = None       # rate-only indication
+    ind_bridge: float | None = None     # the full bridge's crossing point
+
+
+def indicated_levels(ci, res, target) -> tuple:
+    """(rate-only, full-bridge) indicated rate LEVEL, or (None, None).
+
+    This is the system's first computed indication — the workbook's
+    indication fields are carry-through by design (D111), so nothing
+    upstream defines one. Both readings share the same question ("what
+    earned rate level prices this book to its target?") and differ in what
+    they let help:
+
+    - **rate-only** ``CRL_ind × LR_proj / target`` — the classic
+      loss-ratio indication: rate alone does the work. LR_proj is quoted
+      at CURRENT rate level (D107) and CRL_ind is that level on the
+      exhibit's own 1.0-based index, so the product lands on the y-scale
+      the bands live on.
+    - **full bridge** multiplies in A_mod and A_other as well, marking
+      where the PLAN LR crosses target given the mod path already
+      projected. The gap between the two lines is exactly what the
+      schedule mod and other adjustments are being asked to carry.
+
+    Neither is a substitute for a filed indication; both are read off the
+    inputs already in the book, and the exhibit says so. ``target`` is the
+    row's target loss ratio — a reference input the engine never reads
+    (D96), which is why it arrives as an argument rather than off ``ci``.
+    """
+    lr_proj = getattr(ci, "lr_proj", None)
+    crl = getattr(res, "crl_ind", None)
+    vals = (target, lr_proj, crl)
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+               for v in vals):
+        return None, None
+    if target <= 0.0:
+        return None, None
+    rate_only = crl * lr_proj / target
+    a_mod = getattr(res, "a_mod_p", 1.0) or 1.0
+    a_other = getattr(ci, "a_other", 1.0) or 1.0
+    return rate_only, rate_only * a_mod * a_other
 
 
 def _year_cells(poly, strips, level_at):
@@ -122,7 +164,7 @@ def _year_cells(poly, strips, level_at):
 
 
 def onlevel_frame(ci, res, window: int = 36,
-                  basis: str = "auto") -> OnlevelFrame:
+                  basis: str = "auto", target=None) -> OnlevelFrame:
     """Pure geometry: regions/diagonals/year annotations for one combo.
     x is measured in months since Jan of the plan year.
 
@@ -131,6 +173,10 @@ def onlevel_frame(ci, res, window: int = 36,
     the LOGGED rate program instead (the D65 program basis) — only
     meaningful for net combos, where the two geometries differ by exactly
     the program-vs-asserted story.
+
+    ``target``: the row's target loss ratio. Given one, the frame carries
+    the two indicated rate LEVELS (see ``indicated_levels``) so the
+    picture can say not just what the book earned but what it needs.
     """
     p = res.plan_year
     tau = float(ci.term_months)
@@ -302,6 +348,35 @@ def onlevel_frame(ci, res, window: int = 36,
             "remain the engine's net-path production values, so the gap "
             "between geometry and annotation IS the program-vs-asserted "
             "story.")
+
+    # ---- what the book NEEDS, beside what it earned (W4c) -----------------
+    fr.ind_rate, fr.ind_bridge = indicated_levels(ci, res, target)
+    if fr.ind_rate is not None:
+        fr.notes.append(
+            f"INDICATED LEVEL (computed here, not carried): rate-only "
+            f"{fr.ind_rate:.4f} = CRL_ind {res.crl_ind:.4f} × projected LR "
+            f"{ci.lr_proj:.1%} / target {target:.1%} — the earned rate "
+            f"level at which rate ALONE prices the book to target. The "
+            f"full-bridge line {fr.ind_bridge:.4f} multiplies in A_mod and "
+            f"A_other: where PLAN LR crosses target given the mod path "
+            f"already projected. The gap between them is what the schedule "
+            f"mod and other adjustments are being asked to carry. The "
+            f"workbook's own indication fields are reference only (D111) — "
+            f"nothing upstream defines this, so it is stated here.")
+        same = abs(fr.ind_bridge - fr.ind_rate) < 1e-12
+        fr.notes.append(
+            "CRL_ind compounds the rate changes flagged IN the indication; "
+            "the bands compound EVERY logged change — where those sets "
+            "differ the indicated line and the band edges are on slightly "
+            "different footings."
+            + (" The two readings COINCIDE here: A_mod × A_other = 1.000, "
+               "so nothing but rate is being asked to close the gap"
+               + (" (net mode pins A_mod = 1 by construction — the mod leg "
+                  "already rides inside the net target)."
+                  if ci.net_mode else ".") if same else "")
+            + (" On a net combo the bands carry the combined q (rate × mod "
+               "/ M_ind) while these levels are rate-basis, so read the gap, "
+               "not the crossing." if draw_net else ""))
     return fr
 
 
@@ -374,10 +449,15 @@ def onlevel(ci, res, frame: OnlevelFrame | None = None):
         text_font_size="9pt", text_color=NAVY, text_font_style="bold")
 
     def ann_txt(y):
+        # W4c: the earned level next to what it would need to be. This
+        # axis is TERM ELAPSED, so an indicated LEVEL cannot be a
+        # position here — it is a comparison, and reads as one.
+        gap = ("" if fr.ind_rate is None or not y["e_cy"]
+               else f"   ({y['e_cy'] / fr.ind_rate - 1.0:+.1%} vs indicated)")
         if y["a_rate"] is None:
-            return f"CY {y['year']}   earned level {y['e_cy']:.4f}"
+            return f"CY {y['year']}   earned level {y['e_cy']:.4f}{gap}"
         return (f"CY {y['year']}   earned level {y['e_cy']:.4f}   "
-                f"A_rate {y['a_rate']:.4f}")
+                f"A_rate {y['a_rate']:.4f}{gap}")
 
     ann = hv.Overlay([
         hv.Labels([(y["x0"] + 6.0, 1.07, ann_txt(y))],
@@ -387,6 +467,17 @@ def onlevel(ci, res, frame: OnlevelFrame | None = None):
             text_font_style="bold")
         for y in fr.years])
 
+    ind = hv.Overlay([])
+    if fr.ind_rate is not None:
+        ind = hv.Labels(
+            [(wx0 + 0.4, 1.135,
+              f"indicated rate level {fr.ind_rate:.4f} rate-only · "
+              f"{fr.ind_bridge:.4f} full bridge  "
+              f"(levels, not positions — this axis is term elapsed)")],
+            kdims=["x", "y"], vdims=["text"]).opts(
+            text_font_size="9pt", text_color=WARN_AMBER,
+            text_font_style="bold", text_align="left")
+
     ticks = [(x, f"{'Jan' if x % 12 == 0 else 'Jul'} "
               f"{p + (x + (0 if x % 12 == 0 else -6)) // 12}")
              for x in range(int(wx0), 25, 6)]
@@ -394,7 +485,7 @@ def onlevel(ci, res, frame: OnlevelFrame | None = None):
              f"(term {int(fr.term)} mo"
              + (", NET: combined price path q" if fr.net_mode else "")
              + ")")
-    return (polys * span * diags * vlines * labels * ann).opts(
+    return (polys * span * diags * vlines * labels * ann * ind).opts(
         responsive=True, height=380, xlabel="", ylabel="policy term elapsed",
-        xticks=ticks, ylim=(-0.03, 1.16), xlim=(wx0 - 0.5, wx1 + 0.5),
+        xticks=ticks, ylim=(-0.03, 1.19), xlim=(wx0 - 0.5, wx1 + 0.5),
         title=title, fontsize={"title": "9pt"})

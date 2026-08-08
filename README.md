@@ -496,17 +496,42 @@ edits, the Deep dive prescribes** (D116):
   the Net Delivery targets-vs-delivered report.
 - **Deep dive** — one combo under the microscope: the on-leveling rectangle (net
   combos draw the NET path — restart sawtooth + anniversary echoes, D115), the live
-  bridge, waterfalls, earning, the Flow Dashboard (runway, delivered-vs-locked, the
-  carryover ledger), the monthly race with its walk table + reconciliation, and the
-  Net Delivery solve microscope (suggested change, required mod step).
+  bridge, waterfalls, earning (with the two **indicated rate levels** — rate-only and
+  full-bridge, D118), the Flow Dashboard (runway, delivered-vs-locked, the carryover
+  ledger), the monthly race with its walk table + reconciliation, and the Net Delivery
+  solve microscope (suggested change, required mod step).
 - **Scenarios** — the whole book saves to one yaml in `scenarios/`; every save appends a
   changelog entry diffed against the file it replaces, and git carries the version
   control. Load sits behind a two-step confirm. Generate real fleet workbooks from the
   current book (`_APP` tag beside the fleet), or the fleet + summary Book into
   `output/app/` — recalculated end to end via the system python's Excel COM session.
+  It also runs the **field targets** round trip, below.
+
+### Field targets — the small file that goes out (D118)
+
+The fleet workbook is the full model; the **targets file** is the one page a field
+actuary needs to make a selection. One workbook per line into `output/targets/`, one
+tab per business unit, one row per state, and exactly three editable cells per row:
+net rate target P, target P+1, and a quarterly filing-date dropdown. Type a target in
+Excel and both plan loss ratios move — the real engine numbers, no add-in, no macro,
+no trip back to the app.
+
+That works because **the dates are baked**: freeze them and the engine's plan LR is a
+closed form in the targets (`1/LR` affine in `1+x`). The app samples `run_bridge` at
+four target pairs, solves for the five constants, and spends a fifth call trying to
+falsify the fit — a residual there means the engine's net path changed shape, so the
+build raises instead of shipping a workbook that computes wrongly. Moving a date needs
+a regenerated file, and the cover says so.
+
+Handed back, the same page **collects** them: read by defined name, re-validate every
+cell (a paste defeats Excel's validation), preview the change in the scenario
+changelog's own sentences, apply the approved rows as one undoable gesture. A file
+built against older inputs is flagged stale but still applies — the targets are what
+the field asked for; only the loss ratios they saw while typing were computed from
+older inputs, and the app recomputes from truth.
 
 Workbook → app → workbook → app round-trips exactly, and no app path ever overwrites
-the verified fleet in `output/`. See D114–D116 in DECISIONS.md for the design records.
+the verified fleet in `output/`. See D114–D118 in DECISIONS.md for the design records.
 
 ## First-open checklist
 

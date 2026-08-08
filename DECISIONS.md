@@ -254,3 +254,97 @@ that shape; the old loud error applied nothing, which read as "line
 seems to disappear"); and the Program Flow grid runs all three years
 (the flow result always carried 24 plan-rooted months — the page had
 been showing 12; per-year color scales, P−1 still behind its toggle).
+
+
+## D118 — The targets file: a live Excel exhibit with exactly one input (A-W4)
+
+John's re-framing of the app after living with wave 3: this is the HUB,
+not the place for bulk what-if. Data lands here, workbooks go out to
+actuaries and product managers, their selections come back, and the app
+reflects them and draws on demand. The missing piece was the artifact
+that goes OUT first: something small enough to send to anyone, where a
+field person picks a net rate target and watches the plan loss ratios
+move — a thing the fleet workbook cannot do for any live edit, because
+its earning engine is a 300-row cohort grid keyed to fixed inputs.
+
+**The insight that made it exact rather than approximate is John's own:
+bake the dates.** Freeze every date, mod action and logged rate change,
+and the engine's plan LR collapses to a closed form in the net targets.
+The net path is q(k) = q(k-12)(1+x) on written cohorts, weights and
+earning geometry do not depend on x, and A_rate divides by the earned
+level, so
+
+    1 / cy_lr_p (x)      = c0 + c1(1+x)
+    1 / cy_lr_p1(x, x1)  = d0 + d1(1+x) + d2(1+x)(1+x1)
+
+are exactly affine — five constants per combo, and Excel needs nothing
+but IF and arithmetic to evaluate them.
+
+**The app does not re-derive that form; it samples the engine and then
+tries to falsify it.** Four run_bridge calls per combo solve for the
+constants in closed form (on 1/LR, where the reciprocal is affine); a
+fifth, at an unrelated (x, x1) point, is spent checking the fit. A
+residual there is not rounding — it means the engine's net path changed
+shape — so it raises TargetsBuildError and the workbook is never
+written. Measured on the shipped Property book: worst model-vs-engine
+error 2.6e-15 across 63 combos and 20 random target pairs each, and
+d0 = -5e-15 exactly as the structure predicts (no pre-P cohort earns in
+P+1 at a 12-month term). The baked constants ARE engine output; the
+Excel formula is arrangement. One calculation path, no src/ edit.
+
+The suggested-change helper needed no fitting at all: suggest_net_rate
+already publishes its closed form, and net_delivery_components hands
+over the three constants behind it (c0, c1, sum_w), baked once per
+quarterly date. A date with no exposure bakes b=0 and the cell says
+"n/a" rather than dividing.
+
+**Blank stays blank.** The file's inputs are prefilled with the book's
+current targets so an untouched file diffs to nothing; a cleared cell
+means "no net selection — value this combo on its logged program", which
+is a different answer from 0%, and the formula gates on it exactly the
+way the engine does (net_mode = netp is not None), including the P+1
+carry written as an in-cell IF.
+
+**What the file refuses to do.** Dates are baked, so the file cannot
+move one — the cover says to ask for a regenerated file rather than edit
+around it, and every non-input cell is locked (passwordless: guidance,
+not security — a deliberate divergence from the fleet's no-protection
+doctrine, which relies on a Checks panel this file does not have). The
+stem is Plan_LR_Targets_*, which the fleet loader cannot match, so a
+targets file can never be imported as a whole line and blank out a book.
+
+**The live Excel test earned its place immediately.** It caught what no
+python-level test could see: Excel parses "7/1" into a DATE the moment
+it is typed or picked from the dropdown, which would have made the
+suggested-change lookup miss on every row. Text-formatting the column
+fixes it, and a unit test now pins the format.
+
+Collecting back (app/targets_io.py) re-validates every harvested cell
+because a paste defeats Excel's validation — 2.5 where a fraction
+belongs is refused with a reason rather than applied as a 250% change.
+The preview reuses scenarios_io.diff_books, so the collect screen and
+the scenario changelog speak one language by construction. A file built
+against older inputs is flagged STALE but still applies: the targets a
+person typed are what they meant to ask for; only the loss ratios they
+saw while typing were computed from older inputs, and the app recomputes
+from truth on apply. Apply pushes one undoable gesture per file.
+
+**Indicated rate level (W4c) is the system's first computed indication.**
+Nothing upstream defines one — D111's indication fields are carry-through
+by design — so both readings are stated here and drawn:
+
+    rate-only   = CRL_ind x LR_proj / target
+    full bridge = CRL_ind x LR_proj x A_mod x A_other / target
+
+The first is the classic loss-ratio indication (rate alone does the
+work); the second marks where PLAN LR crosses target given the mod path
+already projected. John asked for both, and the gap between them is the
+point: it is exactly what the schedule mod and other adjustments are
+being asked to carry. Geometry note: the on-level diagram's y-axis is
+policy-term elapsed, so a LEVEL cannot be a position there — it carries
+a labeled rule plus per-year "vs indicated" deltas, and the literal
+horizontal lines live on the earned-level chart directly below, whose
+y-axis IS the rate index. Disclosed rather than hidden: CRL_ind
+compounds only the changes flagged in the indication while the bands
+compound every logged one, and on a net combo the bands carry the
+combined q while these levels are rate-basis.

@@ -358,7 +358,8 @@ def build(session):
         basis = ("program" if ci.net_mode
                  and ol_basis.value.startswith("Logged") else "auto")
         fr = v_onlevel.onlevel_frame(
-            ci, res, window=36 if ol_window.value else 24, basis=basis)
+            ci, res, window=36 if ol_window.value else 24, basis=basis,
+            target=(scn.row(key) or {}).get("target"))
         ol_pane.object = v_onlevel.onlevel(ci, res, frame=fr)
         notes = list(fr.notes)
         if ci.net_mode:
@@ -383,7 +384,8 @@ def build(session):
             f"CY {p + 1} (indicative)",
             v_bridge.waterfall_bars("Projected LR", start, steps_p1,
                                     f"CY {p + 1} plan LR"))
-        lag_pane.object = v_earning.earn_lag(res)
+        lag_pane.object = v_earning.earn_lag(
+            res, ind_rate=fr.ind_rate, ind_bridge=fr.ind_bridge)
         para_pane.object = v_earning.parallelogram(eng, p)
 
         # ---- the Flow tab (W3d): the Excel Flow Dashboard, live ------------

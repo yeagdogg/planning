@@ -12,4 +12,5 @@ output/*_ABBASE.xlsx
 output/*_APP.xlsx
 output/app/
 output/masters/
+output/targets/
 app/.venv/
