@@ -148,6 +148,42 @@ def program_results(session) -> dict:
     return out
 
 
+def flow_results(session) -> dict:
+    """{lob: {combo key: ProgramFlowResult | ('error', msg)}} across the
+    loaded book (W3e). Cache discipline mirrors ``book_results``: per line
+    on (data_version, bus.rev); only the ACTIVE line recomputes on a bus
+    bump; unloaded lines are swept. ~0.1–0.3 ms per combo — cheap enough
+    per data change, cached so filter clicks re-slice instead."""
+    book = session.page.book
+    cache = session.page.caches.setdefault("flow_results", {})
+    dv, rev = session.page.data_version, session.bus.rev
+    active = session.page.config
+    out: dict = {}
+    for lob, scn in book.items():
+        is_active = scn is active
+        ent = cache.get(lob)
+        if ent is not None and ent[0] == dv and (not is_active
+                                                 or ent[1] == rev):
+            out[lob] = ent[2]
+            continue
+        res: dict = {}
+        for r in scn.lr_rows:
+            if not (r.get("bu") and r.get("state")):
+                continue
+            ck = f"{r.get('bu')}|{r.get('state')}"
+            try:
+                res[ck] = engine.program_flow_by_month(
+                    scn.plan_year, combo_inputs(scn, r))
+            except Exception as e:                      # noqa: BLE001
+                res[ck] = ("error", str(e))
+        cache[lob] = (dv, rev, res)
+        out[lob] = res
+    for lob in list(cache):
+        if lob not in book:
+            del cache[lob]
+    return out
+
+
 def book_frame(session):
     """One row per line × BU × state across the loaded book — the app's twin
     of the Book workbook's hidden _book sheet. Errors ride along as text so

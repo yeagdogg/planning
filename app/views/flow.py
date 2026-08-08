@@ -328,3 +328,277 @@ def ledger_html(ldf, totals, p) -> str:
         f"<table style='border-collapse:collapse; font-size:0.9em'>"
         f"<tr style='color:#595959; border-bottom:1px solid #e3e6ea'>"
         f"{head}</tr>{rows}{foot}</table></div>")
+
+
+# ------------------------------------------------- W3e: book-level flow
+
+def combine_rows(flows, attr: str, sl: slice) -> list:
+    """The engine's own EP×w(m) combination (D60), reapplied over CACHED
+    per-combo ``ProgramFlowResult``s — and extended to the P+1 half
+    (``rows[12:24]``) that ``CombinedFlowResult`` does not carry. Pinned
+    to ``engine.combined_flow_by_month`` at 1e-15 on the slices both
+    compute; the same arithmetic on the extra slice is arrangement, not
+    re-derivation. Delivered is the exact statistic: weighted rate x
+    weighted mod need NOT reproduce it under mix, and nothing here
+    normalises the gap away. The mod leg weights only combos carrying
+    the adjustment (None when none in view do); mod-off combos still
+    deliver their rate leg — the honest book statistic."""
+    live = [(ep, pf) for ep, pf in flows if ep and ep > 0.0]
+    if not live:
+        raise ValueError("combine_rows needs at least one combo with EP.")
+    n = len(getattr(live[0][1], attr))
+    out = []
+    for j in range(*sl.indices(n)):
+        nr = nm = nd_ = dw = dm = 0.0
+        mi = None
+        for ep, pf in live:
+            prow = getattr(pf, attr)[j]
+            mi = prow["mi"]
+            epw = ep * prow["w"]
+            dw += epw
+            nr += epw * prow["rate_leg"]
+            nd_ += epw * prow["delivered"]
+            if pf.mod_on:
+                dm += epw
+                nm += epw * prow["mod_leg"]
+        out.append(dict(mi=mi, rate_leg=nr / dw,
+                        mod_leg=(nm / dm) if dm > 0.0 else None,
+                        delivered=nd_ / dw))
+    return out
+
+
+def combine_avgs(flows) -> dict:
+    """EP-weighted means of the per-combo AVERAGE ratios — the engine's
+    top-level combination rule verbatim, extended to the prior-year rate
+    and mod averages the engine result does not publish (the workbook
+    gets those by weighting the per-combo PRIOR_PUB columns — same
+    arithmetic). Ratios in, deltas out (−1 applied here, once)."""
+    ar = am = ad = de = dme = adp = arp = amp = 0.0
+    for ep, pf in flows:
+        if not ep or ep <= 0.0:
+            continue
+        de += ep
+        ar += ep * pf.avg_rate_ratio
+        ad += ep * pf.avg_delivered_ratio
+        adp += ep * pf.avg_delivered_ratio_prior
+        arp += ep * pf.avg_rate_ratio_prior
+        if pf.mod_on:
+            dme += ep
+            am += ep * pf.avg_mod_ratio
+            amp += ep * pf.avg_mod_ratio_prior
+    if de <= 0.0:
+        return {}
+    return dict(
+        rate=ar / de - 1.0, delivered=ad / de - 1.0,
+        mod=(am / dme - 1.0) if dme > 0.0 else None,
+        rate_prior=arp / de - 1.0, delivered_prior=adp / de - 1.0,
+        mod_prior=(amp / dme - 1.0) if dme > 0.0 else None,
+        ep=de)
+
+
+def grid_cols(prior: bool = True, p1: bool = False) -> list:
+    """Month-column keys: pm01..pm12 (CY P−1), pp01..pp12 (CY P),
+    q01..q12 (CY P+1)."""
+    cols = []
+    if prior:
+        cols += [f"pm{j:02d}" for j in range(1, 13)]
+    cols += [f"pp{j:02d}" for j in range(1, 13)]
+    if p1:
+        cols += [f"q{j:02d}" for j in range(1, 13)]
+    return cols
+
+
+def state_grid_frame(view: dict, all_flows: list, leg: str,
+                     avg_label: str, p1: bool = False) -> pd.DataFrame:
+    """One row per state (each state's combos combined by the D60 rule)
+    plus the AVG bottom row over everything in view — the workbook's
+    BOOK AVG / LINE AVG / BU AVG line: an average of the state rows,
+    never a total. ``leg`` ∈ rate_leg | mod_leg | delivered. With
+    ``p1`` the columns run Jan P .. Dec P+1 (the Net Delivery grid);
+    otherwise Jan P−1 .. Dec P."""
+    def cells(flows):
+        rec = {}
+        if p1:
+            rows = combine_rows(flows, "rows", slice(0, 24))
+            for j in range(12):
+                rec[f"pp{j + 1:02d}"] = rows[j][leg]
+                rec[f"q{j + 1:02d}"] = rows[j + 12][leg]
+        else:
+            prior = combine_rows(flows, "prior_rows", slice(0, 12))
+            plan = combine_rows(flows, "rows", slice(0, 12))
+            for j in range(12):
+                rec[f"pm{j + 1:02d}"] = prior[j][leg]
+                rec[f"pp{j + 1:02d}"] = plan[j][leg]
+        return rec
+
+    recs = []
+    for st in sorted(view):
+        flows = [(r["ep"], r["pf"]) for r in view[st]
+                 if r["pf"] is not None]
+        if not any(ep and ep > 0.0 for ep, _pf in flows):
+            continue
+        recs.append({"state": st, **cells(flows)})
+    if any(ep and ep > 0.0 for ep, _pf in all_flows):
+        recs.append({"state": avg_label, **cells(all_flows)})
+    cols = ["state"] + grid_cols(prior=not p1, p1=p1)
+    df = pd.DataFrame(recs, columns=cols)
+    for c in cols[1:]:                    # None must SURVIVE (never NaN)
+        df[c] = pd.Series([r.get(c) for r in recs], dtype=object)
+    return df
+
+
+def year_band_styles(df: pd.DataFrame, bands: list) -> pd.DataFrame:
+    """The workbook's per-year color scale: ONE scale domain per year
+    band (a single scale across both years would flatten the contrast
+    inside each), computed over every body cell in the band — the AVG
+    bottom row is excluded from the domain and untinted, like TOTAL
+    everywhere else."""
+    from app.summary import _lerp
+
+    css = pd.DataFrame("", index=df.index, columns=df.columns)
+    body = df.index[:-1] if len(df) else df.index
+    for cols in bands:
+        vals = [df.loc[i, c] for i in body for c in cols
+                if isinstance(df.loc[i, c], (int, float))]
+        if len(vals) < 2 or min(vals) == max(vals):
+            continue
+        lo, hi = min(vals), max(vals)
+        vs = sorted(vals)
+        med = vs[len(vs) // 2] if len(vs) % 2 else (
+            vs[len(vs) // 2 - 1] + vs[len(vs) // 2]) / 2.0
+        for i in body:
+            for c in cols:
+                v = df.loc[i, c]
+                if not isinstance(v, (int, float)):
+                    continue
+                if v <= med:
+                    t = 0.0 if med == lo else (v - lo) / (med - lo)
+                    color = _lerp("#D6E8D5", "#FFF2CC", t)
+                else:
+                    t = 0.0 if hi == med else (v - med) / (hi - med)
+                    color = _lerp("#FFF2CC", "#F4B8B8", t)
+                css.loc[i, c] = f"background-color: {color}"
+    if len(df):
+        css.iloc[-1, :] = (f"background-color: {STEEL_LIGHT}; "
+                           f"font-weight: 600")
+    return css
+
+
+def pf_summary_frame(view: dict, prog: dict,
+                     avg_label: str) -> pd.DataFrame:
+    """The Program Flow per-state summary: prior-year averages (the year
+    currently flowing) beside the plan block — EP, net target (simple
+    mean over net combos, the workbook rule), the three w-weighted
+    averages, Δ vs net assertion, and the plan-LR gap program-vs-asserted
+    in points (from the cached program-basis results; net combos only —
+    for everything else the program IS the headline)."""
+    def row_for(recs, st):
+        flows = [(r["ep"], r["pf"]) for r in recs if r["pf"] is not None]
+        a = combine_avgs(flows)
+        if not a:
+            return None
+        nets = [r["netp"] for r in recs if r["netp"] is not None]
+        tgt = sum(nets) / len(nets) if nets else None
+        gaps = [(r["ep"], prog[(r["lob"], r["key"])][0] - r["lr_p"])
+                for r in recs
+                if (r["lob"], r["key"]) in prog and r["lr_p"] is not None
+                and r["ep"]]
+        gap = (sum(ep * g for ep, g in gaps) / sum(ep for ep, _g in gaps)
+               * 100.0 if gaps else None)
+        return dict(state=st, ep=a["ep"],
+                    rate_pm1=a["rate_prior"], mod_pm1=a["mod_prior"],
+                    del_pm1=a["delivered_prior"],
+                    nettgt=tgt, rate_p=a["rate"], mod_p=a["mod"],
+                    del_p=a["delivered"],
+                    dnet=None if tgt is None else a["delivered"] - tgt,
+                    proggap=gap,
+                    netcnt=len(nets), cnt=len(recs))
+
+    recs_all = [r for recs in view.values() for r in recs]
+    rows = [r for st in sorted(view)
+            if (r := row_for(view[st], st)) is not None]
+    total = row_for(recs_all, avg_label)
+    if total is not None:
+        rows.append(total)
+    cols = ["state", "ep", "rate_pm1", "mod_pm1", "del_pm1", "nettgt",
+            "rate_p", "mod_p", "del_p", "dnet", "proggap", "netcnt",
+            "cnt"]
+    df = pd.DataFrame(rows, columns=cols)
+    for c in ("mod_pm1", "nettgt", "mod_p", "dnet", "proggap"):
+        df[c] = pd.Series([r.get(c) for r in rows], dtype=object)
+    return df
+
+
+def nd_summary_frame(view: dict, prog: dict, avg_label: str) -> pd.DataFrame:
+    """The Book Net Delivery REPORT: targets vs delivered per state.
+    Targets average over NET combos only ("a combo that asserts nothing
+    is not a target of zero"); the P+1 target column says whether it was
+    entered, carried from P, or mixed; plan LR program basis is the
+    EP-weighted program-basis value over net combos, and the gap to the
+    asserted headline rides beside it in points."""
+    def row_for(recs, st):
+        flows = [(r["ep"], r["pf"]) for r in recs if r["pf"] is not None]
+        a = combine_avgs(flows)
+        if not a:
+            return None
+        nets = [r for r in recs if r["netp"] is not None]
+        tgt = (sum(r["netp"] for r in nets) / len(nets)) if nets else None
+        t1v = [(r["netp1"] if r["netp1"] is not None else r["netp"])
+               for r in nets]
+        tgt1 = sum(t1v) / len(t1v) if t1v else None
+        src = {True: "entered", False: "carried"}
+        kinds = {src[r["netp1"] is not None] for r in nets}
+        set1 = ("—" if not nets else
+                "mixed" if len(kinds) > 1 else next(iter(kinds)))
+        pg = [(r["ep"], prog[(r["lob"], r["key"])], r["lr_p"])
+              for r in nets if (r["lob"], r["key"]) in prog and r["ep"]]
+        wep = sum(ep for ep, _p, _h in pg)
+        progb = (sum(ep * p[0] for ep, p, _h in pg) / wep if pg else None)
+        pgap = (sum(ep * (p[0] - h) for ep, p, h in pg) / wep * 100.0
+                if pg else None)
+        return dict(state=st, ep=a["ep"], netcnt=len(nets),
+                    tgt=tgt, tgt1=tgt1, set1=set1,
+                    delivered=a["delivered"],
+                    gap=None if tgt is None else
+                    (a["delivered"] - tgt) * 100.0,
+                    progbasis=progb, proggap=pgap)
+
+    recs_all = [r for recs in view.values() for r in recs]
+    rows = [r for st in sorted(view)
+            if (r := row_for(view[st], st)) is not None]
+    total = row_for(recs_all, avg_label)
+    if total is not None:
+        rows.append(total)
+    cols = ["state", "ep", "netcnt", "tgt", "tgt1", "set1", "delivered",
+            "gap", "progbasis", "proggap"]
+    df = pd.DataFrame(rows, columns=cols)
+    for c in ("tgt", "tgt1", "gap", "progbasis", "proggap"):
+        df[c] = pd.Series([r.get(c) for r in rows], dtype=object)
+    return df
+
+
+def required_pricing_frame(view: dict, p: int) -> pd.DataFrame:
+    """The required pricing leg, (1+target)/(1+rate leg) − 1 — a ratio of
+    weighted means is NOT the weighted mean of the ratios, so a row
+    populates ONLY where the filters resolve the state to exactly one
+    NET combo; every other row is dashed rather than approximated (the
+    workbook's own rule, sheets_book)."""
+    recs = []
+    for st in sorted(view):
+        rows = view[st]
+        rec = {"state": st}
+        if (len(rows) == 1 and rows[0]["netp"] is not None
+                and rows[0]["pf"] is not None):
+            pf, x = rows[0]["pf"], rows[0]["netp"]
+            for j in range(12):
+                rl = pf.rows[j]["rate_leg"]
+                rec[f"pp{j + 1:02d}"] = (1.0 + x) / (1.0 + rl) - 1.0
+        else:
+            for j in range(12):
+                rec[f"pp{j + 1:02d}"] = None
+        recs.append(rec)
+    cols = ["state"] + [f"pp{j:02d}" for j in range(1, 13)]
+    df = pd.DataFrame(recs, columns=cols)
+    for c in cols[1:]:
+        df[c] = pd.Series([r.get(c) for r in recs], dtype=object)
+    return df
