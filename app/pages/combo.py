@@ -1,20 +1,28 @@
-"""One combo under the microscope — P1: scenario loading + the live bridge.
+"""One combo under the microscope — the live bridge (P1) and its deep-dive
+visuals (P3).
 
 The bridge card renders the same chain the workbook's Bridge tab shows —
 Projected LR x A_rate x A_mod x A_other = CY plan LR, with per-step point
 contributions — from a fresh engine result, in place, on every input change
-(debounced). Waves P3+ add the parallelogram, the monthly walk and the
-delivery band around it.
+(debounced). Below it, four tabs draw the same numbers: the chain as
+waterfalls, the earning parallelogram + earn-in lag, the monthly LR walk
+(``engine.lr_flow_by_month``, D93) and the ec(k,P) delivery band. One
+definition of the chain (`views.bridge.chain`) feeds card and charts alike.
 """
 from __future__ import annotations
 
 import panel as pn
+
+from src import engine
 
 from app import compute, importers
 from app.glue.bindings import WatcherBag, debounce, sync_options
 from app.glue.engineio import run_async
 from app.glue.format import DASH, fmt_dollar, fmt_idx, fmt_pct, md_safe
 from app.glue.theme import FAIL_RED, NAVY, PASS_GREEN, STEEL
+from app.views import bridge as v_bridge
+from app.views import delivery as v_delivery
+from app.views import earning as v_earning
 
 _CARD_CSS = f"""
 <style>
@@ -55,31 +63,17 @@ def _bridge_html(key: str, scn, res) -> str:
         return (_CARD_CSS + f"<div class='plw-bridge'><h3>{md_safe(key)}</h3>"
                 f"<div class='plw-err'>engine rejected this row: "
                 f"{md_safe(res[1])}</div></div>")
-    row = scn.row(key) or {}
-    a_other = row.get("a_other")
-    a_other = float(a_other) if isinstance(a_other, (int, float)) else 1.0
-    trend = row.get("trend")
-    trend = (float(trend) if isinstance(trend, (int, float))
-             else scn.trend_default)
-    net = row.get("netp") is not None or row.get("netp1") is not None
     p = scn.plan_year
-
-    steps_p = [("× Rate earn-in (A_rate)", res.a_rate_p),
-               ("× Mod drift (A_mod)", res.a_mod_p),
-               ("× Other", a_other)]
-    rows_p, tot_p = _chain_rows(res.lr_current, steps_p, "")
-    steps_p1 = [(f"× Net trend ({fmt_pct(trend, signed=True)})", 1.0 + trend),
-                ("× Rate earn-in (A_rate, P+1)", res.a_rate_p1),
-                ("× Mod drift (A_mod, P+1)", res.a_mod_p1),
-                ("× Other", a_other)]
-    rows_p1, tot_p1 = _chain_rows(res.lr_current, steps_p1, "")
+    start, steps_p, steps_p1, net = v_bridge.chain(scn, key, res)
+    rows_p, tot_p = _chain_rows(start, steps_p, "")
+    rows_p1, tot_p1 = _chain_rows(start, steps_p1, "")
 
     badge = ("<span class='plw-badge net'>NET RATE SELECTED</span>" if net
              else "")
 
     def table(title, rows, total, total_label):
         body = "".join(
-            f"<tr><td>{md_safe(lbl)}</td><td>{fmt_idx(f)}</td>"
+            f"<tr><td>× {md_safe(lbl)}</td><td>{fmt_idx(f)}</td>"
             f"<td class='pts'>{pts:+.1f} pts</td></tr>"
             for lbl, f, pts in rows)
         return (f"<table><tr><th>{title}</th><th>factor</th><th></th></tr>"
@@ -147,14 +141,75 @@ def build(session):
     card = pn.pane.HTML(_bridge_html("", session.page.config, None),
                         sizing_mode="stretch_width")
 
+    # ---- deep-dive visuals (P3) --------------------------------------------
+    wf_p = pn.pane.Bokeh(sizing_mode="stretch_width")
+    wf_p1 = pn.pane.Bokeh(sizing_mode="stretch_width")
+    lag_pane = pn.pane.HoloViews(sizing_mode="stretch_width")
+    para_pane = pn.pane.HoloViews(sizing_mode="stretch_width")
+    race_md = pn.pane.Markdown("", sizing_mode="stretch_width")
+    walk_pane = pn.pane.HoloViews(sizing_mode="stretch_width")
+    band_pane = pn.pane.HoloViews(sizing_mode="stretch_width")
+    vis_note = pn.pane.Markdown("", sizing_mode="stretch_width")
+
+    tabs = pn.Tabs(
+        ("Waterfall", pn.Row(wf_p, wf_p1, sizing_mode="stretch_width")),
+        ("Earning", pn.Column(lag_pane, para_pane,
+                              sizing_mode="stretch_width")),
+        ("Monthly walk", pn.Column(race_md, walk_pane,
+                                   sizing_mode="stretch_width")),
+        ("Delivery", pn.Column(band_pane, sizing_mode="stretch_width")),
+        dynamic=False,                       # dynamic=True makes deaf cards
+        sizing_mode="stretch_width")
+
+    def _clear_visuals(msg: str = ""):
+        for pane in (wf_p, wf_p1, lag_pane, para_pane, walk_pane, band_pane):
+            pane.object = None
+        race_md.object = ""
+        vis_note.object = msg
+
+    def _render_visuals(key, scn, res):
+        row = scn.row(key)
+        ci = compute.combo_inputs(scn, row)
+        eng = engine.MonthlyEngine(scn.plan_year, ci)
+        p = scn.plan_year
+        start, steps_p, steps_p1, _net = v_bridge.chain(scn, key, res)
+        wf_p.object = v_bridge.waterfall_figure(
+            f"CY {p}: how the plan LR is built",
+            v_bridge.waterfall_bars("Projected LR", start, steps_p,
+                                    f"CY {p} plan LR"))
+        wf_p1.object = v_bridge.waterfall_figure(
+            f"CY {p + 1} (indicative)",
+            v_bridge.waterfall_bars("Projected LR", start, steps_p1,
+                                    f"CY {p + 1} plan LR"))
+        lag_pane.object = v_earning.earn_lag(res)
+        para_pane.object = v_earning.parallelogram(eng, p)
+        flow = engine.lr_flow_by_month(p, ci)
+        race_md.object = "**" + v_delivery.race_sentence(flow,
+                                                         ci.net_trend) + "**"
+        target = row.get("target")
+        walk_pane.object = v_delivery.walk(
+            flow, target if isinstance(target, (int, float)) else None)
+        band_pane.object = v_delivery.band(eng, p)
+        vis_note.object = ""
+
     def _render(*_events):
         scn = session.page.config
-        if scn is None or not combo_sel.value:
+        key = combo_sel.value
+        if scn is None or not key:
             card.object = _bridge_html("", scn, None)
+            _clear_visuals()
             return
-        card.object = _bridge_html(combo_sel.value, scn,
-                                   compute.result_for(session,
-                                                      combo_sel.value))
+        res = compute.result_for(session, key)
+        card.object = _bridge_html(key, scn, res)
+        if res is None or compute.is_error(res):
+            _clear_visuals()
+            return
+        try:
+            _render_visuals(key, scn, res)
+        except Exception as e:                          # noqa: BLE001
+            # a half-typed row must never blank the page — the card above
+            # still explains itself; say why the charts sat this one out
+            _clear_visuals(f"⚠ visuals unavailable: {md_safe(e)}")
 
     # grid keystrokes arrive as bus bumps (P2); coalesce bursts into one
     # recompute+render shortly after the last event
@@ -170,5 +225,10 @@ def build(session):
         pn.layout.Divider(),
         combo_sel,
         sizing_mode="stretch_width")
-    main = pn.Column(card, sizing_mode="stretch_both")
-    return {"main": main, "sidebar": sidebar, "bag": bag}
+    main = pn.Column(card, vis_note, tabs, sizing_mode="stretch_both")
+    return {"main": main, "sidebar": sidebar, "bag": bag,
+            "combo_sel": combo_sel,
+            "panes": {"waterfall_p": wf_p, "waterfall_p1": wf_p1,
+                      "earn_lag": lag_pane, "parallelogram": para_pane,
+                      "race": race_md, "walk": walk_pane, "band": band_pane,
+                      "note": vis_note}}
