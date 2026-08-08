@@ -1,4 +1,4 @@
-"""State Summary — the flagship exhibit, live (W2b).
+"""State Summary — the flagship exhibit, live and editable (W2b/W2c).
 
 The workbook's State Summary (D38/D90/D101/D104), mirrored from its own
 SS_COLS declaration and aggregated the Book's way: one row per state
@@ -7,10 +7,18 @@ bridge chain on single-combo rows and the exact weighted value + Mix on
 mixed ones. Line and BU filters only — an exhibit keyed by a dimension
 never filters on itself (the workbook doctrine).
 
-W2c adds the levers (net targets, planned filings, mod steps) and the
-undo stack; this wave the table is read-only.
+W2c makes it the app's what-if surface: net targets fan out to every
+combo in the row's view, planned filings and mod steps edit in place on
+single-combo rows (taken = historical fact, locked), every gesture lands
+on the undo stack, and the recompute patches only the cells that moved
+(the workbench diff-then-patch idiom — scroll and filters survive). All
+gating is SERVER-side: this table carries Panel `groups`, which cannot
+coexist with configuration["columns"], so rejects revert the cell via
+patch and say why.
 """
 from __future__ import annotations
+
+import re
 
 import panel as pn
 
@@ -18,7 +26,9 @@ from app import compute, summary
 from app.glue.bindings import WatcherBag, debounce, sync_options
 from app.glue.exhibit import banner, echo_html, echo_pane, exhibit_header, \
     note_list
-from app.glue.format import TAB_SPECS
+from app.glue.format import TAB_SPECS, md_safe
+from app.paste import coerce
+from app.undo import UndoStack, entry
 
 _BANNER = ("THE BRIDGE IN ONE LINE      CY plan LR  =  Projected LR "
            "(current level)  ×  rate earn-in  ×  mod drift  ×  other adj"
@@ -51,7 +61,19 @@ _NOTES = [
     "under 'App extensions' exist only in the app, not in the Excel "
     "exhibit. ⚠ counts combos the engine rejected — they carry no weight "
     "anywhere in the row.",
+    "LEVERS (blue-tinted cells): Net rate sel / +1 apply to EVERY combo "
+    "in the row's current view (blank clears net mode — a methodology "
+    "flip, and the flash says so); planned filings' % and date, the mod "
+    "step, and achievement edit the underlying log row on single-combo "
+    "views. Taken filings are historical fact and locked. Percents edit "
+    "as fractions or with a % sign; every gesture lands on ↶ Undo.",
 ]
+
+_LEVER_NUM = ("netsel", "netsel1")
+_LEVER_TXT = tuple(f"chg{j}_{p}" for j in (1, 2, 3, 4)
+                   for p in ("date", "pct")) + \
+    ("modstep_date", "modstep_pct", "ach_next")
+LEVERS = _LEVER_NUM + _LEVER_TXT
 
 
 def _formatters():
@@ -102,13 +124,17 @@ def build(session):
     hidden = summary.hidden_sets()
 
     import pandas as pd
+    editors = {k: None for k in summary.ALL_KEYS}      # computed = locked
+    editors.update({k: {"type": "number", "step": 0.001}
+                    for k in _LEVER_NUM})
+    editors.update({k: {"type": "input"} for k in _LEVER_TXT})
     table = pn.widgets.Tabulator(
         pd.DataFrame(columns=summary.ALL_KEYS),
         show_index=False,
         titles=titles,
         groups=summary.ss_groups_map(p0),
         formatters=_formatters(),
-        editors={k: None for k in summary.ALL_KEYS},   # W2b: all locked
+        editors=editors,
         frozen_columns=["state"],                      # by NAME (the scar)
         frozen_rows=[-1],                              # TOTAL pinned (top)
         text_align={k: "right" for k in summary.SS_KINDS},
@@ -116,10 +142,12 @@ def build(session):
         layout="fit_data_table", height=560,
         configuration={"clipboard": "copy"},           # NO "columns" key —
         # configuration["columns"] cannot coexist with `groups` (Panel
-        # raises); the W2c editors gate server-side instead
+        # raises); every edit gate lives server-side in the router
         sizing_mode="stretch_width")
 
+    flash = pn.pane.Markdown("", sizing_mode="stretch_width")
     holder = {"meta": None, "frame": None}
+    undo = UndoStack()
 
     def _hidden(*_events):
         cols = ["_index"]
@@ -131,6 +159,37 @@ def build(session):
 
     show_hist.param.watch(_hidden, "value")
     show_inputs.param.watch(_hidden, "value")
+
+    def _style_fn(d):
+        return summary.ss_styles(d, levers=LEVERS)
+
+    def _apply_frame(df):
+        """The workbench diff-then-patch idiom: when the roster is
+        unchanged, patch only the cells that moved — scroll, filters and
+        the open editor state survive; the Styler recomputes on patch."""
+        import pandas as pd
+        old = table.value
+        if (old is None or len(old) != len(df)
+                or list(old["state"]) != list(df["state"])):
+            table.value = df
+            table.style = df.style.apply(_style_fn, axis=None)
+            return
+        patches = {}
+        for c in df.columns:
+            if c == "state":
+                continue
+            ch = []
+            for i, (a, b) in enumerate(zip(old[c], df[c])):
+                try:
+                    same = (a == b) or (pd.isna(a) and pd.isna(b))
+                except (TypeError, ValueError):
+                    same = False
+                if not same:
+                    ch.append((i, b))
+            if ch:
+                patches[c] = ch
+        if patches:
+            table.patch(patches)
 
     def _render(*_events):
         if not session.page.book:
@@ -149,8 +208,7 @@ def build(session):
             # the page builds before any book exists (plan year 0) — the
             # year-bearing group captions refresh on the first real render
             table.groups = summary.ss_groups_map(p)
-        table.value = df
-        table.style = df.style.apply(summary.ss_styles, axis=None)
+        _apply_frame(df)
         lines_txt = (", ".join(line_f.value) if line_f.value
                      else "every line")
         bus_txt = (", ".join(bu_f.value) if bu_f.value
@@ -159,6 +217,205 @@ def build(session):
             f"Showing: {lines_txt}  |  {bus_txt}  |  "
             f"{sum(meta.cnt.values())} combos across {len(meta.states)} "
             f"states")
+
+    # ---- the edit router (W2c): every gate is server-side ------------------
+    def _reject(event, reason):
+        table.patch({event.column: [(event.row, event.old)]})
+        flash.object = f"⚠ **{md_safe(reason)}** — nothing was changed."
+
+    def _frac(raw):
+        """Editor input -> fraction or None (blank). Accepts 0.05, 5%,
+        +5.0% — the paste vocabulary."""
+        if raw is None or raw == "":
+            return None
+        if isinstance(raw, (int, float)):
+            return float(raw)
+        return coerce("pct", str(raw))
+
+    def _route_edit(event):
+        meta = holder["meta"]
+        df = table.value
+        if meta is None or df is None or not (0 <= event.row < len(df)):
+            return
+        st = str(df.iloc[event.row]["state"])
+        col = event.column
+        if col not in LEVERS:
+            return _reject(event, f"'{col}' is calculated, not entered")
+        if st == "TOTAL":
+            return _reject(event, "the TOTAL row is an aggregate — edit a "
+                                  "state row")
+        if meta.problems.get(st):
+            return _reject(event, f"{st} carries combos the engine "
+                                  "rejected — fix them on Inputs first")
+
+        # -- net targets: fan out to every combo in the row's view ----------
+        if col in _LEVER_NUM:
+            field_ = "netp" if col == "netsel" else "netp1"
+            try:
+                new = _frac(event.value)
+            except ValueError as e:
+                return _reject(event, str(e))
+            combos = meta.view.get(st, [])
+            entries, names = [], []
+            for lob, _scn, key, _bu, row, _res in combos:
+                old = row.get(field_)
+                if old == new:
+                    continue
+                entries.append(entry(lob, "lr_rows", row, {field_: old},
+                                     after={field_: new}))
+                row[field_] = new
+                names.append(key)
+            if not entries:
+                flash.object = "*No change — every combo already there.*"
+                return
+            label = ("Net rate P" if field_ == "netp" else "Net rate P+1")
+            what = ("cleared (net mode OFF)" if new is None
+                    else f"→ {new:+.1%}")
+            undo.push(f"{label} {what} on {st} ({len(entries)} combo(s))",
+                      entries)
+            _undo_sync()
+            flip = (" — **this flips those combos out of net mode**"
+                    if new is None else "")
+            flash.object = (f"✓ **{label} {md_safe(what)}** applied to "
+                            f"{len(entries)} combo(s): "
+                            f"{md_safe(', '.join(names[:6]))}"
+                            f"{' …' if len(names) > 6 else ''}{flip} — ↶ "
+                            f"Undo is armed.")
+            session.bus.bump()
+            return
+
+        # -- everything below edits ONE underlying log row -------------------
+        if meta.cnt.get(st, 0) != 1:
+            return _reject(event, "log edits need the filters to resolve "
+                                  "to a single combo — pick a line and BU")
+        lob = meta.single[st][0]
+
+        m = re.match(r"chg(\d)_(date|pct)$", col)
+        if m:
+            j, part = int(m.group(1)), m.group(2)
+            r = meta.slot_map.get((st, j))
+            if r is None:
+                return _reject(event, "that slot holds no filing — add "
+                                      "one on Inputs")
+            if r.get("status") != "planned":
+                return _reject(event, "taken filings are historical fact "
+                                      "— only planned rows are editable")
+            if part == "date":
+                try:
+                    d = coerce("date", event.value)
+                except ValueError as e:
+                    return _reject(event, str(e))
+                if d is None:
+                    return _reject(event, "a planned filing needs a date "
+                                          "(delete rows on Inputs)")
+                undo.push(f"Chg {j} date {r['eff']} → {d} ({st})",
+                          [entry(lob, "rate_rows", r, {"eff": r["eff"]},
+                                 after={"eff": d})])
+                r["eff"] = d
+                flash.object = f"✓ **Chg {j} effective → {d}** — ↶ armed."
+            else:
+                try:
+                    v = _frac(event.value)
+                except ValueError as e:
+                    return _reject(event, str(e))
+                if v is None:
+                    return _reject(event, "blank would delete the filing "
+                                          "— do that on Inputs")
+                undo.push(f"Chg {j} filed % → {v:+.1%} ({st})",
+                          [entry(lob, "rate_rows", r,
+                                 {"filed": r.get("filed")},
+                                 after={"filed": v})])
+                r["filed"] = v
+                flash.object = (f"✓ **Chg {j} Filed % → {v:+.1%}** — the "
+                                f"slot shows filed × achievement — ↶ armed.")
+            _undo_sync()
+            session.bus.bump()
+            return
+
+        if col in ("modstep_date", "modstep_pct"):
+            got = meta.modstep_map.get(st)
+            if got is None:
+                return _reject(event, "no planned mod action for this "
+                                      "combo — add one on Inputs")
+            lob2, r = got
+            if col == "modstep_date":
+                try:
+                    d = coerce("date", event.value)
+                except ValueError as e:
+                    return _reject(event, str(e))
+                if d is None:
+                    return _reject(event, "a mod step needs a date")
+                undo.push(f"Mod step date {r['eff']} → {d} ({st})",
+                          [entry(lob2, "mod_rows", r, {"eff": r["eff"]},
+                                 after={"eff": d})])
+                r["eff"] = d
+            else:
+                try:
+                    v = _frac(event.value)
+                except ValueError as e:
+                    return _reject(event, str(e))
+                if v is None:
+                    return _reject(event, "blank would delete the action "
+                                          "— do that on Inputs")
+                undo.push(f"Mod step → {v:+.1%} ({st})",
+                          [entry(lob2, "mod_rows", r,
+                                 {"chg": r.get("chg")},
+                                 after={"chg": v})])
+                r["chg"] = v
+            _undo_sync()
+            flash.object = "✓ **Mod step updated** — ↶ Undo is armed."
+            session.bus.bump()
+            return
+
+        if col == "ach_next":
+            got = meta.achnext_map.get(st)
+            if got is None:
+                return _reject(event, "no planned filing in the plan year "
+                                      "for this combo")
+            lob2, r = got
+            try:
+                v = _frac(event.value)
+            except ValueError as e:
+                return _reject(event, str(e))
+            undo.push(f"Achievement → "
+                      f"{'blank (=100%)' if v is None else f'{v:.0%}'} "
+                      f"({st})",
+                      [entry(lob2, "rate_rows", r,
+                             {"achievement": r.get("achievement")},
+                             after={"achievement": v})])
+            r["achievement"] = v
+            _undo_sync()
+            flash.object = ("✓ **Achievement updated** (blank = 100%) — ↶ "
+                            "Undo is armed.")
+            session.bus.bump()
+            return
+
+    table.on_edit(_route_edit)
+
+    # ---- undo --------------------------------------------------------------
+    undo_btn = pn.widgets.Button(label="↶ Undo", disabled=True,
+                                 sizing_mode="stretch_width")
+
+    def _undo_sync():
+        d = undo.peek()
+        undo_btn.label = f"↶ Undo: {d}" if d else "↶ Undo"
+        undo_btn.disabled = d is None
+
+    def _do_undo(_event):
+        n, skipped = undo.pop_apply(session)          # bumps the bus itself
+        msg = f"restored {n} row(s)"
+        if skipped:
+            msg += " — " + "; ".join(skipped[:3])
+        flash.object = (("⚠ " if skipped else "↶ ") + f"**{md_safe(msg)}**")
+        _undo_sync()
+
+    undo_btn.on_click(_do_undo)
+
+    def _on_data_rev(*_events):
+        undo.clear()                    # locators dangle across a load
+        _undo_sync()
+
+    bag.watch(session.ctx, _on_data_rev, "data_rev")
 
     rail_rev = debounce(session.bus.param.rev, delay_ms=300, bag=bag)
     bag.watch(rail_rev, _render, "rev")
@@ -173,12 +430,19 @@ def build(session):
         pn.layout.Divider(),
         pn.pane.Markdown("**Columns** (the workbook's collapse outline)"),
         show_hist, show_inputs,
+        pn.layout.Divider(),
+        undo_btn,
+        pn.pane.Markdown(
+            "*Undo covers Summary edits since the last load — scenario "
+            "files are the durable history.*"),
         sizing_mode="stretch_width")
-    main = pn.Column(header, echo, table, banner(_BANNER),
+    main = pn.Column(header, echo, flash, table, banner(_BANNER),
                      note_list(_NOTES),
                      sizing_mode="stretch_both")
     return {"main": main, "sidebar": sidebar, "bag": bag,
-            "table": table, "holder": holder,
+            "table": table, "holder": holder, "flash": flash,
             "filters": {"line": line_f, "bu": bu_f},
             "toggles": {"hist": show_hist, "inputs": show_inputs},
+            "edit_router": _route_edit, "undo": undo,
+            "undo_btn": undo_btn,
             "on_show": _render}

@@ -382,15 +382,19 @@ def ep_bar(s: pd.Series) -> list:
     return out
 
 
-def ss_styles(df: pd.DataFrame) -> pd.DataFrame:
+def ss_styles(df: pd.DataFrame, levers: tuple = ()) -> pd.DataFrame:
     """The exhibit's whole visual layer as one css frame (D104 mirrored):
     banding, the two plan-LR color scales, the EP bar, amber-italic planned
-    tokens, the STEEL_LIGHT TOTAL band. TOTAL is excluded from every scale
-    domain."""
+    tokens, the STEEL_LIGHT TOTAL band — plus a blue tint on ``levers``
+    columns (the workbook's blue-means-you-type color code, W2c). TOTAL is
+    excluded from every scale domain and never tinted."""
     css = pd.DataFrame("", index=df.index, columns=df.columns)
     has_total = len(df) > 0 and df["state"].iloc[-1] == "TOTAL"
     body = df.iloc[:-1] if has_total else df
     css.loc[body.index[body.index % 2 == 1], :] = "background-color: #F5F7FA"
+    for c in levers:
+        if c in css.columns:
+            css.loc[body.index, c] = "background-color: #EAF2FC"
     for col_ in ("planlr", "planlr1"):
         scale = three_color_scale(body[col_])
         for i, s in zip(body.index, scale):
