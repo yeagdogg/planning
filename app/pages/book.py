@@ -18,7 +18,7 @@ from __future__ import annotations
 import pandas as pd
 import panel as pn
 
-from app import compute, importers
+from app import compute, importers, masters
 from app.glue.bindings import WatcherBag, debounce, sync_options
 from app.glue.engineio import run_async
 from app.glue.format import (DASH, fmt_count, fmt_dollar, fmt_pct, md_safe,
@@ -180,6 +180,66 @@ def build(session):
         "normalised away (D103). Click a combo row to open it on the Combo "
         "page.*", sizing_mode="stretch_width")
 
+    # ---- master paste (P5): the paste-first on-ramp ------------------------
+    master_parts = {}
+
+    def _master_section(label):
+        ta = pn.widgets.TextAreaInput(
+            placeholder=(f"Ctrl+V the {label} MASTER here — the per-line "
+                         "columns with a leading Line column. A copied "
+                         "header row is skipped automatically."),
+            height=84, sizing_mode="stretch_width")
+        apply_btn = pn.widgets.Button(
+            label=f"Apply master — replaces {label} for every pasted line",
+            button_type="warning")
+        flash = pn.pane.Markdown("", sizing_mode="stretch_width")
+
+        def _apply(_event):
+            # value syncs on BLUR; value_input per keystroke (the P2 scar)
+            text = (ta.value_input or ta.value or "").strip()
+            if not text:
+                flash.object = ("⚠ **Nothing to paste** — click into the "
+                                "box, Ctrl+V the master block, then Apply.")
+                return
+            notes: list = []
+            try:
+                by, created = masters.apply_master(session, label, text,
+                                                   notes=notes)
+            except ValueError as e:
+                flash.object = f"⚠ **{md_safe(e)}** — nothing was applied."
+                return
+            if not by:
+                flash.object = "⚠ **The pasted text held no populated rows.**"
+                return
+            ta.value = ""
+            ta.value_input = ""
+            parts = ", ".join(f"{md_safe(ln)} ({len(rows)})"
+                              for ln, rows in by.items())
+            newly = ("" if not created else
+                     " — new line(s): " + ", ".join(md_safe(c)
+                                                    for c in created))
+            extra = f" ({'; '.join(notes)})" if notes else ""
+            flash.object = (f"✓ Applied **{label}** to {len(by)} line(s): "
+                            f"{parts}{newly}{extra}. Lines not in the paste "
+                            f"kept theirs.")
+
+        apply_btn.on_click(_apply)
+        master_parts[label] = (ta, apply_btn, flash)
+        return pn.Column(ta, apply_btn, flash, sizing_mode="stretch_width")
+
+    master_card = pn.Card(
+        pn.pane.Markdown(
+            "*One table per master, spanning every line — column order is "
+            "the per-line paste block with a leading **Line** column "
+            "(a BU can write several lines, so the line is never "
+            "inferred). Lines present in a paste get that table replaced; "
+            "absent lines keep theirs.*"),
+        pn.Tabs(*[(lbl, _master_section(lbl)) for lbl in masters.MASTERS],
+                dynamic=False, sizing_mode="stretch_width"),
+        title="📋 Master paste — start or update the whole book from "
+              "three tables",
+        collapsed=True, sizing_mode="stretch_width")
+
     def _view(frame: pd.DataFrame) -> pd.DataFrame:
         view = frame
         if line_f.value:
@@ -243,7 +303,7 @@ def build(session):
         pn.pane.Markdown("**Filters** — empty means everything"),
         line_f, bu_f, state_f,
         sizing_mode="stretch_width")
-    main = pn.Column(cards,
+    main = pn.Column(cards, master_card,
                      pn.pane.Markdown("### By line"), line_tbl,
                      pn.pane.Markdown("### Every combo"), mix_md, table,
                      sizing_mode="stretch_both")
@@ -251,6 +311,7 @@ def build(session):
             "table": table, "line_tbl": line_tbl, "cards": cards,
             "filters": {"line": line_f, "bu": bu_f, "state": state_f},
             "open_row": _open_row, "load_btn": load_btn, "status": status,
+            "masters": master_parts,
             # Tabulator's virtual renderer tears its rows down while the
             # page is hidden and never redraws on the visibility flip —
             # main._switch calls this after re-showing (found live in P4)

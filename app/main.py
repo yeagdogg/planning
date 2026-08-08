@@ -125,13 +125,13 @@ def _placeholder(title: str, blurb: str):
 from app.pages import book as _book_page  # noqa: E402
 from app.pages import combo as _combo_page  # noqa: E402
 from app.pages import inputs as _inputs_page  # noqa: E402
+from app.pages import scenarios as _scenarios_page  # noqa: E402
 
 _PAGES = {
     "✏️ Inputs": _inputs_page.build,
     "🔬 Combo": _combo_page.build,
     "📚 Book": _book_page.build,
-    "🗂 Scenarios": _placeholder(
-        "Scenarios", "Named save / load / diff and the Excel export (wave P5)."),
+    "🗂 Scenarios": _scenarios_page.build,
     "📖 Guide": _placeholder(
         "Guide", "How the app relates to the workbook and the engine (wave P6)."),
 }

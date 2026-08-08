@@ -108,7 +108,21 @@ def run_async(fn: Callable, on_done: Callable,
     """Run ``fn()`` on a worker thread; deliver its return value to
     ``on_done(result)`` (or the exception to ``on_error(exc)``) on the
     server loop. For short-but-not-instant work (workbook import, scenario
-    load) where a full RunHandle is overkill but freezing the UI is rude."""
+    load) where a full RunHandle is overkill but freezing the UI is rude.
+
+    Headless (tests / scripts): no loop will ever tick the drain periodic,
+    so degrade to a synchronous call — the same passthrough rule
+    bindings.debounce/coalesce follow (P5, found by the generate flow)."""
+    if pn.state.curdoc is None:
+        try:
+            result = fn()
+        except Exception as e:                          # noqa: BLE001
+            if on_error is not None:
+                on_error(e)
+                return
+            raise
+        on_done(result)
+        return
     q: "queue.Queue[tuple]" = queue.Queue()
 
     def _work():
