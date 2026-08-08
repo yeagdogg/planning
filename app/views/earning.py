@@ -69,7 +69,7 @@ def parallelogram(eng, plan_year: int):
                            "share_txt", "index_txt"])
     return hm.opts(
         cmap=WHITE_TO_STEEL, colorbar=False, responsive=True,
-        height=max(320, 15 * n_rows + 110), invert_yaxis=True,
+        height=min(640, max(320, 15 * n_rows + 110)), invert_yaxis=True,
         xrotation=90, xlabel="earning month", ylabel="written cohort",
         line_color="#eeeeee", line_width=0.5,
         title=(f"Earning parallelogram — share of each written cohort "
@@ -122,7 +122,7 @@ def earn_lag(res):
         hover_tooltips=[("month", "@label"),
                         ("written level", "@written_txt")])
     return (area * earned * written).opts(
-        responsive=True, height=300, ylabel="rate index", xlabel="",
+        responsive=True, height=320, ylabel="rate index", xlabel="",
         legend_position="top_left",
         title=(f"Written vs earned level, Jan {p} – Dec {p + 1} "
                "(the earn-in lag)"),

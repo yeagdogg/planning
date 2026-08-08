@@ -27,6 +27,7 @@ from app.glue.bindings import WatcherBag, debounce, sync_options
 from app.glue.exhibit import banner, echo_html, echo_pane, exhibit_header, \
     note_list
 from app.glue.format import TAB_SPECS, md_safe
+from app.glue.theme import TABLE_CSS
 from app.paste import coerce
 from app.undo import UndoStack, entry
 
@@ -68,6 +69,29 @@ _NOTES = [
     "views. Taken filings are historical fact and locked. Percents edit "
     "as fractions or with a % sign; every gesture lands on ↶ Undo.",
 ]
+
+# One-sentence hovers for the dense columns (the notes, distilled).
+_TOOLTIPS = {
+    "planlr": "Product of the four bridge factors on single-combo rows; "
+              "the exact EP-weighted engine value on mixed rows (Mix "
+              "carries the difference).",
+    "planlr1": "Indicative: the same Projected LR and Other adj x "
+               "(1 + net trend).",
+    "mix": "Weighted plan LR minus the four-factor chain, in points — "
+           "factor averages do not compound across a mixed book.",
+    "target": "EP-weighted over the combos that CARRY a target (the Excel "
+              "exhibit dilutes with blank rows; the app fixes it).",
+    "progbasis": "The same rows valued on the LOGGED rate program instead "
+                 "of the net assertion (D65).",
+    "proggap": "Program basis minus asserted plan LR, in points.",
+    "netsel": "Asserted net selection — applies to EVERY combo in the "
+              "row's view; blank clears net mode.",
+    "netsel1": "Net selection for the following year (blank carries P's).",
+    "ach_next": "Achievement on the next planned filing (blank = 100%).",
+    "crl": "Cumulative rate level in the indication.",
+    "ecy": "Calendar-year earned rate level.",
+    "mbar": "Earned schedule mod for the year.",
+}
 
 _LEVER_NUM = ("netsel", "netsel1")
 _LEVER_TXT = tuple(f"chg{j}_{p}" for j in (1, 2, 3, 4)
@@ -136,13 +160,25 @@ def build(session):
         formatters=_formatters(),
         editors=editors,
         frozen_columns=["state"],                      # by NAME (the scar)
-        frozen_rows=[-1],                              # TOTAL pinned (top)
+        # frozen_rows is set per roster in _apply_frame: a negative index
+        # here would resolve ONCE against this empty frame and the TOTAL
+        # pin would silently never work (W3a — found broken since W2b)
         text_align={k: "right" for k in summary.SS_KINDS},
         hidden_columns=["_index"] + hidden["hist"],
-        layout="fit_data_table", height=560,
-        configuration={"clipboard": "copy"},           # NO "columns" key —
-        # configuration["columns"] cannot coexist with `groups` (Panel
-        # raises); every edit gate lives server-side in the router
+        layout="fit_data_table",
+        # grow to the roster, capped: 21 states + TOTAL must sit on screen
+        # without an inner scrollbar (a fixed 560 showed 16 of 22 rows)
+        max_height=840,
+        selectable=False,              # selection is never read here, and
+        # the fast theme's selected-row repaint whited out the lever cells
+        stylesheets=[TABLE_CSS],
+        header_tooltips=_TOOLTIPS,
+        configuration={"clipboard": "copy",            # NO "columns" key —
+                       # configuration["columns"] cannot coexist with
+                       # `groups` (Panel raises); columnDefaults is legal
+                       # beside groups and lets the long headers wrap
+                       # instead of forcing 200px columns
+                       "columnDefaults": {"headerWordWrap": True}},
         sizing_mode="stretch_width")
 
     flash = pn.pane.Markdown("", sizing_mode="stretch_width")
@@ -173,6 +209,10 @@ def build(session):
                 or list(old["state"]) != list(df["state"])):
             table.value = df
             table.style = df.style.apply(_style_fn, axis=None)
+            # the pin is POSITIONAL and Panel resolves negative indices only
+            # once, against whatever length the frame had at set time — so
+            # re-pin TOTAL by its real index on every roster change (W3a)
+            table.frozen_rows = [len(df) - 1] if len(df) else []
             return
         patches = {}
         for c in df.columns:
@@ -194,6 +234,7 @@ def build(session):
     def _render(*_events):
         if not session.page.book:
             table.value = table.value.iloc[0:0]
+            table.frozen_rows = []
             echo.object = echo_html(
                 "No lines loaded — Book page → Load every line, paste "
                 "masters, or load a scenario.")

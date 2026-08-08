@@ -17,6 +17,7 @@ import datetime as dt
 
 import pandas as pd
 
+from .glue.theme import TABLE_CSS
 from .paste import coerce
 
 # ---------------------------------------------------------------- schemas
@@ -192,11 +193,13 @@ def _empty_value_columns(schema) -> list:
             if kind != "text" and not kind.startswith("choice")]
 
 
-def make_grid(schema, rows: list, *, height: int = 440):
+def make_grid(schema, rows: list, *, max_height: int = 560):
     """An editable Tabulator over ``rows``. Caller wires the ``value``
     watcher (the authoritative write-back). Scars honored: freeze by NAME;
     no button columns; clipboard enabled as a bonus path (the paste box is
-    the guaranteed one)."""
+    the guaranteed one). Grows to the roster up to ``max_height`` (W3a) —
+    a 21-state table must not scroll inside a fixed box. Selection stays ON
+    (Ctrl+C copy-out needs it); TABLE_CSS restyles it legible."""
     import panel as pn
 
     keys = [k for k, _t, _k in schema]
@@ -210,7 +213,8 @@ def make_grid(schema, rows: list, *, height: int = 440):
         text_align={k: "right" for k, _t, kind in schema
                     if kind not in ("text",) and not kind.startswith("choice")},
         layout="fit_data_table",
-        height=height,
+        max_height=max_height,
+        stylesheets=[TABLE_CSS],
         sizing_mode="stretch_width",
         # Panel 1.9.3 renders the _index field even with show_index=False
         # (observed live in P4) — hide it by name

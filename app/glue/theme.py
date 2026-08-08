@@ -18,6 +18,35 @@ PALETTE = [NAVY, "#c0392b", PASS_GREEN, "#8e44ad", "#d35400",
            "#16a085", STEEL, "#7f8c8d", "#c39bd3", "#e67e22"]
 ACCENT = NAVY
 
+# Every Tabulator attaches this (W3a). The Fast design silently forces the
+# 'fast' Tabulator theme, whose stylesheet repaints hover/selected ROWS with
+# the accent background and WHITE text — over our per-CELL inline tints
+# (lever blue, banding, the LR scales) that makes cells unreadable, and the
+# hover rule fires on every table whether or not selection is enabled.
+# Panel appends the theme stylesheet AFTER user stylesheets, so these rules
+# carry !important and target the CELL (the theme sets color on the row).
+# Hover becomes a faint navy overlay that rides ON TOP of the cell tints;
+# selection (kept on the input grids for Ctrl+C copy-out) becomes
+# STEEL_LIGHT with dark text.
+TABLE_CSS = f"""
+.tabulator-row.tabulator-selectable:hover {{
+  background: transparent !important;
+  color: inherit !important;
+}}
+.tabulator-row.tabulator-selectable:hover .tabulator-cell {{
+  color: var(--neutral-foreground-rest, #2b2b2b) !important;
+  box-shadow: inset 0 0 0 100vmax rgba(31, 56, 100, 0.05);
+}}
+.tabulator-row.tabulator-selected {{
+  background: {STEEL_LIGHT} !important;
+  color: inherit !important;
+}}
+.tabulator-row.tabulator-selected .tabulator-cell {{
+  color: var(--neutral-foreground-rest, #2b2b2b) !important;
+}}
+.tabulator .tabulator-cell {{ font-variant-numeric: tabular-nums; }}
+"""
+
 # ============================ BRANDING ====================================
 # The ONLY three things to edit to rebrand. Defaults reproduce the workbook
 # look. Chart/table colors and the accent are intentionally NOT here — this

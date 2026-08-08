@@ -24,7 +24,7 @@ from app.glue.engineio import run_async
 from app.glue.exhibit import note_list
 from app.glue.format import (DASH, fmt_count, fmt_dollar, fmt_pct, md_safe,
                              tab_formatters)
-from app.glue.theme import FAIL_RED, NAVY
+from app.glue.theme import FAIL_RED, NAVY, TABLE_CSS
 
 _CARD_CSS = f"""
 <style>
@@ -172,7 +172,10 @@ def build(session):
                                   errors="count"),
         text_align={c: "right" for c in ("combos", "ep", "lr_p", "lr_p1",
                                          "a_rate", "a_mod", "errors")},
-        layout="fit_data_table", height=230, sizing_mode="stretch_width",
+        layout="fit_data_table", max_height=300,      # grow to the roster
+        sizing_mode="stretch_width",
+        selectable=False,                # row click activates; never selects
+        stylesheets=[TABLE_CSS],
         hidden_columns=["_index"],       # rendered despite show_index=False
         configuration={"clipboard": "copy"})
 
@@ -185,9 +188,16 @@ def build(session):
         text_align={c: "right" for c in ("ep", "lr_p", "lr_p1", "a_rate",
                                          "a_mod", "crl", "ecy")},
         frozen_columns=["lob", "bu", "state"],       # by NAME (the scar)
-        layout="fit_data_table", height=520, sizing_mode="stretch_width",
+        layout="fit_data_table", max_height=640,     # grow to the page
+        sizing_mode="stretch_width",
+        selectable=False,      # click-through rides cellClick — survives
+        # 378 real rows tripped Panel's silent auto-pagination at 20/page,
+        # and it never reset when filtered down — make it a decision
+        pagination="local", page_size=100,
+        stylesheets=[TABLE_CSS],
         hidden_columns=["_index"],       # rendered despite show_index=False
-        configuration={"clipboard": "copy"})
+        configuration={"clipboard": "copy",
+                       "columnDefaults": {"headerWordWrap": True}})
 
     mix_md = pn.pane.Markdown(
         "*Every mean is adjusted-plan-EP weighted over what's in view — the "

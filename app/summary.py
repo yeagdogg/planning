@@ -394,7 +394,12 @@ def ss_styles(df: pd.DataFrame, levers: tuple = ()) -> pd.DataFrame:
     css.loc[body.index[body.index % 2 == 1], :] = "background-color: #F5F7FA"
     for c in levers:
         if c in css.columns:
-            css.loc[body.index, c] = "background-color: #EAF2FC"
+            # the STEEL left border is the non-color half of the signal:
+            # lever blue and the LR scale's green are both pale-cool, so
+            # "you may type here" must survive greyscale and colorblind
+            # reading (W3a)
+            css.loc[body.index, c] = (f"background-color: #EAF2FC; "
+                                      f"border-left: 3px solid {STEEL}")
     for col_ in ("planlr", "planlr1"):
         scale = three_color_scale(body[col_])
         for i, s in zip(body.index, scale):
