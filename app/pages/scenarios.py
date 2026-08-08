@@ -66,6 +66,9 @@ def build(session):
         name="Recalc in Excel after building (needs Excel; ~1 min for six)")
     gen_btn = pn.widgets.Button(label="Generate workbooks (_APP tag)",
                                 button_type="success")
+    book_btn = pn.widgets.Button(
+        label="Generate fleet + summary Book → output/app/ (Excel, ~2 min)",
+        button_type="success")
     gen_flash = pn.pane.Markdown("", sizing_mode="stretch_width")
     log_md = pn.pane.Markdown("", sizing_mode="stretch_width")
 
@@ -239,6 +242,33 @@ def build(session):
 
     gen_btn.on_click(_generate)
 
+    def _generate_book(_event):
+        book = dict(session.page.book)
+        if not book:
+            gen_flash.object = "⚠ **Nothing to generate** — the book is empty."
+            return
+        book_btn.loading = True
+
+        def _work():
+            return exporters.export_fleet_and_book(book, formula_mode=dialect.value)
+
+        def _done(res):
+            book_btn.loading = False
+            paths, book_file = res
+            gen_flash.object = (
+                f"✓ **Fleet + Book built and recalculated** in "
+                f"`output/app/` — {len(paths)} line file(s) + "
+                f"`{md_safe(book_file.name)}`. The verified fleet in "
+                f"output/ was not touched.")
+
+        def _err(e):
+            book_btn.loading = False
+            gen_flash.object = f"⚠ **Fleet + Book failed** — {md_safe(e)}"
+
+        run_async(_work, _done, _err)
+
+    book_btn.on_click(_generate_book)
+
     # ---- wiring ------------------------------------------------------------
     rail_rev = debounce(session.bus.param.rev, delay_ms=300, bag=bag)
     bag.watch(rail_rev, _summary, "rev")
@@ -264,7 +294,7 @@ def build(session):
                          "from the current book, through the verified "
                          "generator — tagged `_APP`, never overwriting the "
                          "fleet's own files.*"),
-        lines_ms, dialect, recalc_cb, gen_btn, gen_flash,
+        lines_ms, dialect, recalc_cb, gen_btn, book_btn, gen_flash,
         pn.layout.Divider(),
         log_md,
         sizing_mode="stretch_both")
@@ -273,7 +303,8 @@ def build(session):
             "widgets": {"name": name_in, "note": note_in, "save": save_btn,
                         "file": file_sel, "load": load_btn, "diff": diff_btn,
                         "lines": lines_ms, "dialect": dialect,
-                        "recalc": recalc_cb, "generate": gen_btn},
+                        "recalc": recalc_cb, "generate": gen_btn,
+                        "book": book_btn},
             "flashes": {"save": save_flash, "load": load_flash,
                         "gen": gen_flash, "log": log_md},
             "summary": summary}

@@ -98,6 +98,10 @@ tools/harvest.py           reads the six recalculated workbooks' published per-c
 tools/build_book.py        harvest -> the combined book workbook
 tools/verify_book.py       book harness: harvest ties, aggregation ties, filter exercises
 tools/release.py           the whole pipeline in one tiered, parallel command (D87)
+app/                       the Westfield Planning Workbench (D114): a Panel front end
+                           over the SAME engine — its own venv in app/.venv, served by
+                           app\serve.bat <port>; the Excel pipeline never touches it
+scenarios/                 app-saved books (yaml, each carrying its own changelog)
 output/Plan_LR_Workbook_2027_<LOB>.xlsx   one generated workbook per LOB (values cached)
 output/Plan_LR_Book_2027.xlsx             the combined book, harvested from all six
 DECISIONS.md               every judgment call and why
@@ -240,7 +244,9 @@ At v3.13.0 every artifact is green through **phase D**, from a single
 `python tools/release.py --full --force-full`: the five 12-month lines **321 checks / 0
 failed** each, the 6-month-term Inland Marine **319 / 0**, and the combined book **65 / 0**
 (`tools/verify_book.py`, including the source-freshness phase, the Pivot Data ties and the
-Net Delivery grids). pytest 380/380. The D113 pilot pair sits beside the fleet:
+Net Delivery grids). pytest 409/409 on the system interpreter (the ten skips are
+app-page tests that need the app venv, where the whole suite is 419/419). The D113
+pilot pair sits beside the fleet:
 `..._Property_MODERN.xlsx` is the same Property built in the LET dialect from identical
 inputs — 223,668 cell values proven identical to classic, 321/0 through phase D itself. Build, recalculate, roll up the book and verify all
 seven — **8.9 minutes**, of which 2.5 is pytest. Verification alone is about 3.
@@ -459,6 +465,35 @@ Structural, identity, and sanity checks stay live either way.
 
 A freshly generated sample workbook reads amber: it ships with one standing advisory, which
 is honest and shows you what a warning looks like.
+
+## The Planning Workbench app (D114)
+
+The planning process can START outside Excel: `app/` serves the **Westfield Planning
+Workbench**, a Panel front end over the SAME `src/engine.py` the workbooks verify
+against — one calculation path, no second implementation, so the app, the workbooks and
+the oracle cannot disagree without a test failing.
+
+```
+app\serve.bat 8600            serve locally (own venv in app/.venv)
+python -m app.make_masters    paste-ready master blocks from the fleet -> output/masters/
+```
+
+- **Book** — load every line in one click, or paste three **master tables** (the
+  per-line paste blocks with a leading `Line` column — a BU can write several lines, so
+  the line is always explicit). EP-weighted roll-up by the Book workbook's own `wtd()`
+  rule, filters, and click-through to any combo.
+- **Combo** — the live bridge plus its deep dives: waterfalls, the earning
+  parallelogram, the monthly race (D93), the ec(k,P) delivery band.
+- **Inputs** — the four editable grids and paste blocks (workbook column order), with
+  the Checks rules running live as you type.
+- **Scenarios** — the whole book saves to one yaml in `scenarios/`; every save appends a
+  changelog entry diffed against the file it replaces, and git carries the version
+  control. Load sits behind a two-step confirm. Generate real fleet workbooks from the
+  current book (`_APP` tag beside the fleet), or the fleet + summary Book into
+  `output/app/` — recalculated end to end via the system python's Excel COM session.
+
+Workbook → app → workbook → app round-trips exactly, and no app path ever overwrites
+the verified fleet in `output/`. See D114 in DECISIONS.md for the full design record.
 
 ## First-open checklist
 

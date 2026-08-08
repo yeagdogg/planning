@@ -70,6 +70,40 @@ def split_master(table: str, text: str, known_lines: list,
     return by
 
 
+def _render_cell(kind: str, v) -> str:
+    """One typed value -> the text a master block carries. Inverse of
+    paste.coerce for every kind this app stores: dates go ISO, numerics go
+    plain (no % signs — coerce reads bare fractions), blanks go empty."""
+    if v is None or v == "":
+        return ""
+    if kind == "date":
+        return v.isoformat() if hasattr(v, "isoformat") else str(v)
+    if kind in ("pct", "num", "mod", "idx", "dollar"):
+        try:
+            return f"{float(v):.12g}"
+        except (TypeError, ValueError):
+            return str(v)
+    return str(v)
+
+
+def master_text(book: dict, table: str) -> str:
+    """The copy-out twin of ``apply_master``: the whole book's rows for one
+    table as a paste-ready master block (title header + Line column).
+
+    The round-trip law, pinned by the tests:
+    ``split_master(table, master_text(book, table))`` reproduces every
+    populated line's rows exactly — so a generated master IS the book.
+    """
+    schema, attr = MASTERS[table]
+    out = ["\t".join(title for _k, title, _kind in schema)]
+    for lob, scn in book.items():
+        for r in getattr(scn, attr):
+            cells = [lob] + [_render_cell(kind, r.get(key))
+                             for key, _t, kind in schema[1:]]
+            out.append("\t".join(cells))
+    return "\n".join(out)
+
+
 def apply_master(session, table: str, text: str,
                  notes: list | None = None) -> tuple:
     """Apply one pasted master into ``session.page.book``.

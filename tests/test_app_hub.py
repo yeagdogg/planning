@@ -169,7 +169,137 @@ def test_export_reimports_as_the_same_scenario(tmp_path):
     assert _tables_equal(back, scn)
 
 
+# ------------------------------------------------------ masters copy-out
+
+def test_master_text_round_trips(two_line_book):
+    """The law: split_master(master_text(book)) == the book's own rows,
+    for every master table — a generated master IS the book."""
+    from app.masters import MASTERS, master_text, split_master
+    known = list(two_line_book)
+    for table, (_schema, attr) in MASTERS.items():
+        text = master_text(two_line_book, table)
+        assert text.splitlines()[0].startswith("Line\tBU\tState")
+        notes: list = []
+        by = split_master(table, text, known, notes=notes)
+        assert notes == ["header row skipped"]
+        for lob, scn in two_line_book.items():
+            rows = getattr(scn, attr)
+            if rows:
+                assert by[lob] == rows, f"{table} / {lob}"
+            else:
+                assert lob not in by
+
+
+def test_make_masters_writes_paste_ready_files(tmp_path):
+    from app import importers
+    from app.make_masters import make_masters
+    from app.masters import split_master
+    written = make_masters(tmp_path)
+    assert set(written) == {"tbl_LR", "Rate Log", "Mod Log"}
+    fleet = importers.fleet_choices()
+    text = written["tbl_LR"].read_text(encoding="utf-8")
+    by = split_master("tbl_LR", text, list(fleet))
+    assert set(by) == set(fleet)                  # every line present
+    prop = importers.from_workbook(fleet["Property"])
+    assert by["Property"] == prop.lr_rows
+
+
+def test_master_files_rebuild_the_fleet_book(tmp_path):
+    """The closing closure: paste the GENERATED masters into an empty
+    session, carry the toggles masters deliberately do not cover, and the
+    engine's book is the fleet's book — every combo's plan LR equal."""
+    import dataclasses
+
+    from app import compute, importers
+    from app.make_masters import make_masters
+    from app.masters import MASTERS, apply_master
+
+    fleet = {lob: importers.from_workbook(p)
+             for lob, p in importers.fleet_choices().items()}
+    written = make_masters(tmp_path)
+
+    sess = _Sess()
+    for table in MASTERS:
+        apply_master(sess, table,
+                     written[table].read_text(encoding="utf-8"))
+    assert set(sess.page.book) == set(fleet)
+    # masters carry the three tables; toggles + seasonality ride scenario
+    # files / Inputs — copy them over so the comparison is like-for-like
+    for lob, src in fleet.items():
+        scn = sess.page.book[lob]
+        sess.page.book[lob] = dataclasses.replace(
+            scn, term_months=src.term_months, season_on=src.season_on,
+            mod_master=src.mod_master, trend_default=src.trend_default,
+            season_rows=[dict(r) for r in src.season_rows])
+    sess.page.config = sess.page.book[next(iter(fleet))]
+
+    mine = compute.book_frame(sess).set_index("key")
+    theirs = compute.book_frame(_Sess(fleet)).set_index("key")
+    assert set(mine.index) == set(theirs.index)
+    assert len(mine) == len(theirs)
+    for key in theirs.index:
+        assert mine.loc[key, "lr_p"] == pytest.approx(
+            theirs.loc[key, "lr_p"], abs=1e-12), key
+
+
+# --------------------------------------------------- fleet + book (mocked)
+
+def test_export_fleet_and_book_orchestration(two_line_book, tmp_path,
+                                             monkeypatch):
+    """Sequence + guards, with Excel and the subprocess mocked out (the
+    real COM chain is smoked outside pytest, release-harness style)."""
+    from app import exporters, importers
+    cfg = importers.app_config()
+
+    with pytest.raises(ValueError, match="missing"):
+        exporters.export_fleet_and_book(dict(two_line_book))
+
+    fleet = {lob: importers.from_workbook(p)
+             for lob, p in importers.fleet_choices().items()}
+    calls = {"recalc": [], "run": []}
+    monkeypatch.setattr(exporters, "recalc_files",
+                        lambda paths, **k: calls["recalc"].append(
+                            [Path(p).name for p in paths]))
+
+    def _fake_run(cmd, **kw):
+        calls["run"].append(cmd)
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(exporters.subprocess, "run", _fake_run)
+    paths, book_file = exporters.export_fleet_and_book(fleet,
+                                                       out_dir=tmp_path)
+    assert len(paths) == len(cfg.output_lobs)
+    assert all(p.exists() and not p.stem.endswith("_APP") for p in paths)
+    assert calls["recalc"][0] == [p.name for p in paths]   # lines first
+    assert calls["recalc"][1] == [book_file.name]          # then the book
+    assert any("tools/build_book.py" in str(a) for a in calls["run"][0])
+    assert str(tmp_path) in calls["run"][0]
+
+    bad = dict(fleet)
+    bad["Property"] = dataclasses_replace_year(bad["Property"], 1999)
+    with pytest.raises(ValueError, match="plan year"):
+        exporters.export_fleet_and_book(bad, out_dir=tmp_path)
+
+
+def dataclasses_replace_year(scn, year):
+    import dataclasses
+    return dataclasses.replace(scn, plan_year=year)
+
+
 # ------------------------------------------------------- page flows (venv)
+
+@pytest.mark.skipif(
+    __import__("importlib").util.find_spec("panel") is None,
+    reason="panel not installed (system interpreter — app venv runs this)")
+def test_guide_page_renders_from_the_schemas():
+    from app.glue.session import PlanSession
+    from app.pages import guide
+    page = guide.build(PlanSession())
+    body = page["main"][0].object
+    assert "Plan EP (000s)" in body          # column lists come FROM schemas
+    assert "`Line`" in body and "master" in body.lower()
+    assert "mix" in body                      # the honesty rules are stated
+
 
 @pytest.mark.skipif(
     __import__("importlib").util.find_spec("panel") is None,

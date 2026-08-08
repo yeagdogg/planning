@@ -110,20 +110,9 @@ for _brand_css in brand_raw_css():
 APP_TITLE = "Westfield Planning Workbench"
 
 
-def _placeholder(title: str, blurb: str):
-    """P0 stub page — replaced wave by wave with real modules."""
-    def build(session):
-        return {
-            "main": pn.Column(
-                pn.pane.Markdown(f"## {title}\n\n{blurb}"),
-                sizing_mode="stretch_both"),
-            "sidebar": pn.Column(sizing_mode="stretch_width"),
-        }
-    return build
-
-
 from app.pages import book as _book_page  # noqa: E402
 from app.pages import combo as _combo_page  # noqa: E402
+from app.pages import guide as _guide_page  # noqa: E402
 from app.pages import inputs as _inputs_page  # noqa: E402
 from app.pages import scenarios as _scenarios_page  # noqa: E402
 
@@ -132,8 +121,7 @@ _PAGES = {
     "🔬 Combo": _combo_page.build,
     "📚 Book": _book_page.build,
     "🗂 Scenarios": _scenarios_page.build,
-    "📖 Guide": _placeholder(
-        "Guide", "How the app relates to the workbook and the engine (wave P6)."),
+    "📖 Guide": _guide_page.build,
 }
 # nav VALUES are URL-safe slugs so the current page lives in ?page=… —
 # reloads land back where the user was, and pages become bookmarkable

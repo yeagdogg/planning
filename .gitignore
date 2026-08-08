@@ -10,4 +10,6 @@ output/verify_*/
 output/release-state.json
 output/*_ABBASE.xlsx
 output/*_APP.xlsx
+output/app/
+output/masters/
 app/.venv/

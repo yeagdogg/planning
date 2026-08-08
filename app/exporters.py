@@ -96,6 +96,45 @@ finally:
 """
 
 
+def export_fleet_and_book(book: dict, out_dir=None,
+                          formula_mode=None) -> tuple:
+    """The summary flow (P6): every line UNTAGGED into output/app/ (an
+    isolated directory — the verified fleet in output/ is never touched),
+    Excel-recalc them, run tools/build_book.py --out there (the harvest
+    refuses unrecalced sources by design), then recalc the Book itself.
+    Returns (line paths, book path). Needs Excel end to end.
+    """
+    import sys
+
+    cfg = importers.app_config()
+    missing = [name for name in cfg.output_lobs if name not in book]
+    if missing:
+        raise ValueError(
+            "the Book needs every configured line loaded — missing: "
+            + ", ".join(missing))
+    wrong_year = [s.lob for s in book.values()
+                  if s.plan_year != cfg.plan_year]
+    if wrong_year:
+        raise ValueError(
+            f"plan year mismatch vs config ({cfg.plan_year}): "
+            + ", ".join(wrong_year))
+    out = Path(out_dir) if out_dir is not None else ROOT / cfg.output_dir / "app"
+    paths = [export_line(book[name], out_dir=out,
+                         formula_mode=formula_mode, tag="")
+             for name in cfg.output_lobs]
+    recalc_files(paths)
+    proc = subprocess.run(
+        [sys.executable, "tools/build_book.py",
+         "--config", "config/config.yaml", "--out", str(out)],
+        cwd=str(ROOT), capture_output=True, text=True, timeout=300)
+    if proc.returncode != 0:
+        tail = (proc.stdout or proc.stderr or "").strip().splitlines()[-4:]
+        raise RuntimeError("book build failed: " + " | ".join(tail))
+    book_file = out / f"Plan_LR_Book_{cfg.plan_year}.xlsx"
+    recalc_files([book_file])
+    return paths, book_file
+
+
 def recalc_files(paths, timeout: int = 600) -> str:
     """Populate values in exported workbooks via the system python's Excel
     COM session (tools/recalc.py — the release harness's own path). One
