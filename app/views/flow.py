@@ -529,13 +529,17 @@ def pf_summary_frame(view: dict, prog: dict,
     return df
 
 
-def nd_summary_frame(view: dict, prog: dict, avg_label: str) -> pd.DataFrame:
+def nd_summary_frame(view: dict, prog: dict, avg_label: str,
+                     suggest: dict | None = None) -> pd.DataFrame:
     """The Book Net Delivery REPORT: targets vs delivered per state.
     Targets average over NET combos only ("a combo that asserts nothing
     is not a target of zero"); the P+1 target column says whether it was
     entered, carried from P, or mixed; plan LR program basis is the
     EP-weighted program-basis value over net combos, and the gap to the
-    asserted headline rides beside it in points."""
+    asserted headline rides beside it in points. ``suggest`` (W3f) is a
+    per-state suggested-change map the page computes ONLY for states
+    resolving to a single net combo — read-only prescriptive display,
+    never an editing surface, and never aggregated."""
     def row_for(recs, st):
         flows = [(r["ep"], r["pf"]) for r in recs if r["pf"] is not None]
         a = combine_avgs(flows)
@@ -561,18 +565,20 @@ def nd_summary_frame(view: dict, prog: dict, avg_label: str) -> pd.DataFrame:
                     delivered=a["delivered"],
                     gap=None if tgt is None else
                     (a["delivered"] - tgt) * 100.0,
-                    progbasis=progb, proggap=pgap)
+                    progbasis=progb, proggap=pgap,
+                    suggest=(suggest or {}).get(st))
 
     recs_all = [r for recs in view.values() for r in recs]
     rows = [r for st in sorted(view)
             if (r := row_for(view[st], st)) is not None]
     total = row_for(recs_all, avg_label)
     if total is not None:
+        total["suggest"] = None            # never aggregated, by rule
         rows.append(total)
     cols = ["state", "ep", "netcnt", "tgt", "tgt1", "set1", "delivered",
-            "gap", "progbasis", "proggap"]
+            "gap", "progbasis", "proggap", "suggest"]
     df = pd.DataFrame(rows, columns=cols)
-    for c in ("tgt", "tgt1", "gap", "progbasis", "proggap"):
+    for c in ("tgt", "tgt1", "gap", "progbasis", "proggap", "suggest"):
         df[c] = pd.Series([r.get(c) for r in rows], dtype=object)
     return df
 

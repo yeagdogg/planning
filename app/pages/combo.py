@@ -22,10 +22,12 @@ from app.glue.exhibit import chip, chips_html
 from app.glue.format import DASH, TAB_SPECS, fmt_dollar, fmt_idx, fmt_pct, \
     md_safe
 from app.glue.theme import FAIL_RED, NAVY, PASS_GREEN, STEEL, TABLE_CSS
+from app.paste import coerce
 from app.views import bridge as v_bridge
 from app.views import delivery as v_delivery
 from app.views import earning as v_earning
 from app.views import flow as v_flow
+from app.views import netdeliv as v_nd
 from app.views import onlevel as v_onlevel
 
 _CARD_CSS = f"""
@@ -224,6 +226,57 @@ def build(session):
         css.iloc[12:, :] = "background-color: #EDF1F6"   # P+1 tinted
         return css
 
+    # ---- W3f: the Net Delivery microscope (net combos' solve surface) ------
+    nd_eff = pn.widgets.DatePicker(name="Filing effective date")
+    nd_ovr = pn.widgets.TextInput(
+        name="Filed % override",
+        placeholder="blank = planned filing / suggested")
+    nd_chips = pn.pane.HTML("", sizing_mode="stretch_width")
+    nd_share = pn.pane.HoloViews(sizing_mode="stretch_width")
+    _MIC_KINDS = {"w": "idx", "rate_leg": "pct_signed",
+                  "price_req": "pct_signed", "m_required": "mod",
+                  "m_proj": "mod", "gap": "pts", "delivered": "pct_signed"}
+    _MIC_TITLES = {"label": "Month", "w": "Written weight",
+                   "rate_leg": "YoY rate leg",
+                   "price_req": "Required pricing leg",
+                   "m_required": "Required written mod",
+                   "m_proj": "Projected written mod",
+                   "gap": "Gap (pts)", "delivered": "Delivered @ proj",
+                   "m_base": "Mod base (plan-yr)"}
+    micro_tbl = pn.widgets.Tabulator(
+        pd.DataFrame(columns=["label"] + list(_MIC_KINDS)),
+        disabled=True, show_index=False, titles=_MIC_TITLES,
+        formatters={k: NumberFormatter(format=TAB_SPECS[kind],
+                                       nan_format="—", null_format="—")
+                    for k, kind in _MIC_KINDS.items()},
+        text_align={k: "right" for k in _MIC_KINDS},
+        layout="fit_data_table", max_height=420,
+        selectable=False, stylesheets=[TABLE_CSS],
+        hidden_columns=["_index", "share_rate", "share_price"],
+        configuration={"clipboard": "copy"},
+        sizing_mode="stretch_width")
+    _P1_KINDS = {"w": "idx", "rate_leg": "pct_signed",
+                 "price_req": "pct_signed", "m_required": "mod",
+                 "m_base": "mod"}
+    p1_cap = pn.pane.Markdown("", sizing_mode="stretch_width")
+    p1_tbl = pn.widgets.Tabulator(
+        pd.DataFrame(columns=["label"] + list(_P1_KINDS)),
+        disabled=True, show_index=False, titles=_MIC_TITLES,
+        formatters={k: NumberFormatter(format=TAB_SPECS[kind],
+                                       nan_format="—", null_format="—")
+                    for k, kind in _P1_KINDS.items()},
+        text_align={k: "right" for k in _P1_KINDS},
+        layout="fit_data_table", max_height=420,
+        selectable=False, stylesheets=[TABLE_CSS],
+        hidden_columns=["_index"],
+        configuration={"clipboard": "copy"},
+        sizing_mode="stretch_width")
+    nd_note = pn.pane.Markdown("", sizing_mode="stretch_width")
+    nd_hint = pn.pane.Markdown("", sizing_mode="stretch_width")
+    nd_col = pn.Column(pn.Row(nd_eff, nd_ovr), nd_chips, nd_share,
+                       micro_tbl, p1_cap, p1_tbl, nd_note,
+                       visible=False, sizing_mode="stretch_width")
+
     tabs = pn.Tabs(
         # the whole reason this app exists, first (W2d, user direction)
         ("On-level", pn.Column(pn.Row(ol_window, ol_basis),
@@ -238,7 +291,8 @@ def build(session):
         ("Monthly walk", pn.Column(race_md, walk_chips, walk_pane,
                                    walk_tbl, recon_pane,
                                    sizing_mode="stretch_width")),
-        ("Delivery", pn.Column(band_pane, sizing_mode="stretch_width")),
+        ("Delivery", pn.Column(band_pane, nd_hint, nd_col,
+                               sizing_mode="stretch_width")),
         dynamic=False,                       # dynamic=True makes deaf cards
         sizing_mode="stretch_width")
 
@@ -254,6 +308,13 @@ def build(session):
             h.object = ""
         fl_note.object = ""
         walk_tbl.value = walk_tbl.value.iloc[0:0]
+        nd_col.visible = False
+        nd_hint.object = ""
+        nd_chips.object = ""
+        nd_note.object = ""
+        nd_share.object = None
+        micro_tbl.value = micro_tbl.value.iloc[0:0]
+        p1_tbl.value = p1_tbl.value.iloc[0:0]
         vis_note.object = msg
 
     def _render_visuals(key, scn, res):
@@ -369,6 +430,64 @@ def build(session):
         walk_tbl.style = wdf.style.apply(_walk_styles, axis=None)
         recon_pane.object = v_delivery.recon_html(flow)
         band_pane.object = v_delivery.band(eng, p)
+
+        # ---- the Net Delivery microscope (W3f) -----------------------------
+        nd_col.visible = bool(ci.net_mode)
+        nd_hint.object = ("" if ci.net_mode else
+                          "*The Net Delivery microscope appears for combos "
+                          "with a net selection — this combo runs the "
+                          "explicit program (the band above is its "
+                          "delivery geometry).*")
+        if ci.net_mode:
+            try:
+                raw = (nd_ovr.value or "").strip()
+                ovr = coerce("pct", raw) if raw else None
+                mic = v_nd.microscope(p, ci, nd_eff.value, ovr)
+            except ValueError as e:
+                nd_note.object = f"⚠ **{md_safe(e)}**"
+                nd_chips.object = ""
+                nd_share.object = None
+                micro_tbl.value = micro_tbl.value.iloc[0:0]
+                p1_tbl.value = p1_tbl.value.iloc[0:0]
+                p1_cap.object = ""
+            else:
+                step = mic["step"]
+                multi = (f" — ⚠ MULTI-PLANNED ({mic['multi_planned']})"
+                         if mic["multi_planned"] > 1 else "")
+                nd_chips.object = chips_html(
+                    chip("solving for", fmt_pct(mic["x"], signed=True),
+                         sub=f"the asserted net target, CY {p}"),
+                    chip("suggested change",
+                         fmt_pct(mic["suggested"], signed=True),
+                         sub=f"@ {mic['eff_date']}"),
+                    chip("change in force", fmt_pct(mic["r"], signed=True),
+                         sub=mic["source"] + multi),
+                    chip("filed equivalent",
+                         fmt_pct(mic["filed_equiv"], signed=True),
+                         sub=f"achievement {mic['ach']:.0%}"),
+                    chip("required M_1′",
+                         "n/a" if mic["m1_prime"] is None
+                         else f"{mic['m1_prime']:.3f}",
+                         sub=(mic["m1_reason"] or
+                              "year-end written mod LEVEL")),
+                    chip("required mod step",
+                         DASH if step is None
+                         else fmt_pct(step.required_step, signed=True),
+                         sub=(mic["step_reason"] if step is None else
+                              f"direct {step.directed_equivalent:+.1%} · "
+                              f"post-share {step.post_share:.0%}"),
+                         bad=bool(step is not None and not step.feasible)))
+                nd_share.object = v_nd.share_chart(mic["rows"], mic["x"],
+                                                   p)
+                micro_tbl.value = mic["rows"]
+                p1_cap.object = (
+                    f"**CY {p + 1} carryover** — no second filing "
+                    f"assumed; target used: "
+                    f"{fmt_pct(mic['x1'], signed=True)} "
+                    f"({mic['p1_src']})")
+                p1_tbl.value = mic["p1"]
+                warn = "; ".join(mic["warnings"])
+                nd_note.object = f"*⚠ {md_safe(warn)}*" if warn else ""
         vis_note.object = ""
 
     def _render(*_events):
@@ -398,6 +517,8 @@ def build(session):
     combo_sel.param.watch(_render, "value")
     ol_window.param.watch(_render, "value")
     ol_basis.param.watch(_render, "value")
+    nd_eff.param.watch(_render, "value")
+    nd_ovr.param.watch(_render, "value")
     _render()
 
     sidebar = pn.Column(
@@ -421,5 +542,9 @@ def build(session):
                       "flow_ledger": fl_ledger, "flow_note": fl_note,
                       "walk_chips": walk_chips, "recon": recon_pane},
             "walk_tbl": walk_tbl,
+            "nd": {"eff": nd_eff, "override": nd_ovr, "chips": nd_chips,
+                   "share": nd_share, "table": micro_tbl, "p1": p1_tbl,
+                   "p1_cap": p1_cap, "note": nd_note, "col": nd_col,
+                   "hint": nd_hint},
             "ol_window": ol_window, "ol_basis": ol_basis,
             "ol_note": ol_note}

@@ -147,7 +147,8 @@ def build(session):
 
     _ND_KINDS = {"ep": "dollar", "netcnt": "count", "tgt": "pct_signed",
                  "tgt1": "pct_signed", "delivered": "pct_signed",
-                 "gap": "pts", "progbasis": "pct", "proggap": "pts"}
+                 "gap": "pts", "progbasis": "pct", "proggap": "pts",
+                 "suggest": "pct_signed"}
     nd_tbl = pn.widgets.Tabulator(
         pd.DataFrame(columns=["state"] + list(_ND_KINDS) + ["set1"]),
         disabled=True, show_index=False,
@@ -157,7 +158,9 @@ def build(session):
                 "delivered": "Avg delivered (as logged)",
                 "gap": "Gap to target (pts)",
                 "progbasis": "Plan LR — program basis",
-                "proggap": "Program vs asserted (pts)"},
+                "proggap": "Program vs asserted (pts)",
+                "suggest": "Suggested change ° (single net combo, "
+                           "default date)"},
         formatters=_fmt(_ND_KINDS),
         text_align={k: "right" for k in _ND_KINDS},
         frozen_columns=["state"],
@@ -231,7 +234,8 @@ def build(session):
                         else res.cy_lr_p)
                 view.setdefault(st, []).append(dict(
                     lob=lob, key=key, bu=bu, ep=r.get("ep"), pf=pf,
-                    netp=r.get("netp"), netp1=r.get("netp1"), lr_p=lr_p))
+                    netp=r.get("netp"), netp1=r.get("netp1"), lr_p=lr_p,
+                    scn=scn, row=r))
         return view, p0, excluded
 
     def _avg_label():
@@ -328,7 +332,23 @@ def build(session):
         grid_tbl.frozen_rows = [len(gdf) - 1] if len(gdf) else []
 
         # -- Net delivery tab ------------------------------------------------
-        ndf = v_flow.nd_summary_frame(view, prog, label)
+        # suggested change: single-net-combo states only (W3f) — one
+        # closed form per qualifying row, at the Excel default date
+        import datetime as dt
+
+        from src import engine
+        sugg = {}
+        for st, recs in view.items():
+            if len(recs) != 1 or recs[0]["netp"] is None:
+                continue
+            try:
+                ci = compute.combo_inputs(recs[0]["scn"], recs[0]["row"])
+                planned = engine.planned_change_in_plan_year(p, ci)
+                d0 = planned[0] if planned else dt.date(p, 4, 1)
+                sugg[st] = engine.suggest_net_rate(p, ci, d0)[0]
+            except Exception:                           # noqa: BLE001
+                continue                # no exposure after the date, etc.
+        ndf = v_flow.nd_summary_frame(view, prog, label, suggest=sugg)
         nd_tbl.value = ndf
         nleg = {"rate": "rate_leg", "delivered": "delivered"}[
             nd_radio.value]
