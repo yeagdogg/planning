@@ -578,12 +578,83 @@ class TestNetRateSelection:
             eng.index_in_force(month_index(2027, 3)), abs=1e-12)
 
     def test_monthly_vs_continuous_net(self):
+        """The genuine monthly-vs-continuous convention gap is ~1e-5. The
+        pre-W3b tolerance here was 1.5e-3 — wide enough to hide the Simpson
+        segment-branching defect (~1e-3) entirely."""
         mods = ModInputs(m_ind=0.85, m0=0.86, m0_asof=dt.date(2026, 9, 30), m1=0.89)
         combo = self._user_example(mods=mods)
         mon = run_bridge(2027, combo, "monthly")
         for year in (2026, 2027, 2028):
             cont = continuous_net_index(2027, combo, year)
-            assert mon.e_cy[year] == pytest.approx(cont, abs=1.5e-3), year
+            assert mon.e_cy[year] == pytest.approx(cont, abs=5e-5), year
+
+    @staticmethod
+    def _brute_net_index(combo, plan_year, year, per_month=256):
+        """Independent midpoint integration of L(t)·q(t). Grid boundaries
+        sit on integer month coordinates (every jump in these cases is a
+        1st-of-month / close-of-month coordinate), so no cell straddles a
+        discontinuity and the only error is O(h^2) curvature — ~1e-8 at
+        256 cells/month, three orders below the tolerance and four below
+        the pre-W3b Simpson defect this pins."""
+        from src.engine import _cy_overlap_weight, continuous_net_q
+
+        tau = float(combo.term_months)
+        y0 = float(month_index(year, 1))
+        y1 = float(month_index(year + 1, 1))
+        q, _jumps, _kinks = continuous_net_q(plan_year, combo)
+        lo = y0 - tau
+        n = int(round((y1 - lo) * per_month))
+        h = (y1 - lo) / n
+        num = den = 0.0
+        for i in range(n):
+            t = lo + (i + 0.5) * h
+            w = _cy_overlap_weight(t, y0, y1, tau)
+            den += w
+            num += w * q(t)
+        return num / den
+
+    def test_continuous_net_ties_brute_force(self):
+        """The Simpson assembly vs an independent integral, all three years.
+        Pre-W3b this failed at ~2e-4..1.4e-3: a segment ending exactly on
+        1/1/P (always a breakpoint) took the recursion branch for its
+        left-limit endpoint. The 10/1 history filing makes the sawtooth
+        pronounced, which is exactly the shape that exposed it."""
+        mods = ModInputs(m_ind=0.85, m0=0.86, m0_asof=dt.date(2026, 9, 30), m1=0.89)
+        combo = self._user_example(mods=mods)
+        for year in (2026, 2027, 2028):
+            got = continuous_net_index(2027, combo, year)
+            want = self._brute_net_index(combo, 2027, year)
+            assert got == pytest.approx(want, abs=1e-7), year
+
+    def test_continuous_net_honors_the_mod_reanchor(self):
+        """D70a: once a mod log exists, HISTORY re-anchors onto m_end_prior
+        — which moves every P-1 cohort's q and, through the recursion, the
+        whole net path. Pre-W3b the continuous side used a bare drift path
+        and returned the no-steps value identically (~1e-2 off monthly).
+
+        Monthly-vs-continuous rides a looser tolerance here than the
+        no-steps test: the monthly engine interpolates mod anchors in
+        DAY-ordinal space (_cod / mi_mid_ordinal) while every continuous
+        twin interpolates the same anchor values in MONTH coordinates —
+        a long-standing convention pair whose gap scales with drift slope,
+        and the re-anchor tail (0.860 -> 0.875 over a quarter) is steep
+        (~4e-4 observed). The at-convention truth is the brute-force tie."""
+        mods = ModInputs(m_ind=0.85, m0=0.86, m0_asof=dt.date(2026, 9, 30),
+                         m1=0.89, m_end_prior=0.875)
+        steps = (RateChange(dt.date(2027, 3, 1), 0.03, TAKEN,
+                            considered=False),)
+        combo = replace(self._user_example(mods=mods), mod_changes=steps)
+        bare = self._user_example(mods=mods)          # same mods, no log
+        mon = run_bridge(2027, combo, "monthly")
+        for year in (2026, 2027, 2028):
+            cont = continuous_net_index(2027, combo, year)
+            assert cont == pytest.approx(
+                self._brute_net_index(combo, 2027, year), abs=1e-7), year
+            assert mon.e_cy[year] == pytest.approx(cont, abs=1e-3), year
+        # and the re-anchor genuinely moves the number (else this test
+        # could pass with the defect present)
+        assert abs(continuous_net_index(2027, combo, 2026)
+                   - continuous_net_index(2027, bare, 2026)) > 1e-3
 
     def test_modadj_off_is_rate_only_with_warning(self):
         mods = ModInputs(m_ind=0.85, m0=0.86, m0_asof=dt.date(2026, 9, 30), m1=0.89)

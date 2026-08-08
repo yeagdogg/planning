@@ -750,6 +750,25 @@ class _SteppedContinuousModPath:
         return self.value(t)
 
 
+def _continuous_history_mod_path(plan_year: int, mods: ModInputs,
+                                 mod_changes: Sequence[RateChange] = ()):
+    """The continuous written-mod path, D70-aware: bare drift when the combo
+    carries no mod steps; otherwise the stepped path whose HISTORY re-anchors
+    onto ``m_end_prior`` (or the drift value at 1/1/P) — mirroring
+    ``MonthlyEngine``'s ``mod_hist``. One construction, three consumers:
+    ``continuous_earned_mod``, ``continuous_net_q``, and (through the
+    latter) the app's on-level exhibit — so the re-anchor cannot be honored
+    in one place and forgotten in another (the W3b defect)."""
+    coord = lambda d: month_coord(d, end_of_day=True)   # noqa: E731
+    if mod_changes:
+        base = mods.m_end_prior
+        if base is None:
+            base = ModPath(plan_year, mods, coord=coord).value(
+                float(month_index(plan_year, 1)))
+        return _SteppedContinuousModPath(plan_year, mods, mod_changes, base)
+    return ModPath(plan_year, mods, coord=coord)
+
+
 def continuous_earned_mod(
     plan_year: int, mods: ModInputs, year: int, term_months: int = 12,
     mod_changes: Sequence[RateChange] = (),
@@ -761,15 +780,7 @@ def continuous_earned_mod(
     """
     tau = float(term_months)
     y0, y1 = float(month_index(year, 1)), float(month_index(year + 1, 1))
-    if mod_changes:
-        base = mods.m_end_prior
-        if base is None:
-            base = ModPath(plan_year, mods,
-                           coord=lambda d: month_coord(d, end_of_day=True)
-                           ).value(float(month_index(plan_year, 1)))
-        path = _SteppedContinuousModPath(plan_year, mods, mod_changes, base)
-    else:
-        path = ModPath(plan_year, mods, coord=lambda d: month_coord(d, end_of_day=True))
+    path = _continuous_history_mod_path(plan_year, mods, mod_changes)
     seg = getattr(path, "segment_value", None)
     pts = _breakpoints(y0, y1, tau, (x for x, _ in path.anchors))
 
@@ -789,20 +800,34 @@ def continuous_earned_mod(
     return num / den
 
 
-def continuous_net_index(plan_year: int, combo: ComboInputs, year: int) -> float:
-    """Closed-form CY earned COMBINED net price index under a net selection.
+def continuous_net_q(plan_year: int, combo: ComboInputs):
+    """The continuous combined net-price path under a net selection (D39):
+    ``(q, jumps, kinks)``.
 
-    q(t) = W(t) x M(t)/M_ind for t before 1/1/P (modeled history; the mod leg
-    drops out when the combo's mod adjustment is off), and
-    q(t) = q(t - 12) x (1 + x) thereafter (D39). Breakpoints include the
-    historical kinks shifted forward 12 and 24 months so q is linear on every
-    integration segment; Simpson is then exact for L(t) x q(t).
+    ``q(t, ref=t)``: modeled history ``W(t) x M(t)/M_ind`` before 1/1/P (the
+    mod leg drops when the combo's adjustment is off, and follows the D70
+    re-anchored path when the combo carries mod steps — the monthly engine's
+    own history); ``q(t-12) x (1+x)`` thereafter. ``ref`` picks the
+    continuity interval: the rate leg jumps, so segment-endpoint evaluation
+    passes the segment midpoint and never straddles a jump — INCLUDING the
+    recursion branch itself. (The pre-W3b code branched on ``t``, so a
+    Simpson segment ending exactly on 1/1/P read the right-hand limit —
+    a ~1e-3 error the 1.5e-3 test tolerance hid; and it used a bare drift
+    path, ignoring the re-anchor — ~1e-2 for net combos with a mod log.)
+
+    ``jumps`` is where q is DISCONTINUOUS — exactly the on-level exhibit's
+    diagonal set: every historical change coordinate, the 12/24-month
+    anniversary echoes of changes in the trailing year of history (older
+    changes are already inside the year-ago base and cancel), and the 1/1
+    restarts. ``kinks`` are the mod-anchor coordinates and their shifts —
+    q is continuous but changes slope there (integration and labeling
+    breakpoints, never diagonals).
     """
-    tau = float(combo.term_months)
-    y0, y1 = float(month_index(year, 1)), float(month_index(year + 1, 1))
     jan_p = float(month_index(plan_year, 1))
-    path = ModPath(plan_year, combo.mods, coord=lambda d: month_coord(d, end_of_day=True))
-    changes = [(month_coord(rc.effective), rc.effective_pct) for rc in combo.rate_changes]
+    path = _continuous_history_mod_path(plan_year, combo.mods,
+                                        combo.mod_changes)
+    changes = [(month_coord(rc.effective), rc.effective_pct)
+               for rc in combo.rate_changes]
 
     def w_at(t: float) -> float:
         idx = 1.0
@@ -811,24 +836,38 @@ def continuous_net_index(plan_year: int, combo: ComboInputs, year: int) -> float
                 idx *= 1.0 + pct
         return idx
 
-    def q_seg(t: float, ref: float) -> float:
-        """q(t) with the (jumpy) rate leg sampled at ``ref`` — a point in the
-        same continuity interval as t — so segment-endpoint evaluation never
-        straddles a rate-change jump. The mod leg is continuous, so it is
-        evaluated at t itself."""
-        if t < jan_p:
-            q = w_at(ref)
+    def q(t: float, ref: float | None = None) -> float:
+        if ref is None:
+            ref = t
+        if ref < jan_p:
+            v = w_at(ref)
             if combo.mod_adjustment_enabled:
-                q *= path.value(t) / combo.mods.m_ind
-            return q
-        x = combo.net_sel_p if t < jan_p + 12.0 else combo.net_x1
-        return q_seg(t - 12.0, ref - 12.0) * (1.0 + x)
+                v *= path.value(t) / combo.mods.m_ind
+            return v
+        x = combo.net_sel_p if ref < jan_p + 12.0 else combo.net_x1
+        return q(t - 12.0, ref - 12.0) * (1.0 + x)
 
-    base_bps = {c for c, _ in changes} | {x for x, _ in path.anchors} | {jan_p}
-    shifted = set()
-    for shift in (0.0, 12.0, 24.0):
-        shifted |= {b + shift for b in base_bps}
-    pts = _breakpoints(y0, y1, tau, shifted)
+    jumps = {c for c, _ in changes if c < jan_p}
+    jumps |= {c + s for c, _ in changes
+              if jan_p - 12.0 <= c < jan_p for s in (12.0, 24.0)}
+    jumps |= {jan_p, jan_p + 12.0}
+    kinks = {x + s for x, _ in path.anchors for s in (0.0, 12.0, 24.0)}
+    return q, jumps, kinks
+
+
+def continuous_net_index(plan_year: int, combo: ComboInputs, year: int) -> float:
+    """Closed-form CY earned COMBINED net price index under a net selection.
+
+    A thin Simpson consumer of ``continuous_net_q``: between consecutive
+    breakpoints (jumps ∪ kinks, clipped by ``_breakpoints``) q is linear in
+    t, so L(t) x q(t) is quadratic and Simpson is exact. Endpoints are
+    evaluated with the segment midpoint as ``ref`` so no evaluation ever
+    straddles a discontinuity.
+    """
+    tau = float(combo.term_months)
+    y0, y1 = float(month_index(year, 1)), float(month_index(year + 1, 1))
+    q, jumps, kinks = continuous_net_q(plan_year, combo)
+    pts = _breakpoints(y0, y1, tau, jumps | kinks)
 
     num = den = 0.0
     for a, b in zip(pts, pts[1:]):
@@ -839,8 +878,8 @@ def continuous_net_index(plan_year: int, combo: ComboInputs, year: int) -> float
             return _cy_overlap_weight(t, y0, y1, tau)
 
         den += h / 6.0 * (f(a) + 4.0 * f(mid) + f(b))
-        num += h / 6.0 * (f(a) * q_seg(a, mid) + 4.0 * f(mid) * q_seg(mid, mid)
-                          + f(b) * q_seg(b, mid))
+        num += h / 6.0 * (f(a) * q(a, mid) + 4.0 * f(mid) * q(mid, mid)
+                          + f(b) * q(b, mid))
     return num / den
 
 

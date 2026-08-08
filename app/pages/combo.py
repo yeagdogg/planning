@@ -161,6 +161,15 @@ def build(session):
     chips_pane = pn.pane.HTML("", sizing_mode="stretch_width")
     ol_pane = pn.pane.HoloViews(sizing_mode="stretch_width")
     ol_note = pn.pane.Markdown("", sizing_mode="stretch_width")
+    # W3b interaction: the P-1 strip halves horizontal resolution, so it
+    # is a choice; net combos can flip between the asserted net path and
+    # the logged program — the two geometries ARE the program-vs-asserted
+    # story, and the note quantifies the gap in points.
+    ol_window = pn.widgets.Checkbox(
+        name="Show CY P−1 (36-month window)", value=True)
+    ol_basis = pn.widgets.RadioButtonGroup(
+        options=["Net path (asserted)", "Logged program (D65)"],
+        value="Net path (asserted)", visible=False)
     wf_p = pn.pane.Bokeh(sizing_mode="stretch_width")
     wf_p1 = pn.pane.Bokeh(sizing_mode="stretch_width")
     lag_pane = pn.pane.HoloViews(sizing_mode="stretch_width")
@@ -172,7 +181,8 @@ def build(session):
 
     tabs = pn.Tabs(
         # the whole reason this app exists, first (W2d, user direction)
-        ("On-level", pn.Column(ol_pane, ol_note,
+        ("On-level", pn.Column(pn.Row(ol_window, ol_basis),
+                               ol_pane, ol_note,
                                sizing_mode="stretch_width")),
         ("Waterfall", pn.Row(wf_p, wf_p1, sizing_mode="stretch_width")),
         ("Earning", pn.Column(lag_pane, para_pane,
@@ -189,6 +199,7 @@ def build(session):
             pane.object = None
         race_md.object = ""
         ol_note.object = ""
+        ol_basis.visible = False
         chips_pane.object = ""
         vis_note.object = msg
 
@@ -216,10 +227,25 @@ def build(session):
             chip(f"YoY earned {p - 1}→{p}",
                  fmt_pct(res.yoy_earned_p, signed=True)))
 
-        fr = v_onlevel.onlevel_frame(ci, res)
+        ol_basis.visible = bool(ci.net_mode)
+        basis = ("program" if ci.net_mode
+                 and ol_basis.value.startswith("Logged") else "auto")
+        fr = v_onlevel.onlevel_frame(
+            ci, res, window=36 if ol_window.value else 24, basis=basis)
         ol_pane.object = v_onlevel.onlevel(ci, res, frame=fr)
-        ol_note.object = ("\n".join(f"*{md_safe(n)}*" for n in fr.notes)
-                          if fr.notes else "")
+        notes = list(fr.notes)
+        if ci.net_mode:
+            prog = compute.program_results(session).get(
+                scn.lob, {}).get(key)
+            if prog is not None:
+                gap = (prog[0] - res.cy_lr_p) * 100.0
+                notes.insert(0, (
+                    f"Program vs asserted: the logged program would plan "
+                    f"CY {p} at {fmt_pct(prog[0])} vs the net path's "
+                    f"{fmt_pct(res.cy_lr_p)} ({gap:+.1f} pts) — flip the "
+                    f"basis above to see both geometries."))
+        ol_note.object = ("\n".join(f"*{md_safe(n)}*" for n in notes)
+                          if notes else "")
 
         start, steps_p, steps_p1, _net = v_bridge.chain(scn, key, res)
         wf_p.object = v_bridge.waterfall_figure(
@@ -266,6 +292,8 @@ def build(session):
     bag.watch(rail_rev, _render, "rev")
     bag.watch(session.ctx, _render, "data_rev")
     combo_sel.param.watch(_render, "value")
+    ol_window.param.watch(_render, "value")
+    ol_basis.param.watch(_render, "value")
     _render()
 
     sidebar = pn.Column(
@@ -282,4 +310,6 @@ def build(session):
                       "earn_lag": lag_pane, "parallelogram": para_pane,
                       "race": race_md, "walk": walk_pane, "band": band_pane,
                       "onlevel": ol_pane, "chips": chips_pane,
-                      "note": vis_note}}
+                      "note": vis_note},
+            "ol_window": ol_window, "ol_basis": ol_basis,
+            "ol_note": ol_note}
