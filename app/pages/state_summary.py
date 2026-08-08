@@ -26,14 +26,28 @@ from app import compute, summary
 from app.glue.bindings import WatcherBag, debounce, sync_options
 from app.glue.exhibit import banner, echo_html, echo_pane, exhibit_header, \
     note_list
-from app.glue.format import TAB_SPECS, md_safe
-from app.glue.theme import TABLE_CSS
+from app.glue.format import TAB_SPECS, fmt_pct, md_safe
+from app.glue.theme import NAVY, TABLE_CSS
 from app.paste import coerce
 from app.undo import UndoStack, entry
 
 _BANNER = ("THE BRIDGE IN ONE LINE      CY plan LR  =  Projected LR "
            "(current level)  ×  rate earn-in  ×  mod drift  ×  other adj"
-           "      — and those are literally the four columns to its left")
+           "      — the four factors ride in the bridge band; the answer "
+           "stays pinned at the right edge, always in view")
+
+# The two notes that change BEHAVIOR stay inline under the table (W3c);
+# everything else folds into the fine-print card.
+_NOTE_LEVERS = (
+    "LEVERS (blue, STEEL-edged): net selections fan out to EVERY combo in "
+    "the row's view — blank CLEARS net mode, a methodology flip the flash "
+    "names; filings/mod/achievement edit the log on single-combo views; "
+    "taken filings are locked. ° columns exist only in the app. Every "
+    "gesture lands on ↶ Undo.")
+_NOTE_CHAIN = (
+    "Plan LR is the four-factor chain on single-combo rows; mixed rows "
+    "show the exact EP-weighted engine value with Mix carrying the "
+    "difference. The TOTAL row never uses the chain.")
 
 _NOTES = [
     "Weighted view: every metric is adjusted-plan-EP weighted across the "
@@ -153,13 +167,19 @@ def build(session):
                     for k in _LEVER_NUM})
     editors.update({k: {"type": "input"} for k in _LEVER_TXT})
     table = pn.widgets.Tabulator(
-        pd.DataFrame(columns=summary.ALL_KEYS),
+        pd.DataFrame(columns=summary.DISPLAY_ORDER),
         show_index=False,
         titles=titles,
-        groups=summary.ss_groups_map(p0),
+        groups=summary.display_groups_map(p0),
         formatters=_formatters(),
         editors=editors,
-        frozen_columns=["state"],                      # by NAME (the scar)
+        # dict form freezes by NAME on a SIDE; planlr/planlr1 are the
+        # answer and ride the right edge (they are deliberately ungrouped
+        # — Tabulator ignores frozen inside a column group). Any value
+        # other than left/right silently VANISHES the column — pinned by
+        # a test.
+        frozen_columns={"state": "left",
+                        "planlr": "right", "planlr1": "right"},
         # frozen_rows is set per roster in _apply_frame: a negative index
         # here would resolve ONCE against this empty frame and the TOTAL
         # pin would silently never work (W3a — found broken since W2b)
@@ -185,6 +205,78 @@ def build(session):
     holder = {"meta": None, "frame": None}
     undo = UndoStack()
 
+    # ---- the last-edit impact strip (W3c) ----------------------------------
+    # "hard to see what my change does to the plan loss ratios": one
+    # snapshot per accepted gesture, 1:1 with the undo stack — the answer
+    # cells for the edited state + TOTAL, before vs after the recompute.
+    impact = pn.pane.HTML("", sizing_mode="stretch_width")
+    strip_stack: list = []
+
+    def _impact_before(st, desc):
+        """Read the pre-recompute frame still sitting in table.value: the
+        lever cell is already updated there, but planlr/planlr1/TOTAL move
+        only when the engine has spoken — exactly the 'before'."""
+        df = table.value
+        try:
+            row = df.loc[df["state"] == st].iloc[0]
+            tot = df.iloc[-1]
+        except (IndexError, KeyError):
+            return
+        strip_stack.append({
+            "desc": desc, "state": st, "p": None,
+            "before": (row["planlr"], row["planlr1"],
+                       tot["planlr"], tot["planlr1"]),
+            "after": None})
+        del strip_stack[:-20]                    # the undo stack's own cap
+
+    def _impact_fill(df, p):
+        for snap in strip_stack:
+            if snap["after"] is not None:
+                continue
+            sel = df.loc[df["state"] == snap["state"]]
+            if not len(sel) or not len(df) \
+                    or df.iloc[-1]["state"] != "TOTAL":
+                snap["after"] = "stale"          # roster moved under it
+                continue
+            row, tot = sel.iloc[0], df.iloc[-1]
+            snap["after"] = (row["planlr"], row["planlr1"],
+                             tot["planlr"], tot["planlr1"])
+            snap["p"] = p
+        top = strip_stack[-1] if strip_stack else None
+        impact.object = ("" if top is None or top["after"] in (None, "stale")
+                         else _impact_html(top))
+
+    def _impact_html(snap):
+        import html as _html
+        import math
+
+        def f(v):
+            bad = v is None or (isinstance(v, float) and math.isnan(v))
+            return "—" if bad else fmt_pct(v)
+
+        def pair(b, a):
+            ok = (isinstance(b, (int, float)) and isinstance(a, (int, float))
+                  and not (math.isnan(b) or math.isnan(a)))
+            if ok:
+                d = (a - b) * 100.0
+                arrow = "▼" if d < 0 else ("▲" if d > 0 else "＝")
+                return f"{f(b)} → {f(a)} ({arrow} {abs(d):.1f})"
+            return f"{f(b)} → {f(a)}"
+
+        p = snap["p"]
+        b, a = snap["before"], snap["after"]
+        parts = [
+            f"<b>Last change</b> — {_html.escape(str(snap['desc']))}",
+            f"<b>{_html.escape(str(snap['state']))}</b> "
+            f"CY{p} {pair(b[0], a[0])} · CY{p + 1} {pair(b[1], a[1])}",
+            f"<b>TOTAL</b> CY{p} {pair(b[2], a[2])} · "
+            f"CY{p + 1} {pair(b[3], a[3])}",
+        ]
+        return ("<div style='border:1px solid #e3e6ea; border-radius:8px; "
+                "padding:6px 12px; font-variant-numeric:tabular-nums; "
+                f"font-size:0.95em; color:{NAVY};'>"
+                + "&nbsp; │ &nbsp;".join(parts) + "</div>")
+
     def _hidden(*_events):
         cols = ["_index"]
         if not show_hist.value:
@@ -202,8 +294,12 @@ def build(session):
     def _apply_frame(df):
         """The workbench diff-then-patch idiom: when the roster is
         unchanged, patch only the cells that moved — scroll, filters and
-        the open editor state survive; the Styler recomputes on patch."""
+        the open editor state survive; the Styler recomputes on patch.
+        The frame arrives in ALL_KEYS order (the D90 mirror); the DISPLAY
+        band order is applied here, before both the value and the Styler,
+        so styles stay aligned by construction."""
         import pandas as pd
+        df = df[summary.DISPLAY_ORDER]
         old = table.value
         if (old is None or len(old) != len(df)
                 or list(old["state"]) != list(df["state"])):
@@ -245,11 +341,12 @@ def build(session):
         p = meta.plan_year
         table.titles = {**{c.key: c.header for c in summary.SS_COLS},
                         **summary.live_headers(p), **dict(summary.APP_EXT)}
-        if table.groups != summary.ss_groups_map(p):
+        if table.groups != summary.display_groups_map(p):
             # the page builds before any book exists (plan year 0) — the
             # year-bearing group captions refresh on the first real render
-            table.groups = summary.ss_groups_map(p)
+            table.groups = summary.display_groups_map(p)
         _apply_frame(df)
+        _impact_fill(df, p)
         lines_txt = (", ".join(line_f.value) if line_f.value
                      else "every line")
         bus_txt = (", ".join(bu_f.value) if bu_f.value
@@ -312,8 +409,9 @@ def build(session):
             label = ("Net rate P" if field_ == "netp" else "Net rate P+1")
             what = ("cleared (net mode OFF)" if new is None
                     else f"→ {new:+.1%}")
-            undo.push(f"{label} {what} on {st} ({len(entries)} combo(s))",
-                      entries)
+            desc = f"{label} {what} on {st} ({len(entries)} combo(s))"
+            _impact_before(st, desc)
+            undo.push(desc, entries)
             _undo_sync()
             flip = (" — **this flips those combos out of net mode**"
                     if new is None else "")
@@ -349,7 +447,9 @@ def build(session):
                 if d is None:
                     return _reject(event, "a planned filing needs a date "
                                           "(delete rows on Inputs)")
-                undo.push(f"Chg {j} date {r['eff']} → {d} ({st})",
+                desc = f"Chg {j} date {r['eff']} → {d} ({st})"
+                _impact_before(st, desc)
+                undo.push(desc,
                           [entry(lob, "rate_rows", r, {"eff": r["eff"]},
                                  after={"eff": d})])
                 r["eff"] = d
@@ -362,7 +462,9 @@ def build(session):
                 if v is None:
                     return _reject(event, "blank would delete the filing "
                                           "— do that on Inputs")
-                undo.push(f"Chg {j} filed % → {v:+.1%} ({st})",
+                desc = f"Chg {j} filed % → {v:+.1%} ({st})"
+                _impact_before(st, desc)
+                undo.push(desc,
                           [entry(lob, "rate_rows", r,
                                  {"filed": r.get("filed")},
                                  after={"filed": v})])
@@ -386,7 +488,9 @@ def build(session):
                     return _reject(event, str(e))
                 if d is None:
                     return _reject(event, "a mod step needs a date")
-                undo.push(f"Mod step date {r['eff']} → {d} ({st})",
+                desc = f"Mod step date {r['eff']} → {d} ({st})"
+                _impact_before(st, desc)
+                undo.push(desc,
                           [entry(lob2, "mod_rows", r, {"eff": r["eff"]},
                                  after={"eff": d})])
                 r["eff"] = d
@@ -398,7 +502,9 @@ def build(session):
                 if v is None:
                     return _reject(event, "blank would delete the action "
                                           "— do that on Inputs")
-                undo.push(f"Mod step → {v:+.1%} ({st})",
+                desc = f"Mod step → {v:+.1%} ({st})"
+                _impact_before(st, desc)
+                undo.push(desc,
                           [entry(lob2, "mod_rows", r,
                                  {"chg": r.get("chg")},
                                  after={"chg": v})])
@@ -418,9 +524,11 @@ def build(session):
                 v = _frac(event.value)
             except ValueError as e:
                 return _reject(event, str(e))
-            undo.push(f"Achievement → "
-                      f"{'blank (=100%)' if v is None else f'{v:.0%}'} "
-                      f"({st})",
+            desc = (f"Achievement → "
+                    f"{'blank (=100%)' if v is None else f'{v:.0%}'} "
+                    f"({st})")
+            _impact_before(st, desc)
+            undo.push(desc,
                       [entry(lob2, "rate_rows", r,
                              {"achievement": r.get("achievement")},
                              after={"achievement": v})])
@@ -433,9 +541,8 @@ def build(session):
 
     table.on_edit(_route_edit)
 
-    # ---- undo --------------------------------------------------------------
-    undo_btn = pn.widgets.Button(label="↶ Undo", disabled=True,
-                                 sizing_mode="stretch_width")
+    # ---- undo (inline with the flash — the whole edit loop in one place)
+    undo_btn = pn.widgets.Button(label="↶ Undo", disabled=True, width=280)
 
     def _undo_sync():
         d = undo.peek()
@@ -444,6 +551,10 @@ def build(session):
 
     def _do_undo(_event):
         n, skipped = undo.pop_apply(session)          # bumps the bus itself
+        if strip_stack:
+            strip_stack.pop()           # 1:1 with the undo stack — the
+            # render that follows repaints the strip from the new top,
+            # whose numbers ARE the current frame again
         msg = f"restored {n} row(s)"
         if skipped:
             msg += " — " + "; ".join(skipped[:3])
@@ -454,6 +565,8 @@ def build(session):
 
     def _on_data_rev(*_events):
         undo.clear()                    # locators dangle across a load
+        strip_stack.clear()
+        impact.object = ""
         _undo_sync()
 
     bag.watch(session.ctx, _on_data_rev, "data_rev")
@@ -472,13 +585,20 @@ def build(session):
         pn.pane.Markdown("**Columns** (the workbook's collapse outline)"),
         show_hist, show_inputs,
         pn.layout.Divider(),
-        undo_btn,
         pn.pane.Markdown(
             "*Undo covers Summary edits since the last load — scenario "
             "files are the durable history.*"),
         sizing_mode="stretch_width")
-    main = pn.Column(header, echo, flash, table, banner(_BANNER),
-                     note_list(_NOTES),
+    fine_print = pn.Card(
+        note_list(_NOTES),
+        title="The fine print — aggregation, divergences, edit rules",
+        collapsed=True, sizing_mode="stretch_width")
+    main = pn.Column(header, echo, banner(_BANNER),
+                     pn.Row(undo_btn, flash,
+                            sizing_mode="stretch_width"),
+                     impact, table,
+                     note_list([_NOTE_LEVERS, _NOTE_CHAIN]),
+                     fine_print,
                      sizing_mode="stretch_both")
     return {"main": main, "sidebar": sidebar, "bag": bag,
             "table": table, "holder": holder, "flash": flash,
@@ -486,4 +606,6 @@ def build(session):
             "toggles": {"hist": show_hist, "inputs": show_inputs},
             "edit_router": _route_edit, "undo": undo,
             "undo_btn": undo_btn,
+            "impact": {"pane": impact, "stack": strip_stack},
+            "fine_print": fine_print,
             "on_show": _render}

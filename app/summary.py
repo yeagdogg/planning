@@ -39,14 +39,43 @@ from app.glue.theme import STEEL, STEEL_LIGHT, WARN_AMBER
 
 SS_KEYS = [c.key for c in SS_COLS]
 
-# app-extension columns — NOT in the Excel exhibit, marked as such
-APP_EXT = [("netsel1", "Net rate sel +1"),
-           ("modstep_date", "Mod step date"),
-           ("modstep_pct", "Mod step %"),
-           ("ach_next", "Ach % next planned"),
+# app-extension columns — NOT in the Excel exhibit; the ° header marker
+# is the disclosure (W3c), explained in the Levers group caption
+APP_EXT = [("netsel1", "Net rate sel +1 °"),
+           ("modstep_date", "Mod step date °"),
+           ("modstep_pct", "Mod step % °"),
+           ("ach_next", "Ach % next planned °"),
            ("problems", "⚠")]
 EXT_KEYS = [k for k, _t in APP_EXT]
 ALL_KEYS = SS_KEYS + EXT_KEYS
+
+# The DISPLAY order (W3c): what you can TYPE comes before what is echoed,
+# which comes before what the engine computed — and the answer (the two
+# plan LRs) is pinned at the RIGHT edge, ungrouped (Tabulator cannot
+# freeze a column that lives inside a column group). The FRAME order
+# stays ALL_KEYS — the D90 drift guard ties that to SS_COLS; this list is
+# applied at the display layer only (page `_apply_frame`).
+DISPLAY_ORDER = [
+    "state", "ep",
+    # levers — blue takes typing (netsel finally next to netsel1)
+    "netsel", "netsel1", "modstep_date", "modstep_pct", "ach_next",
+    "chg1_date", "chg1_pct", "chg1_tok",
+    "chg2_date", "chg2_pct", "chg2_tok",
+    "chg3_date", "chg3_pct", "chg3_tok",
+    "chg4_date", "chg4_pct", "chg4_tok",
+    "ntaken", "nplanned",
+    # input echoes (edit on Inputs)
+    "mind", "m0", "m1",
+    # engine levels
+    "crl", "ecy", "mbar",
+    # engine output
+    "lrcur", "arate", "amod", "aother", "mix",
+    "trend", "arate1", "amod1",
+    "progbasis", "proggap",
+    "target", "problems",
+    # THE ANSWER — frozen right, always in view
+    "planlr", "planlr1",
+]
 
 _SLOT_KEYS = [c.key for c in SS_COLS if c.key.startswith("chg")]
 
@@ -65,10 +94,12 @@ SS_KINDS = {
 
 
 def live_headers(plan_year: int) -> dict:
-    """App twins of the SsCol.live year-bearing header formulas (D44)."""
+    """App twins of the SsCol.live year-bearing header formulas (D44).
+    ``planlr`` drops the Excel twin's leading "=  " (W3c): pinned at the
+    right edge it is no longer chain-adjacent, and the "=" would lie."""
     p = plan_year
     return {"ecy": f"{p} earned rate level", "mbar": f"{p} earned mod",
-            "planlr": f"=  CY {p} plan LR", "trend": f"Net trend ({p + 1})",
+            "planlr": f"CY {p} plan LR", "trend": f"Net trend ({p + 1})",
             "arate1": f"{p + 1} rate earn-in", "amod1": f"{p + 1} mod drift",
             "planlr1": f"CY {p + 1} plan LR"}
 
@@ -91,7 +122,8 @@ APP_EXT_CAPTION = "App extensions — not in the Excel exhibit"
 
 
 def ss_groups_map(plan_year: int) -> dict:
-    """SsCol.group runs -> the Panel Tabulator ``groups`` dict."""
+    """SsCol.group runs -> the Panel Tabulator ``groups`` dict (the
+    workbook-mirror order; the page now renders ``display_groups_map``)."""
     groups: dict = {}
     for c in SS_COLS:
         if not c.group:
@@ -99,6 +131,32 @@ def ss_groups_map(plan_year: int) -> dict:
         groups.setdefault(_caption(c.group, plan_year), []).append(c.key)
     groups[APP_EXT_CAPTION] = list(EXT_KEYS)
     return groups
+
+
+def display_groups_map(plan_year: int) -> dict:
+    """The W3c display bands. Captions and member keys still derive from
+    SS_COLS wherever the workbook has an opinion (mods/levels/history/net
+    groups); the app-only additions are the Levers caption — which carries
+    the ° disclosure — and the reworded bridge caption. ``planlr`` /
+    ``planlr1`` are DELIBERATELY absent (ungrouped): Tabulator ignores
+    ``frozen`` on a column inside a group, and the answer freezes right.
+    ``state``/``ep``/``target``/``problems`` are ungrouped reference
+    columns spanning both header rows."""
+    p = plan_year
+    g = {c.key: c.group for c in SS_COLS}
+    hist = [c.key for c in SS_COLS if c.group == g["chg1_date"]]
+    return {
+        "Levers — blue takes typing; ° = app-only":
+            ["netsel", "netsel1", "modstep_date", "modstep_pct",
+             "ach_next"],
+        _caption(g["chg1_date"], p): hist,
+        _caption(g["mind"], p): ["mind", "m0", "m1"],
+        _caption(g["crl"], p): ["crl", "ecy", "mbar"],
+        f"CY {p} plan — the bridge (the answer rides pinned at the "
+        f"right edge)": ["lrcur", "arate", "amod", "aother", "mix"],
+        f"CY {p + 1} indicative — factors": ["trend", "arate1", "amod1"],
+        _caption(g["progbasis"], p): ["progbasis", "proggap"],
+    }
 
 
 def hidden_sets() -> dict:

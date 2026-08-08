@@ -268,3 +268,62 @@ def test_undo_clears_on_scenario_load():
     session.replace_config(importers.from_workbook(WB_PROP))
     assert page["undo_btn"].disabled
     assert page["undo"].peek() is None
+
+
+# --------------------------------------------------------- W3c impact strip
+
+@needs_panel
+def test_impact_strip_ties_the_recompute():
+    """One snapshot per gesture, 1:1 with undo: before == the pre-edit
+    frame, after == the fresh engine frame at 1e-12, and the strip pane
+    renders the movement."""
+    import pytest as _pt
+
+    from app import summary
+    session, page = _page_session(bus_filter=["ABD"])
+    meta = page["holder"]["meta"]
+    st = meta.states[0]
+    df0 = page["table"].value
+    b_row = float(df0.loc[df0["state"] == st, "planlr"].iloc[0])
+    b_tot = float(df0.iloc[-1]["planlr"])
+
+    page["edit_router"](_ev(page, st, "netsel", 0.05))
+    stack = page["impact"]["stack"]
+    # headless debounce is synchronous, so the bump inside the router has
+    # already rendered and filled `after`; in the browser it fills ~250ms
+    # later — either way `before` is the PRE-edit frame
+    assert len(stack) == 1
+    assert stack[-1]["before"][0] == _pt.approx(b_row, abs=1e-12)
+    assert stack[-1]["before"][2] == _pt.approx(b_tot, abs=1e-12)
+
+    page["on_show"]()                       # idempotent re-render
+    snap = stack[-1]
+    assert snap["after"] not in (None, "stale")
+    fresh, _m = summary.state_frame(session, bus=["ABD"])
+    want_row = float(fresh.loc[fresh["state"] == st, "planlr"].iloc[0])
+    want_tot = float(fresh.iloc[-1]["planlr"])
+    assert snap["after"][0] == _pt.approx(want_row, abs=1e-12)
+    assert snap["after"][2] == _pt.approx(want_tot, abs=1e-12)
+    html = page["impact"]["pane"].object
+    assert "Last change" in html and st in html and "TOTAL" in html
+
+
+@needs_panel
+def test_impact_strip_pops_with_undo_and_clears_on_load():
+    from app import importers
+    session, page = _page_session(bus_filter=["ABD"])
+    meta = page["holder"]["meta"]
+    st = meta.states[0]
+    page["edit_router"](_ev(page, st, "netsel", 0.04))
+    page["on_show"]()
+    assert page["impact"]["pane"].object != ""
+    page["undo_btn"].clicks += 1            # pop_apply bumps the bus
+    page["on_show"]()
+    assert page["impact"]["stack"] == []
+    assert page["impact"]["pane"].object == ""
+
+    page["edit_router"](_ev(page, st, "netsel", 0.06))
+    assert len(page["impact"]["stack"]) == 1
+    session.replace_config(importers.from_workbook(WB_PROP))
+    assert page["impact"]["stack"] == []
+    assert page["impact"]["pane"].object == ""

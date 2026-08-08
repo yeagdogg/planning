@@ -273,3 +273,60 @@ def test_summary_page_builds_filters_and_toggles():
     assert table.style is not None
     css = summary.ss_styles(table.value)
     assert (css != "").any().any()                         # styles non-empty
+
+
+# ------------------------------------------------------------- W3c display
+
+def test_display_order_is_a_banded_permutation():
+    """The display layer: levers before echoes before outputs, the answer
+    last (frozen right) — a PERMUTATION of ALL_KEYS, never a new list of
+    columns; every display group is contiguous; the two answer columns
+    are ungrouped (Tabulator ignores frozen inside a column group)."""
+    from app import summary
+
+    assert sorted(summary.DISPLAY_ORDER) == sorted(summary.ALL_KEYS)
+    assert summary.DISPLAY_ORDER[-2:] == ["planlr", "planlr1"]
+    groups = summary.display_groups_map(2027)
+    grouped = [k for keys in groups.values() for k in keys]
+    assert "planlr" not in grouped and "planlr1" not in grouped
+    for keys in groups.values():                       # contiguous runs
+        idx = [summary.DISPLAY_ORDER.index(k) for k in keys]
+        assert idx == list(range(idx[0], idx[0] + len(idx)))
+    # netsel finally sits next to netsel1
+    d = summary.DISPLAY_ORDER
+    assert d.index("netsel1") == d.index("netsel") + 1
+    assert any("CY 2027 plan" in c for c in groups)    # page test contract
+
+
+@pytest.mark.skipif(
+    __import__("importlib").util.find_spec("panel") is None,
+    reason="panel not installed (system interpreter — app venv runs this)")
+def test_display_layer_reorders_and_freezes_the_answer():
+    from app import importers, summary
+    from app.glue.session import PlanSession
+    from app.pages import state_summary as ss_page
+
+    session = PlanSession()
+    page = ss_page.build(session)
+    session.replace_config(importers.from_workbook(WB_PROP))
+
+    table = page["table"]
+    assert list(table.value.columns) == summary.DISPLAY_ORDER
+    assert table.frozen_columns == {"state": "left", "planlr": "right",
+                                    "planlr1": "right"}
+    # any dict value other than left/right silently VANISHES the column
+    assert set(table.frozen_columns.values()) <= {"left", "right"}
+    # the Styler was computed on the SAME reordered frame
+    assert list(table.style.data.columns) == summary.DISPLAY_ORDER
+    # layout: banner above the table, notes folded, undo inline not sidebar
+    import panel as pn
+    main = page["main"]
+    banner_at = next(i for i, o in enumerate(main.objects)
+                     if "THE BRIDGE IN ONE LINE" in str(
+                         getattr(o, "object", "")))
+    table_at = next(i for i, o in enumerate(main.objects)
+                    if isinstance(o, pn.widgets.Tabulator))
+    assert banner_at < table_at
+    assert page["fine_print"].collapsed is True
+    assert not any(isinstance(o, pn.widgets.Button)
+                   for o in page["sidebar"].objects)
