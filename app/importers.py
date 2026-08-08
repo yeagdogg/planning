@@ -59,6 +59,31 @@ def workbook_choices() -> dict:
     return choices
 
 
+def fleet_choices() -> dict:
+    """{LOB name: path} — ONE workbook per configured line, in config
+    order: the untagged fleet file when present, else the newest tagged
+    twin (_MODERN etc.). This is the 'load every line' on-ramp."""
+    cfg = app_config()
+    out = ROOT / cfg.output_dir
+    found = sorted(out.glob("*.xlsx"), key=lambda p: p.stat().st_mtime,
+                   reverse=True)
+    best: dict = {}
+    for p in found:
+        if p.stem.endswith("_ABBASE"):
+            continue
+        lob = _lob_for_filename(p)
+        if lob is None:
+            continue
+        expected = cfg.filename.format(plan_year=cfg.plan_year,
+                                       lob=lob.name.replace(" ", "_"))
+        exact = p.stem == expected
+        cur = best.get(lob.name)
+        if cur is None or (exact and not cur[0]):
+            best[lob.name] = (exact, p)
+    return {lob.name: str(best[lob.name][1]) for lob in cfg.lobs
+            if lob.name in best}
+
+
 def from_workbook(path) -> Scenario:
     """Read a generated workbook's inputs into a Scenario."""
     path = Path(path)

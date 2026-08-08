@@ -33,12 +33,21 @@ class PageContext(param.Parameterized):
     data_rev = param.Integer(default=0)
     results_rev = param.Integer(default=0)
     combos = param.List(default=[])
+    # one-shot combo adoption: the Book page's click-through sets this to a
+    # 'BU|State' key just before activating a line; the Combo page consumes
+    # it on the resulting data_rev and clears it (plain attr, not a param —
+    # nothing should ever bind to it)
+    focus = None
 
 
 @dataclass
 class PageState:
     """The app's mutable state."""
-    config: Any = None                # the Scenario (app/state.py)
+    config: Any = None                # the ACTIVE Scenario (app/state.py)
+    # P4: every loaded line, keyed by LOB name. ``config`` is always one of
+    # these objects (identity, not a copy) — Inputs/Combo edit the active
+    # line IN the book, so the Book page sees edits with no sync step.
+    book: Dict[str, Any] = field(default_factory=dict)
     data_version: int = 0
     results: Dict[str, Any] = field(default_factory=dict)  # combo key -> EngineResult
     caches: Dict[str, Any] = field(default_factory=dict)
@@ -92,7 +101,18 @@ class PlanSession:
         shared ONLY when work is actually in flight."""
         import copy
         src, dst = prev.page, self.page
-        dst.config = copy.deepcopy(src.config) if isolate else src.config
+        # the book carries WITH the active config's identity intact: after a
+        # deepcopy the active scenario must be the copy IN the copied book,
+        # or Inputs would edit an object the Book page no longer shows
+        dst.book = copy.deepcopy(src.book) if isolate else src.book
+        if src.config is None:
+            dst.config = None
+        elif isolate:
+            dst.config = dst.book.get(getattr(src.config, "lob", None))
+            if dst.config is None:
+                dst.config = copy.deepcopy(src.config)
+        else:
+            dst.config = src.config
         dst.data_version = src.data_version
         dst.results = dict(src.results) if isolate else src.results
         dst.caches = {k: v for k, v in src.caches.items() if not callable(v)}
@@ -108,9 +128,25 @@ class PlanSession:
 
     # ---- config replacement (scenario load / import / new) -----------------
     def replace_config(self, config: Any) -> None:
-        """Swap the scenario wholesale. Replacing the object invalidates
-        every widget bound to the old one, so pages register a rebuild hook
-        on ctx.data_rev; results are stale by definition."""
+        """Load a scenario: it joins the book under its line's key AND
+        becomes the active one. Replacing the object invalidates every
+        widget bound to the old one, so pages register a rebuild hook on
+        ctx.data_rev; results are stale by definition."""
+        if config is not None and getattr(config, "lob", None):
+            self.page.book[config.lob] = config
+        self._swap(config)
+
+    def activate(self, lob: str) -> bool:
+        """Focus an already-loaded line: Inputs/Combo work this scenario;
+        the book keeps every line. Always swaps (even to the current line)
+        so a click-through re-renders predictably."""
+        scn = self.page.book.get(lob)
+        if scn is None:
+            return False
+        self._swap(scn)
+        return True
+
+    def _swap(self, config: Any) -> None:
         self.page.config = config
         self.page.results = {}
         self.page.data_version += 1

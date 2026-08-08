@@ -137,6 +137,20 @@ def build(session):
     sync_options(combo_sel, lambda: list(session.ctx.combos),
                  session.ctx.param.data_rev, bag=bag)
 
+    def _adopt_focus(*_events):
+        """One-shot adoption of a Book click-through (P4): registered AFTER
+        sync_options, so the options are already fresh when this runs."""
+        want = getattr(session.ctx, "focus", None)
+        if want and want in (combo_sel.options or []):
+            session.ctx.focus = None
+            combo_sel.value = want
+
+    bag.watch(session.ctx, _adopt_focus, "data_rev")
+    # ...and once at build: a FIRST-EVER click-through lazy-builds this page
+    # AFTER the Book already set focus and bumped data_rev, so the watcher
+    # alone would miss it (found live, then pinned by the lazy-order test)
+    _adopt_focus()
+
     # ---- main: the live bridge card ---------------------------------------
     card = pn.pane.HTML(_bridge_html("", session.page.config, None),
                         sizing_mode="stretch_width")

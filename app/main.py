@@ -122,14 +122,14 @@ def _placeholder(title: str, blurb: str):
     return build
 
 
+from app.pages import book as _book_page  # noqa: E402
 from app.pages import combo as _combo_page  # noqa: E402
 from app.pages import inputs as _inputs_page  # noqa: E402
 
 _PAGES = {
     "✏️ Inputs": _inputs_page.build,
     "🔬 Combo": _combo_page.build,
-    "📚 Book": _placeholder(
-        "Book roll-up", "All-combo view with premium-weighted aggregates (wave P4)."),
+    "📚 Book": _book_page.build,
     "🗂 Scenarios": _placeholder(
         "Scenarios", "Named save / load / diff and the Excel export (wave P5)."),
     "📖 Guide": _placeholder(
@@ -449,7 +449,8 @@ def build() -> pn.template.FastListTemplate:
     def _switch(slug: str) -> None:
         if slug not in _SLUG_BUILDERS:
             return
-        if slug not in built:
+        fresh = slug not in built
+        if fresh:
             built[slug] = _SLUG_BUILDERS[slug](session)
             main_holder.append(built[slug]["main"])
             side_holder.append(built[slug]["sidebar"])
@@ -459,6 +460,17 @@ def build() -> pn.template.FastListTemplate:
                 parts["main"].visible = show
             if parts["sidebar"].visible != show:
                 parts["sidebar"].visible = show
+        # Tabulator's virtual renderer drops its rows while a page is hidden
+        # and does not redraw on the visibility flip alone — pages that hold
+        # grids expose on_show (a value rewrite) and it runs AFTER re-show.
+        # A fresh build just rendered; only re-shows need the nudge.
+        if not fresh:
+            hook = built[slug].get("on_show")
+            if callable(hook):
+                try:
+                    hook()
+                except Exception:                       # noqa: BLE001
+                    pass
 
     nav.param.watch(lambda e: _switch(e.new), "value")
     # the CURRENT PAGE lives in the URL: reloads restore it, pages are

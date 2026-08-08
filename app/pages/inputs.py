@@ -222,4 +222,7 @@ def build(session):
     return {"main": pn.Column(strip, sizing_mode="stretch_both"),
             "sidebar": sidebar, "bag": bag,
             "tables": {label: grid for label, _s, grid, _g in tables},
-            "paste": paste_parts, "rail": rail}
+            "paste": paste_parts, "rail": rail,
+            # re-seed after the visibility flip: Tabulator drops its virtual
+            # rows while hidden and needs a value write to redraw (P4)
+            "on_show": _reseed}

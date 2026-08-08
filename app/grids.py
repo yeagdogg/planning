@@ -194,6 +194,9 @@ def make_grid(schema, rows: list, *, height: int = 440):
         layout="fit_data_table",
         height=height,
         sizing_mode="stretch_width",
+        # Panel 1.9.3 renders the _index field even with show_index=False
+        # (observed live in P4) — hide it by name
+        hidden_columns=["_index"],
         # copy OUT works (Ctrl+C a selection); paste-IN deliberately does
         # not: Tabulator's client-side paste never reaches Panel's model, so
         # advertising it would eat user edits — the paste card is the path
