@@ -20,7 +20,7 @@ from __future__ import annotations
 import panel as pn
 
 from app import masters, validate as validate_mod
-from app.glue.bindings import WatcherBag, debounce
+from app.glue.bindings import WatcherBag, debounce, gate_hidden
 from app.glue.exhibit import echo_html, exhibit_header, html_pane, \
     note_list
 from app.glue.format import md_safe
@@ -218,8 +218,10 @@ def build(session):
             "*One table per master, spanning every line — column order is "
             "the per-line paste block with a leading **Line** column "
             "(a BU can write several lines, so the line is never "
-            "inferred). Lines present in a paste get that table replaced; "
-            "absent lines keep theirs.*"),
+            "inferred). Name the line once per block if you like: blank "
+            "Line cells carry the line above down — merged cells paste "
+            "exactly that way. Lines present in a paste get that table "
+            "replaced; absent lines keep theirs.*"),
         pn.Tabs(*[(lbl, _master_section(lbl)) for lbl in masters.MASTERS],
                 dynamic=False, sizing_mode="stretch_width"),
         title="MASTERS — every line at once (leading Line column)",
@@ -237,7 +239,36 @@ def build(session):
         else:
             context_bar.object = echo_html(
                 f"Editing: {s.lob} — the four tables below touch THIS "
-                f"line only. Switch lines on the Book page.")
+                f"line only. Switch lines in the sidebar.")
+
+    # ---- the ACTIVE line (W3h): switching lived only on the Book page ------
+    # Options and value are set TOGETHER under a guard — sync_options
+    # would prune a stale value to the FIRST option, and that assignment
+    # would read as a user gesture and steal the active line.
+    line_sel = pn.widgets.Select(label="Active line", options=[],
+                                 sizing_mode="stretch_width")
+    switching = {"on": False}
+
+    def _line_refresh(*_events):
+        s = scn()
+        book = session.page.book
+        switching["on"] = True
+        try:
+            line_sel.options = list(book)
+            line_sel.value = (s.lob if s is not None and s.lob in book
+                              else next(iter(book), None))
+        finally:
+            switching["on"] = False
+
+    def _switch_line(event):
+        if switching["on"] or not event.new:
+            return
+        s = scn()
+        if s is not None and s.lob == event.new:
+            return
+        session.activate(event.new)
+
+    line_sel.param.watch(_switch_line, "value")
 
     # ---- scenario-level toggles (sidebar) ----------------------------------
     term = pn.widgets.IntInput(label="Term (months)", start=1, end=12,
@@ -297,15 +328,25 @@ def build(session):
                 mod_master.value = bool(s.mod_master)
         finally:
             seeding["on"] = False
+        _line_refresh()
         _context()
         _revalidate()
 
-    bag.watch(session.ctx, _reseed, "data_rev")
+    # hidden pages skip the reseed/revalidate and catch up via on_show
+    # (W3h); the bare _line_refresh stays ungated — a widget-state sync
+    # costs nothing and keeps the selector honest for the next show
+    reseed_g = gate_hidden(_reseed)
+    reval_g = gate_hidden(_revalidate)
+    bag.watch(session.ctx, reseed_g, "data_rev")
+    bag.watch(session.ctx, _line_refresh, "data_rev")
     rail_rev = debounce(session.bus.param.rev, delay_ms=300, bag=bag)
-    bag.watch(rail_rev, _revalidate, "rev")
+    bag.watch(rail_rev, reval_g, "rev")
     _reseed()
 
     sidebar = pn.Column(
+        pn.pane.Markdown("**Active line**"),
+        line_sel,
+        pn.layout.Divider(),
         pn.pane.Markdown("**Scenario settings**"),
         term, trend_d, season_on, mod_master,
         pn.layout.Divider(),
@@ -326,13 +367,16 @@ def build(session):
         "The masters seed EVERY line at once; the four tables below edit "
         "the ACTIVE line. Percent columns hold fractions, exactly what "
         "Excel's cells hold.")
-    return {"main": pn.Column(header, master_card, context_bar, strip,
-                              page_notes, sizing_mode="stretch_both"),
+    main = pn.Column(header, master_card, context_bar, strip,
+                     page_notes, sizing_mode="stretch_both")
+    reseed_g.attach(main)
+    reval_g.attach(main)
+    return {"main": main,
             "sidebar": sidebar, "bag": bag,
             "tables": {label: grid for label, _s, grid, _g in tables},
             "paste": paste_parts, "rail": rail,
             "masters": master_parts, "master_card": master_card,
-            "context": context_bar,
+            "context": context_bar, "line_sel": line_sel,
             # re-seed after the visibility flip: Tabulator drops its virtual
             # rows while hidden and needs a value write to redraw (P4)
             "on_show": _reseed}

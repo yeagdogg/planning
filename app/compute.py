@@ -80,12 +80,16 @@ def results(session) -> dict:
 def book_results(session) -> dict:
     """{lob: {combo key: result}} across every loaded line.
 
-    Cache discipline: between data_version bumps only the ACTIVE line can
-    change (the grids write the active scenario alone), so a bus bump
-    invalidates just that line's entry; activate()/replace_config() bump
-    data_version and revalidate everything once. The active line shares
-    ``results()``'s cache, so the Combo page and the Book never compute the
-    same edit twice."""
+    Cache discipline (W3h): EVERY line revalidates on a bus bump. The
+    original active-line-only invalidation assumed the grids (which write
+    the active scenario alone) were the only writers — but the Summary's
+    levers (W2c) and the undo stack write to ANY line in the row's view,
+    and John hit the stale read live: a lever edit on a non-active line
+    left plan LR frozen until something moved data_version. The cache
+    still earns its keep the honest way — repeated reads at one rev
+    (filter clicks, page switches, several pages sharing one recompute)
+    cost nothing. The active line shares ``results()``'s cache, so the
+    Combo page and the Book never compute the same edit twice."""
     book = session.page.book
     cache = session.page.caches.setdefault("book_results", {})
     dv, rev = session.page.data_version, session.bus.rev
@@ -94,8 +98,7 @@ def book_results(session) -> dict:
     for lob, scn in book.items():
         is_active = scn is active
         ent = cache.get(lob)
-        if ent is not None and ent[0] == dv and (not is_active
-                                                 or ent[1] == rev):
+        if ent is not None and ent[0] == dv and ent[1] == rev:
             out[lob] = ent[2]
             continue
         res = results(session) if is_active else _compute_for(scn)
@@ -113,18 +116,16 @@ def program_results(session) -> dict:
     (engine.program_basis_plan_lr, D65) — computed for NET combos only:
     for a non-net combo the program basis IS the headline (the engine's
     own invariant, tie-tested), so callers reuse the bridge result there.
-    Cache discipline mirrors book_results: per line on (data_version,
-    bus.rev); only the active line invalidates on a bus bump."""
+    Cache discipline mirrors book_results (W3h): per line on
+    (data_version, bus.rev), EVERY line revalidating on a bump — the
+    Summary's levers write to any line in view."""
     book = session.page.book
     cache = session.page.caches.setdefault("prog_results", {})
     dv, rev = session.page.data_version, session.bus.rev
-    active = session.page.config
     out: dict = {}
     for lob, scn in book.items():
-        is_active = scn is active
         ent = cache.get(lob)
-        if ent is not None and ent[0] == dv and (not is_active
-                                                 or ent[1] == rev):
+        if ent is not None and ent[0] == dv and ent[1] == rev:
             out[lob] = ent[2]
             continue
         res: dict = {}
@@ -150,20 +151,18 @@ def program_results(session) -> dict:
 
 def flow_results(session) -> dict:
     """{lob: {combo key: ProgramFlowResult | ('error', msg)}} across the
-    loaded book (W3e). Cache discipline mirrors ``book_results``: per line
-    on (data_version, bus.rev); only the ACTIVE line recomputes on a bus
-    bump; unloaded lines are swept. ~0.1–0.3 ms per combo — cheap enough
-    per data change, cached so filter clicks re-slice instead."""
+    loaded book (W3e). Cache discipline mirrors ``book_results`` (W3h):
+    per line on (data_version, bus.rev), EVERY line revalidating on a
+    bump — the Summary's levers write to any line in view; unloaded
+    lines are swept. ~0.1–0.3 ms per combo — cheap enough per data
+    change, cached so filter clicks re-slice instead."""
     book = session.page.book
     cache = session.page.caches.setdefault("flow_results", {})
     dv, rev = session.page.data_version, session.bus.rev
-    active = session.page.config
     out: dict = {}
     for lob, scn in book.items():
-        is_active = scn is active
         ent = cache.get(lob)
-        if ent is not None and ent[0] == dv and (not is_active
-                                                 or ent[1] == rev):
+        if ent is not None and ent[0] == dv and ent[1] == rev:
             out[lob] = ent[2]
             continue
         res: dict = {}

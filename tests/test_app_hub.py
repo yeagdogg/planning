@@ -75,6 +75,27 @@ def test_split_master_is_loud_about_bad_lines():
                      ["Property"])
 
 
+def test_split_master_fills_a_blank_line_down():
+    """W3h: a real Excel master names the line once per block (merged or
+    typed once) — continuation rows paste with a BLANK Line and must
+    carry the line above down, exactly like Excel reads them. A blank
+    with nothing above still raises (the test above)."""
+    from app.masters import split_master
+    text = ("Property\tABD\tAZ\t3/31/2026\t10%\ttaken\t\t\t\n"
+            "\tABD\tCO\t6/30/2026\t5%\ttaken\t\t\t\n"
+            "General Liability\tABD\tAZ\t9/30/2026\t4%\tplanned\t\t\t\n"
+            "\tSBA\tKY\t12/31/2026\t3%\tplanned\t\t\t")
+    by = split_master("Rate Log", text, ["Property", "General Liability"])
+    assert [r["state"] for r in by["Property"]] == ["AZ", "CO"]
+    assert [r["bu"] for r in by["General Liability"]] == ["ABD", "SBA"]
+    # a fully blank spare row between blocks neither breaks nor carries
+    text2 = ("Property\tABD\tAZ\t3/31/2026\t10%\ttaken\t\t\t\n"
+             "\t\t\t\t\t\t\t\t\n"
+             "\tABD\tCO\t6/30/2026\t5%\ttaken\t\t\t")
+    by2 = split_master("Rate Log", text2, ["Property"])
+    assert [r["state"] for r in by2["Property"]] == ["AZ", "CO"]
+
+
 def test_apply_master_creates_lines_with_config_defaults():
     from app import importers
     from app.masters import apply_master

@@ -19,7 +19,8 @@ import pandas as pd
 import panel as pn
 
 from app import compute, importers
-from app.glue.bindings import WatcherBag, debounce, sync_options
+from app.glue.bindings import WatcherBag, debounce, gate_hidden, \
+    sync_options
 from app.glue.engineio import run_async
 from app.glue.exhibit import html_pane as ex_html_pane, note_list
 from app.glue.format import (DASH, fmt_count, fmt_dollar, fmt_pct, md_safe,
@@ -245,11 +246,13 @@ def build(session):
     table.on_click(_open_row)
     line_tbl.on_click(_line_click)
 
+    # hidden pages skip the render and catch up via on_show (W3h)
+    render_g = gate_hidden(_render)
     rail_rev = debounce(session.bus.param.rev, delay_ms=300, bag=bag)
-    bag.watch(rail_rev, _render, "rev")
-    bag.watch(session.ctx, _render, "data_rev")
+    bag.watch(rail_rev, render_g, "rev")
+    bag.watch(session.ctx, render_g, "data_rev")
     for f in (line_f, bu_f, state_f):
-        bag.watch(f, _render, "value")
+        bag.watch(f, render_g, "value")
     _render()
 
     sidebar = pn.Column(
@@ -270,6 +273,7 @@ def build(session):
                      pn.pane.Markdown("### Every combo"), mix_md, table,
                      book_notes,
                      sizing_mode="stretch_both")
+    render_g.attach(main)
     return {"main": main, "sidebar": sidebar, "bag": bag,
             "table": table, "line_tbl": line_tbl, "cards": cards,
             "filters": {"line": line_f, "bu": bu_f, "state": state_f},

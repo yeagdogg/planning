@@ -103,13 +103,17 @@ def test_weighted_follows_the_workbook_rule(sess):
     assert compute.book_weighted(z)["lr_p"] is None
 
 
-def test_only_the_active_line_recomputes(monkeypatch):
-    """The cache contract the live book depends on: a bus bump (a grid
-    edit) recomputes the ACTIVE line only; untouched lines serve cached."""
+def test_a_bus_bump_revalidates_every_line(monkeypatch):
+    """The cache contract, W3h: the Summary's levers (and the undo
+    stack) write to ANY line in the row's view, so a bus bump must
+    revalidate EVERY line — the original active-line-only invalidation
+    left a lever edit on a non-active line invisible in plan LR until
+    something moved data_version (John hit it live). Repeated reads at
+    one rev still serve cached."""
     from app import compute, importers
     sess = _stub([importers.from_workbook(WB_PROP),
                   importers.from_workbook(WB_GL)])
-    compute.book_results(sess)                     # cold fill
+    cold = compute.book_results(sess)              # cold fill
 
     calls = []
     real = compute.engine.run_bridge
@@ -122,9 +126,24 @@ def test_only_the_active_line_recomputes(monkeypatch):
     compute.book_results(sess)                     # warm: nothing runs
     assert calls == []
 
-    sess.bus.rev += 1                              # an edit on the active line
-    compute.book_results(sess)
-    assert len(calls) == len(sess.page.config.combo_keys())
+    # the distilled live repro: a lever lands on the NON-active line
+    other = next(s for s in sess.page.book.values()
+                 if s is not sess.page.config)
+    row = next(r for r in other.lr_rows
+               if r.get("bu") and r.get("state") and r.get("netp") is None)
+    key = f"{row['bu']}|{row['state']}"
+    before = cold[other.lob][key].cy_lr_p
+    row["netp"] = 0.123                            # net mode ON, 12.3%
+    sess.bus.rev += 1                              # what the router does
+    out = compute.book_results(sess)
+    total = sum(len(s.combo_keys()) for s in sess.page.book.values())
+    assert len(calls) == total                     # every line ran again
+    assert abs(out[other.lob][key].cy_lr_p - before) > 1e-6, \
+        "the non-active line's edit must reach the results"
+
+    calls.clear()
+    compute.book_results(sess)                     # same rev: cached
+    assert calls == []
 
 
 @pytest.mark.skipif(

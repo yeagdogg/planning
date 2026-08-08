@@ -19,7 +19,7 @@ from pathlib import Path
 import panel as pn
 
 from app import exporters, importers, scenarios_io
-from app.glue.bindings import WatcherBag, debounce
+from app.glue.bindings import WatcherBag, debounce, gate_hidden
 from app.glue.engineio import run_async
 from app.glue.format import fmt_dollar, md_safe
 
@@ -270,9 +270,11 @@ def build(session):
     book_btn.on_click(_generate_book)
 
     # ---- wiring ------------------------------------------------------------
+    # hidden pages skip the refresh; _on_show recomputes it (W3h)
+    summary_g = gate_hidden(_summary)
     rail_rev = debounce(session.bus.param.rev, delay_ms=300, bag=bag)
-    bag.watch(rail_rev, _summary, "rev")
-    bag.watch(session.ctx, _summary, "data_rev")
+    bag.watch(rail_rev, summary_g, "rev")
+    bag.watch(session.ctx, summary_g, "data_rev")
     _summary()
     _show_log()
 
@@ -298,6 +300,7 @@ def build(session):
         pn.layout.Divider(),
         log_md,
         sizing_mode="stretch_both")
+    summary_g.attach(main)
     return {"main": main, "sidebar": sidebar, "bag": bag,
             "on_show": _on_show,
             "widgets": {"name": name_in, "note": note_in, "save": save_btn,

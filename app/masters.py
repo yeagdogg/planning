@@ -44,13 +44,18 @@ def split_master(table: str, text: str, known_lines: list,
     Line matching is case-insensitive against the config roster; rows that
     fail the populated-row rule drop out exactly as the grids drop them
     (blank Line included — a fully blank row is spare capacity, not an
-    error). A populated row with a blank or unknown Line raises, naming
-    the row and the configured lines.
+    error). A populated row with a BLANK Line carries the line above it
+    down (W3h): a real Excel master names the line once per block —
+    merged cells or typed once — and that paste arrives with blank Line
+    on every continuation row; erroring there walled off the most common
+    master shape. A blank Line with nothing above it, or an unknown
+    line, still raises loudly, naming the row and the configured lines.
     """
     schema, _attr = MASTERS[table]
     base = schema[1:]
     canon = {ln.strip().lower(): ln for ln in known_lines}
     by: dict = {}
+    carried = None
     for i, r in enumerate(apply_block(schema, text, notes=notes)):
         raw = (r.get("lob") or "").strip()
         body = {k: v for k, v in r.items() if k != "lob"}
@@ -58,14 +63,19 @@ def split_master(table: str, text: str, known_lines: list,
         if not populated:
             continue                           # spare row, line or not
         if not raw:
-            raise ValueError(
-                f"row {i + 1}: the Line column is blank — every master row "
-                f"leads with its line ({', '.join(known_lines)})")
-        line = canon.get(raw.lower())
-        if line is None:
-            raise ValueError(
-                f"row {i + 1}: unknown line {raw!r} — configured lines are "
-                f"{', '.join(known_lines)}")
+            if carried is None:
+                raise ValueError(
+                    f"row {i + 1}: the Line column is blank and no line "
+                    f"appears above it — each block's first row must name "
+                    f"its line ({', '.join(known_lines)})")
+            line = carried
+        else:
+            line = canon.get(raw.lower())
+            if line is None:
+                raise ValueError(
+                    f"row {i + 1}: unknown line {raw!r} — configured lines "
+                    f"are {', '.join(known_lines)}")
+        carried = line
         by.setdefault(line, []).append(body)
     return by
 

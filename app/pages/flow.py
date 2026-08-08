@@ -25,7 +25,8 @@ import pandas as pd
 import panel as pn
 
 from app import compute
-from app.glue.bindings import WatcherBag, debounce, sync_options
+from app.glue.bindings import WatcherBag, debounce, gate_hidden, \
+    sync_options
 from app.glue.exhibit import chip, chips_html, echo_html, echo_pane, \
     exhibit_header, note_list
 from app.glue.format import DASH, TAB_SPECS, fmt_count, fmt_dollar, \
@@ -132,9 +133,14 @@ def build(session):
                        "columnDefaults": {"headerWordWrap": True}},
         sizing_mode="stretch_width")
 
-    _GRID_KINDS = {c: "pct_signed" for c in v_flow.grid_cols(prior=True)}
+    # all three year bands (W3h): P−1 behind the sidebar toggle, P, and
+    # P+1 — the flow result carries 24 plan-rooted months, and "program
+    # flow for 2028" is half the point of a plan-year page
+    _GRID_KINDS = {c: "pct_signed"
+                   for c in v_flow.grid_cols(prior=True, p1=True)}
     grid_tbl = pn.widgets.Tabulator(
-        pd.DataFrame(columns=["state"] + v_flow.grid_cols(prior=True)),
+        pd.DataFrame(columns=["state"]
+                     + v_flow.grid_cols(prior=True, p1=True)),
         disabled=True, show_index=False,
         formatters=_fmt(_GRID_KINDS),
         text_align={k: "right" for k in _GRID_KINDS},
@@ -319,7 +325,8 @@ def build(session):
 
         leg = {"rate": "rate_leg", "mod": "mod_leg",
                "delivered": "delivered"}[leg_radio.value]
-        gdf = v_flow.state_grid_frame(view, all_flows, leg, label)
+        gdf = v_flow.state_grid_frame(view, all_flows, leg, label,
+                                      p1=True, prior=True)
         grid_tbl.titles = _month_titles(p)
         grid_tbl.hidden_columns = ["_index"] + (
             [] if show_prior.value else
@@ -328,7 +335,8 @@ def build(session):
         grid_tbl.style = gdf.style.apply(
             lambda d: v_flow.year_band_styles(
                 d, [[f"pm{j:02d}" for j in range(1, 13)],
-                    [f"pp{j:02d}" for j in range(1, 13)]]), axis=None)
+                    [f"pp{j:02d}" for j in range(1, 13)],
+                    [f"q{j:02d}" for j in range(1, 13)]]), axis=None)
         grid_tbl.frozen_rows = [len(gdf) - 1] if len(gdf) else []
 
         # -- Net delivery tab ------------------------------------------------
@@ -400,11 +408,13 @@ def build(session):
     sum_tbl.on_click(_open_state)
     nd_tbl.on_click(_open_from(nd_tbl))
 
+    # hidden pages skip the render and catch up via on_show (W3h)
+    render_g = gate_hidden(_render)
     rail_rev = debounce(session.bus.param.rev, delay_ms=300, bag=bag)
-    bag.watch(rail_rev, _render, "rev")
-    bag.watch(session.ctx, _render, "data_rev")
+    bag.watch(rail_rev, render_g, "rev")
+    bag.watch(session.ctx, render_g, "data_rev")
     for w in (line_f, bu_f, show_prior, leg_radio, nd_radio):
-        bag.watch(w, _render, "value")
+        bag.watch(w, render_g, "value")
     _render()
 
     sidebar = pn.Column(
@@ -433,6 +443,7 @@ def build(session):
             dynamic=False, sizing_mode="stretch_width"),
         note_list(_NOTES),
         sizing_mode="stretch_both")
+    render_g.attach(main)
     return {"main": main, "sidebar": sidebar, "bag": bag,
             "sum_tbl": sum_tbl, "grid_tbl": grid_tbl, "nd_tbl": nd_tbl,
             "nd_grid": nd_grid, "req_tbl": req_tbl, "holder": holder,

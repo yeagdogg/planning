@@ -410,26 +410,33 @@ def grid_cols(prior: bool = True, p1: bool = False) -> list:
 
 
 def state_grid_frame(view: dict, all_flows: list, leg: str,
-                     avg_label: str, p1: bool = False) -> pd.DataFrame:
+                     avg_label: str, p1: bool = False,
+                     prior: bool | None = None) -> pd.DataFrame:
     """One row per state (each state's combos combined by the D60 rule)
     plus the AVG bottom row over everything in view — the workbook's
     BOOK AVG / LINE AVG / BU AVG line: an average of the state rows,
-    never a total. ``leg`` ∈ rate_leg | mod_leg | delivered. With
-    ``p1`` the columns run Jan P .. Dec P+1 (the Net Delivery grid);
-    otherwise Jan P−1 .. Dec P."""
+    never a total. ``leg`` ∈ rate_leg | mod_leg | delivered. Year bands
+    by flag: ``prior`` adds Jan..Dec P−1, ``p1`` adds Jan..Dec P+1
+    (rows[12:24] — the flow result carries the full 24 months); Jan..Dec
+    P is always present. ``prior`` defaults to ``not p1`` — the two
+    original shapes (P−1+P, and P+P+1 for the Net Delivery grid) keep
+    their spellings; the Program Flow grid asks for all three (W3h:
+    "program flow for 2028 doesn't show up")."""
+    if prior is None:
+        prior = not p1
     def cells(flows):
         rec = {}
+        n_plan = 24 if p1 else 12
+        plan = combine_rows(flows, "rows", slice(0, n_plan))
+        for j in range(12):
+            rec[f"pp{j + 1:02d}"] = plan[j][leg]
         if p1:
-            rows = combine_rows(flows, "rows", slice(0, 24))
             for j in range(12):
-                rec[f"pp{j + 1:02d}"] = rows[j][leg]
-                rec[f"q{j + 1:02d}"] = rows[j + 12][leg]
-        else:
-            prior = combine_rows(flows, "prior_rows", slice(0, 12))
-            plan = combine_rows(flows, "rows", slice(0, 12))
+                rec[f"q{j + 1:02d}"] = plan[j + 12][leg]
+        if prior:
+            pri = combine_rows(flows, "prior_rows", slice(0, 12))
             for j in range(12):
-                rec[f"pm{j + 1:02d}"] = prior[j][leg]
-                rec[f"pp{j + 1:02d}"] = plan[j][leg]
+                rec[f"pm{j + 1:02d}"] = pri[j][leg]
         return rec
 
     recs = []
@@ -441,7 +448,7 @@ def state_grid_frame(view: dict, all_flows: list, leg: str,
         recs.append({"state": st, **cells(flows)})
     if any(ep and ep > 0.0 for ep, _pf in all_flows):
         recs.append({"state": avg_label, **cells(all_flows)})
-    cols = ["state"] + grid_cols(prior=not p1, p1=p1)
+    cols = ["state"] + grid_cols(prior=prior, p1=p1)
     df = pd.DataFrame(recs, columns=cols)
     for c in cols[1:]:                    # None must SURVIVE (never NaN)
         df[c] = pd.Series([r.get(c) for r in recs], dtype=object)

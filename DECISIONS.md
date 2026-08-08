@@ -201,3 +201,56 @@ writings: 0.125 @ 1.0400 (pre-7/1/2026 rates), 0.59375 @ 1.1024, 0.28125 @ 1.157
 | D114 | **The Westfield Planning Workbench — the process starts in the app, and the app is the engine (2026-08-07, user directive).** John's flow today pastes tbl_LR, the rate log and the mod log per line into six workbooks and aggregates after; he asked for one master paste each, a central hub where planning starts with changes tracked and version controlled, and line or summary workbooks generated at will. Built as `app/` (Panel 1.9.3 in its own venv, framework glue lifted from wfmodelingworkbench) over four commitments. One: `Scenario` ≡ `CarriedInputs`, so a workbook import, a scenario file and an Excel export are one vocabulary, and closure is testable — workbook → app → workbook → app round-trips every table and toggle. Two: ONE calculation path (`sample_to_combo` → `engine.run_bridge`); the app's tests tie the mapping, never a second implementation of the math, and every visual (waterfalls, the earning parallelogram, the D93 monthly race, the ec(k,P) band) is an arrangement of engine output. Three: the session holds a book `{line → Scenario}` with one active line; masters carry an explicit leading **Line** column because a BU can write several lines (his answer — the line is never inferred), a pasted master replaces that table for pasted lines only, and unknown lines error naming the row. Four: outputs never collide with the verified fleet — per-line exports carry an `_APP` tag, the app-built fleet + summary Book land in `output/app/`, and the generator signs the Inputs banner "CARRIED FORWARD from Westfield Planning Workbench". Scenario yamls in `scenarios/` carry their own changelog (each save diffs the file it replaces, sentence-level: "Property · ABD|AZ: Net rate P 2.0% → 2.5%"); git supplies the version control. The closing proof is `master_text` ↔ `split_master`: masters generated from the fleet, pasted into an empty session, rebuild every combo's plan LR to 1e-12. | The alternative was the app as a viewer over workbooks, but the workbook was already the second artifact — the engine has been the truth since D1, and a hub that OWNS the inputs deletes the aggregate-after-the-fact step from the process instead of automating it. Excel stays what users SEE (John's one standing constraint) while demoting from medium of record to output format. Scars honored from the workbench rather than rediscovered: value_input vs blur, deaf dynamic Tabs, two-step confirms over pn.Modal, freeze-by-name, the visibility-flip Tabulator redraw. |
 | D115 | **The continuous net index had two defects; the fix made the net path a public, drawable object (2026-08-08).** `continuous_net_index` (1) branched its recursion on the evaluation point instead of the segment reference, so a Simpson segment ending exactly on 1/1/P read the right-hand limit of the sawtooth - up to ~1.4e-3 of error that the test tolerance of 1.5e-3 was wide enough to hide entirely; and (2) built its mod leg from a bare drift path, ignoring the D70 re-anchor - ~1e-2 for net combos with a mod log. The fix extracts `continuous_net_q(plan_year, combo) -> (q, jumps, kinks)`: the evaluator with ref-based branching, the DIAGONAL SET (historical changes, their 12/24-month anniversary echoes within the trailing year, the 1/1 restarts), and the mod-anchor kinks; `continuous_net_index` is now its thin Simpson consumer, and `_continuous_history_mod_path` dedups the re-anchor construction with `continuous_earned_mod` so it cannot be honored in one place and forgotten in another. Pinned by brute-force integration at 1e-7 (jump-aligned grid) and the monthly tie tightened 1.5e-3 -> 5e-5. | No published workbook value consumes this function (the continuous convention runs net combos only, and the worked example is non-net, pinned) - the full release harness re-verified every workbook after the fix. The reason it became PUBLIC rather than just fixed: the app's on-leveling exhibit now draws the net path as John's own diagonal construction (q(k) = q(k-12) x (1+x) on written cohorts - restarts sawtooth DOWN when the book out-earned the selection, and that is correct), and importing the evaluator, jump set and kink set from the engine keeps ONE calculation path: the exhibit labels and the oracle cross-check are the same callable. One convention documented while here: the monthly engine interpolates mod anchors in day-ordinal space, every continuous twin in month coordinates - same anchor values, different interpolation between them, a gap that scales with drift slope (~4e-4 on a steep re-anchor tail) and is disclosed, not hidden. |
 | D116 | **Wave 3: beyond Excel — the app stops porting exhibits and starts outrunning them (2026-08-08).** Seven waves on John's eight observations plus his directive to "leverage the additional capabilities we have outside of excel". (a) The readability floor: theme.TABLE_CSS on every Tabulator kills the Fast theme's white-on-hover repaint; every table grows to its roster under a cap; the Summary TOTAL pin (silently broken since W2b - frozen_rows=[-1] resolves once against an empty frame) now follows the roster; the Book table's sticky auto-pagination became an explicit local/100. (b) The on-level rectangle draws the NET path as John's own diagonal construction (restarts sawtooth at each 1/1, anniversary echoes of the trailing year's filings) over a 36-month window with CY P-1, with a program-basis flip and a 24/36 window control - see D115 for the engine fix underneath. (c) The State Summary reads levers -> inputs -> outputs with the two plan-LR columns FROZEN at the right edge (ungrouped - Tabulator ignores frozen inside a column group), the banner above the table, the notes folded, undo inline, and a LAST-CHANGE impact strip (before -> after for the edited state and TOTAL, 1:1 with the undo stack, tied at 1e-12). (d) The Combo page gained the Flow Dashboard (36-month written-vs-earned, runway, delivered-vs-locked, the carryover ledger tying yoy_earned_p1), the walk table + D46 reconciliation, and the Net Delivery MICROSCOPE (suggest/required-M1/required-mod-step closed forms, log-scaled share chart). (e) A new book-level Flow page: Program Flow state-by-month grids with BOOK/LINE/BU AVG via the engine's EP x w rule (app combiner pinned to combined_flow_by_month at 1e-15 and extended to the P+1 half), the Net Delivery report, and the never-aggregate required-pricing rule enforced per row. (f) The masters moved to Inputs - apply_master takes the session and works on an empty book, so the app's landing page is the true cold start; nav renamed (Inputs / Book / State Summary / Flow / Deep dive / Scenarios / Guide, slugs unchanged); the eleven ad-hoc greys collapsed to a four-step ramp, one exhibit stylesheet attached per pane instead of style blocks re-sent per update, dead theme code deleted. | The doctrine that held it together: FLOW REPORTS, SUMMARY EDITS, COMBO PRESCRIBES - the workbook's own split, now the app's page architecture. Every exhibit remains an arrangement of engine output pinned by pivot-check tests; interactivity changed presentation, never math. |
+
+
+## D117 — The first live session is the review that matters (A-W3h)
+
+John drove wave 3 with his real book and returned six observations.
+Each traced to a real defect; the wave fixed all six with tests and a
+live smoke. Three carry lessons worth recording.
+
+**The cache assumption a feature falsified.** book_results /
+program_results / flow_results invalidated only the ACTIVE line on a
+bus bump — true when the grids (which write the active scenario alone)
+were the only writers, and falsified by W2c's own levers: a Summary
+net selection fans out to every line in the row's view. An edit
+landing on a non-active line recomputed nothing until data_version
+moved, which read as "inputs don't affect the plan LR." The fix drops
+the optimization: every bump revalidates every line, and the caches
+serve what caches are for — repeated reads at one rev. compute.py's
+own docstring stated the bar ("simple and impossible to
+under-invalidate"); the lesson is that an invalidation rule is part of
+every WRITER's contract, and a new writer must re-derive it, not
+inherit it.
+
+**Mounted pages need gated watchers.** Pages build lazily and stay
+mounted (P4 — an objects swap re-renders every Bokeh view), but their
+bus/data_rev watchers kept firing while hidden: after John visited all
+seven pages, one keystroke re-rendered all of them. gate_hidden wraps
+each page's heavy render: hidden pages skip; the router flips
+`visible` before calling on_show, and every page's on_show is a full
+render, so a hidden page catches up exactly when shown. Deep dive —
+the heaviest page — gained the on_show hook it had always been missing
+(its Tabulators had survived re-shows only because every edit
+re-rendered them constantly).
+
+**The editor's empty value is part of the edit surface.** The Summary
+table cannot carry per-column configuration (groups forbids
+configuration["columns"]), so W2a's editorEmptyValue fix never reached
+it: focusing an empty Net rate sel cell opened an empty number editor
+whose blur committed 0 — net mode ON at 0% across the row's view, from
+a click. columnDefaults.editorEmptyValue=None (legal beside groups,
+safe table-wide since every text lever treats "" and None identically)
+plus a server-side blank→blank no-op guard in the router closes it
+from both ends.
+
+Smaller repairs, same session: an Active-line Select on Inputs and
+Deep dive (switching had lived only on the Book page's click-through;
+the selector sets options and value together under a guard because
+sync_options' prune-to-first would read as a user gesture and steal
+the active line); master pastes fill a blank Line down (a real Excel
+master names the line once per block — merged cells paste exactly
+that shape; the old loud error applied nothing, which read as "line
+seems to disappear"); and the Program Flow grid runs all three years
+(the flow result always carried 24 plan-rooted months — the page had
+been showing 12; per-year color scales, P−1 still behind its toggle).

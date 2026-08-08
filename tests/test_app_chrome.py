@@ -212,3 +212,110 @@ def test_inputs_is_the_cold_start_and_context_bar_names_the_line():
     session.replace_config(importers.from_workbook(
         ROOT / "output" / "Plan_LR_Workbook_2027_Property.xlsx"))
     assert "Editing: Property" in page["context"].object
+
+
+# ------------------------------------------------------ W3h live punch list
+
+@_needs_panel
+def test_gate_hidden_skips_and_catches_up_on_show():
+    """One keystroke was re-rendering every mounted page (John: 'the app
+    seems to get hung up a lot'). The gate: hidden pages skip; the
+    router's on_show call — which every page answers with a full render
+    — catches them up. Unattached gates are permissive so build-time
+    first renders pass."""
+    import panel as pn
+
+    from app.glue.bindings import gate_hidden
+
+    ran = []
+    gated = gate_hidden(lambda *e: ran.append(1))
+    gated()
+    assert len(ran) == 1                    # permissive before attach
+    col = pn.Column()
+    gated.attach(col)
+    gated()
+    assert len(ran) == 2                    # visible: runs
+    col.visible = False
+    gated()
+    assert len(ran) == 2                    # hidden: skipped
+    col.visible = True
+    gated()
+    assert len(ran) == 3
+
+
+@_needs_panel
+def test_hidden_summary_skips_the_render_until_shown():
+    """Page-level: hide the Summary main, bump the bus, and the table
+    must NOT recompute; on_show catches it up — the same contract the
+    live router relies on."""
+    from app import importers
+    from app.glue.session import PlanSession
+    from app.pages import state_summary as ss_page
+
+    session = PlanSession()
+    page = ss_page.build(session)
+    session.replace_config(importers.from_workbook(WB_PROP))
+    st = page["table"].value.iloc[0]["state"]
+    meta = page["holder"]["meta"]
+    combos = meta.view[st]
+
+    page["main"].visible = False
+    for _lob, _s, _k, _bu, row, _res in combos:
+        row["netp"] = 0.19
+    session.bus.bump()                      # headless debounce = synchronous
+    df = page["table"].value
+    assert df.loc[df["state"] == st, "netsel"].iloc[0] != pytest.approx(0.19)
+
+    page["main"].visible = True
+    page["on_show"]()
+    df = page["table"].value
+    assert df.loc[df["state"] == st, "netsel"].iloc[0] == pytest.approx(0.19)
+
+
+@_needs_panel
+def test_every_heavy_page_returns_on_show():
+    """The gate is only safe because the router's on_show call fully
+    re-renders — every gated page must expose the hook (the Deep dive
+    page shipped W3 without one)."""
+    from app.glue.session import PlanSession
+    from app.pages import book, combo, flow, inputs, scenarios, \
+        state_summary
+
+    session = PlanSession()
+    for mod in (inputs, book, state_summary, flow, combo, scenarios):
+        page = mod.build(session)
+        assert callable(page.get("on_show")), mod.__name__
+
+
+@_needs_panel
+def test_active_line_selectors_on_inputs_and_deep_dive():
+    """W3h: "i dont know how to change the line i am looking at on deep
+    dive" — both editing surfaces carry an active-line Select that
+    follows activation and switches it, without stealing the active
+    line on programmatic refreshes."""
+    from app import importers
+    from app.glue.session import PlanSession
+    from app.pages import combo as combo_page
+    from app.pages import inputs as inputs_page
+
+    session = PlanSession()
+    ipage = inputs_page.build(session)
+    cpage = combo_page.build(session)
+    session.replace_config(importers.from_workbook(WB_GL))
+    session.replace_config(importers.from_workbook(WB_PROP))
+
+    for page in (ipage, cpage):
+        sel = page["line_sel"]
+        assert set(sel.options) == {"Property", "General Liability"}
+        assert sel.value == "Property"      # follows the ACTIVE line
+
+    # switching on Deep dive activates and the Inputs selector follows
+    cpage["line_sel"].value = "General Liability"
+    assert session.page.config.lob == "General Liability"
+    assert ipage["line_sel"].value == "General Liability"
+    assert "General Liability" in ipage["context"].object
+
+    # activation elsewhere (Book click-through path) moves both selectors
+    session.activate("Property")
+    assert cpage["line_sel"].value == "Property"
+    assert ipage["line_sel"].value == "Property"

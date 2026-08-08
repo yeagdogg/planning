@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 WB_PROP = ROOT / "output" / "Plan_LR_Workbook_2027_Property.xlsx"
+WB_GL = ROOT / "output" / "Plan_LR_Workbook_2027_General_Liability.xlsx"
 
 
 # ------------------------------------------------------------- undo (pure)
@@ -327,3 +328,70 @@ def test_impact_strip_pops_with_undo_and_clears_on_load():
     session.replace_config(importers.from_workbook(WB_PROP))
     assert page["impact"]["stack"] == []
     assert page["impact"]["pane"].object == ""
+
+
+# ------------------------------------------------------ W3h live punch list
+
+@needs_panel
+def test_click_into_an_empty_cell_is_not_a_gesture():
+    """John's live repro: clicking into an EMPTY Net rate sel cell
+    committed the editor's empty value — before editorEmptyValue that
+    was 0, silently writing net mode ON at 0% to every combo in the
+    row's view. The columnDefaults fix makes the commit None; the
+    router treats blank -> blank as no gesture: no fan-out, no flash,
+    no bump."""
+    import math
+    from types import SimpleNamespace as NS
+    session, page = _page_session()
+    meta = page["holder"]["meta"]
+    st = next(s for s in meta.states
+              if all(c[4].get("netp") is None for c in meta.view[s]))
+    rev0, flash0 = session.bus.rev, page["flash"].object
+    df = page["table"].value
+    row = int(df.index[df["state"] == st][0])
+    old = df.iloc[row]["netsel"]
+    assert old is None or (isinstance(old, float) and math.isnan(old))
+    for committed in (None, "", float("nan")):
+        page["edit_router"](NS(column="netsel", row=row,
+                               value=committed, old=old))
+    assert session.bus.rev == rev0                 # nothing happened
+    assert page["flash"].object == flash0
+    assert all(c[4].get("netp") is None for c in meta.view[st])
+    assert page["undo_btn"].disabled               # nothing to undo
+    # and the client half of the fix ships in the configuration
+    cfg = page["table"]._configuration
+    assert cfg["columnDefaults"]["editorEmptyValue"] is None
+
+
+@needs_panel
+def test_a_lever_on_a_non_active_line_moves_plan_lr():
+    """The stale-cache bug distilled at page level (W3h): with two
+    lines loaded and Property ACTIVE, a net lever on a General
+    Liability row must move that row's plan LR in the patched frame —
+    active-line-only cache invalidation served the stale line until
+    something moved data_version (John: "inputs on state summary don't
+    seem to affect the plan lr")."""
+    import math
+    from app import importers
+    from app.glue.session import PlanSession
+    from app.pages import state_summary as ss_page
+    session = PlanSession()
+    page = ss_page.build(session)
+    session.replace_config(importers.from_workbook(WB_GL))
+    session.replace_config(importers.from_workbook(WB_PROP))
+    assert session.page.config.lob == "Property"   # GL is NOT active
+    page["filters"]["line"].value = ["General Liability"]
+
+    df0 = page["table"].value
+    body = df0[df0["state"] != "TOTAL"]
+    row0 = next(r for _i, r in body.iterrows()
+                if isinstance(r["planlr"], float)
+                and not math.isnan(r["planlr"]))
+    st, before = row0["state"], float(row0["planlr"])
+
+    page["edit_router"](_ev(page, st, "netsel", 0.15))
+    assert session.page.config.lob == "Property"   # still not active
+    df1 = page["table"].value
+    after = float(df1.loc[df1["state"] == st, "planlr"].iloc[0])
+    assert abs(after - before) > 1e-6, \
+        "the non-active line's plan LR must move without a data_version bump"

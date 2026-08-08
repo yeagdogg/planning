@@ -16,7 +16,8 @@ import panel as pn
 from src import engine
 
 from app import compute, importers
-from app.glue.bindings import WatcherBag, debounce, sync_options
+from app.glue.bindings import WatcherBag, debounce, gate_hidden, \
+    sync_options
 from app.glue.engineio import run_async
 from app.glue.exhibit import chip, chips_html, html_pane as ex_html_pane
 from app.glue.format import DASH, TAB_SPECS, fmt_dollar, fmt_idx, fmt_pct, \
@@ -116,6 +117,39 @@ def build(session):
         run_async(lambda: importers.from_workbook(path), _done, _err)
 
     open_btn.on_click(_open)
+
+    # ---- the ACTIVE line (W3h): "i dont know how to change the line i am
+    # looking at on deep dive" — the only switcher lived on the Book page.
+    # Options and value are set TOGETHER under a guard (sync_options would
+    # prune a stale value to the FIRST option, and that assignment would
+    # read as a user gesture and steal the active line).
+    line_sel = pn.widgets.Select(label="Line", options=[],
+                                 sizing_mode="stretch_width")
+    switching = {"on": False}
+
+    def _line_refresh(*_events):
+        s = session.page.config
+        book = session.page.book
+        switching["on"] = True
+        try:
+            line_sel.options = list(book)
+            line_sel.value = (s.lob if s is not None and s.lob in book
+                              else next(iter(book), None))
+        finally:
+            switching["on"] = False
+
+    bag.watch(session.ctx, _line_refresh, "data_rev")
+    _line_refresh()
+
+    def _switch_line(event):
+        if switching["on"] or not event.new:
+            return
+        s = session.page.config
+        if s is not None and s.lob == event.new:
+            return
+        session.activate(event.new)
+
+    line_sel.param.watch(_switch_line, "value")
 
     combo_sel = pn.widgets.Select(label="BU | State", options=[],
                                   sizing_mode="stretch_width")
@@ -489,11 +523,15 @@ def build(session):
             _clear_visuals(f"⚠ visuals unavailable: {md_safe(e)}")
 
     # grid keystrokes arrive as bus bumps (P2); coalesce bursts into one
-    # recompute+render shortly after the last event
+    # recompute+render shortly after the last event. Hidden pages skip
+    # the render entirely and catch up via on_show (W3h) — this is the
+    # heaviest page in the app, and it was re-rendering seven charts on
+    # every edit made anywhere else.
+    render_g = gate_hidden(_render)
     rail_rev = debounce(session.bus.param.rev, delay_ms=250, bag=bag)
-    bag.watch(rail_rev, _render, "rev")
-    bag.watch(session.ctx, _render, "data_rev")
-    combo_sel.param.watch(_render, "value")
+    bag.watch(rail_rev, render_g, "rev")
+    bag.watch(session.ctx, render_g, "data_rev")
+    combo_sel.param.watch(render_g, "value")
     ol_window.param.watch(_render, "value")
     ol_basis.param.watch(_render, "value")
     nd_eff.param.watch(_render, "value")
@@ -502,13 +540,17 @@ def build(session):
 
     sidebar = pn.Column(
         pn.pane.Markdown("**Scenario**"),
-        pick, open_btn, status,
+        line_sel, combo_sel,
         pn.layout.Divider(),
-        combo_sel,
+        pn.pane.Markdown("*Open one workbook directly — it joins the "
+                         "book as its line:*"),
+        pick, open_btn, status,
         sizing_mode="stretch_width")
     main = pn.Column(chips_pane, card, vis_note, tabs,
                      sizing_mode="stretch_both")
+    render_g.attach(main)
     return {"main": main, "sidebar": sidebar, "bag": bag,
+            "on_show": _render, "line_sel": line_sel,
             "card": card, "combo_sel": combo_sel,
             "panes": {"waterfall_p": wf_p, "waterfall_p1": wf_p1,
                       "earn_lag": lag_pane, "parallelogram": para_pane,

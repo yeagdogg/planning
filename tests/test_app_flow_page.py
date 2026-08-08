@@ -6,7 +6,8 @@ degenerate case); the BOOK AVG row is that same function at 1e-12; the
 aggregation doctrine (delivered-is-exact, mod-leg gating, net targets
 over net combos only, the never-aggregate required-pricing rule) is
 encoded as tests, not prose. The cache discipline is the book_results
-contract: a bus bump recomputes only the ACTIVE line.
+contract (W3h): a bus bump revalidates EVERY line — the Summary's
+levers write to any line in view.
 """
 from __future__ import annotations
 
@@ -163,6 +164,37 @@ def test_grid_frame_states_plus_avg_row(sess):
                                                abs=1e-12)
 
 
+def test_program_grid_carries_all_three_years(sess):
+    """W3h — "program flow for 2028 doesnt show up": the Program Flow
+    grid asks for prior AND p1 together and gets pm (P−1), pp (P) and q
+    (P+1) columns, the q half tied to rows[12:24]; the two original
+    shapes keep their default spellings."""
+    from app.views.flow import combine_rows, grid_cols, state_grid_frame
+    _scn, flows = _flows(sess)
+    view: dict = {}
+    for ep, pf, r in flows:
+        view.setdefault(r["state"], []).append(
+            dict(ep=ep, pf=pf, netp=r.get("netp")))
+    pairs = [(ep, pf) for ep, pf, _r in flows]
+    df = state_grid_frame(view, pairs, "delivered", "BOOK AVG",
+                          p1=True, prior=True)
+    assert list(df.columns) == ["state"] + grid_cols(prior=True, p1=True)
+    want = combine_rows(pairs, "rows", slice(0, 24))
+    wpri = combine_rows(pairs, "prior_rows", slice(0, 12))
+    for j in range(12):
+        assert df.iloc[-1][f"pm{j + 1:02d}"] == pytest.approx(
+            wpri[j]["delivered"], abs=1e-12)
+        assert df.iloc[-1][f"pp{j + 1:02d}"] == pytest.approx(
+            want[j]["delivered"], abs=1e-12)
+        assert df.iloc[-1][f"q{j + 1:02d}"] == pytest.approx(
+            want[j + 12]["delivered"], abs=1e-12)
+    # the default spellings did not move (the Net Delivery grid's shape)
+    nd = state_grid_frame(view, pairs, "delivered", "BOOK AVG", p1=True)
+    assert list(nd.columns) == ["state"] + grid_cols(prior=False, p1=True)
+    pf_only = state_grid_frame(view, pairs, "delivered", "BOOK AVG")
+    assert list(pf_only.columns) == ["state"] + grid_cols(prior=True)
+
+
 def test_nd_summary_targets_over_net_combos_only(sess):
     from app.views.flow import nd_summary_frame
     scn, flows = _flows(sess)
@@ -205,29 +237,31 @@ def test_required_pricing_gates_on_single_net_combo(sess):
 
 
 def test_flow_results_cache_discipline(sess):
-    """The book_results contract: a bus bump recomputes only the ACTIVE
-    line; a data_version bump revalidates everything."""
+    """The book_results contract, W3h: a bus bump revalidates EVERY
+    line (the Summary's levers write to any line in view — active-only
+    invalidation was the live stale-plan-LR bug); repeated reads at one
+    rev serve cached; a data_version bump revalidates everything."""
     from unittest.mock import patch
 
     from src import engine as eng_mod
 
     from app import compute
     compute.flow_results(sess)                          # warm
+    total = sum(1 for scn in sess.page.book.values()
+                for r in scn.lr_rows
+                if r.get("bu") and r.get("state"))
     with patch.object(eng_mod, "program_flow_by_month",
                       wraps=eng_mod.program_flow_by_month) as spy:
         compute.flow_results(sess)                      # cached: no calls
         assert spy.call_count == 0
-        sess.bus.rev += 1                               # active line only
+        sess.bus.rev += 1                               # any edit, any line
         compute.flow_results(sess)
-        active = sum(1 for r in sess.page.book["Property"].lr_rows
-                     if r.get("bu") and r.get("state"))
-        assert spy.call_count == active
+        assert spy.call_count == total
         spy.reset_mock()
-        sess.page.data_version += 1                     # everything
+        compute.flow_results(sess)                      # same rev: cached
+        assert spy.call_count == 0
+        sess.page.data_version += 1                     # load: everything
         compute.flow_results(sess)
-        total = sum(1 for scn in sess.page.book.values()
-                    for r in scn.lr_rows
-                    if r.get("bu") and r.get("state"))
         assert spy.call_count == total
 
 
@@ -250,6 +284,11 @@ def test_flow_page_builds_and_renders():
     gdf = page["grid_tbl"].value
     assert gdf.iloc[-1]["state"] == "BOOK AVG"
     assert page["grid_tbl"].frozen_rows == [len(gdf) - 1]
+    # W3h: the P+1 (2028) half rides the program grid, never hidden
+    assert "q12" in gdf.columns
+    assert gdf.iloc[-1]["q01"] is not None
+    assert page["grid_tbl"].titles["q01"] == "Jan 2028"
+    assert "q01" not in page["grid_tbl"].hidden_columns
     # prior columns hidden until the toggle
     assert "pm01" in page["grid_tbl"].hidden_columns
     page["show_prior"].value = True

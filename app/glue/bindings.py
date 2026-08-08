@@ -165,6 +165,37 @@ def coalesce(fn, delay_ms: int = 400):
     return trigger
 
 
+# -------------------------------------------------------- visibility gate
+
+def gate_hidden(render):
+    """Skip a page-level render while its page is hidden (W3h).
+
+    Pages build lazily on first visit and STAY MOUNTED (main.py) — an
+    objects swap would re-render every Bokeh view on each switch. But
+    mounted pages keep their bus/data_rev watchers, so once the user had
+    visited all seven pages, every edit re-rendered every one of them —
+    John: "the app seems to get hung up a lot". The router flips
+    ``visible`` BEFORE calling ``on_show``, and every page's on_show
+    does a full render — so a hidden page can skip freely: it catches
+    up the moment it is shown.
+
+    Wrap the render, wire the WRAPPER to the watchers, and call
+    ``gated.attach(main_column)`` once the page's main container exists;
+    until then the gate is permissive (build-time renders pass). Cheap
+    watchers (sync_options, focus adoption) stay UNgated — stale options
+    on a hidden page would not fix themselves on show."""
+    box = {"col": None}
+
+    def gated(*events):
+        col = box["col"]
+        if col is not None and not col.visible:
+            return
+        render(*events)
+
+    gated.attach = lambda col: box.__setitem__("col", col)
+    return gated
+
+
 # ---------------------------------------------------------- option syncing
 
 def sync_options(selector, compute_options: Callable[[], list],

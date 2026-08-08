@@ -23,7 +23,8 @@ import re
 import panel as pn
 
 from app import compute, summary
-from app.glue.bindings import WatcherBag, debounce, sync_options
+from app.glue.bindings import WatcherBag, debounce, gate_hidden, \
+    sync_options
 from app.glue.exhibit import banner, echo_html, echo_pane, exhibit_header, \
     note_list
 from app.glue.format import TAB_SPECS, fmt_pct, md_safe
@@ -197,8 +198,16 @@ def build(session):
                        # configuration["columns"] cannot coexist with
                        # `groups` (Panel raises); columnDefaults is legal
                        # beside groups and lets the long headers wrap
-                       # instead of forcing 200px columns
-                       "columnDefaults": {"headerWordWrap": True}},
+                       # instead of forcing 200px columns.
+                       # editorEmptyValue is the W2a zero-commit fix,
+                       # table-wide (W3h): clicking into an EMPTY Net
+                       # rate sel cell was committing 0 — net mode ON at
+                       # 0% on every combo in the row's view. Safe
+                       # table-wide here: every text lever treats "" and
+                       # None identically, and computed columns carry no
+                       # editor at all.
+                       "columnDefaults": {"headerWordWrap": True,
+                                          "editorEmptyValue": None}},
         sizing_mode="stretch_width")
 
     flash = pn.pane.Markdown("", sizing_mode="stretch_width")
@@ -371,7 +380,18 @@ def build(session):
             return float(raw)
         return coerce("pct", str(raw))
 
+    def _blank(v):
+        import math
+        return (v is None or v == ""
+                or (isinstance(v, float) and math.isnan(v)))
+
     def _route_edit(event):
+        # a click-in/click-out on an empty editable cell commits the
+        # editor's EMPTY value — blank -> blank is not a gesture (W3h;
+        # before editorEmptyValue it committed 0, writing a 0% net
+        # target to every combo in the row's view)
+        if _blank(event.value) and _blank(event.old):
+            return
         meta = holder["meta"]
         df = table.value
         if meta is None or df is None or not (0 <= event.row < len(df)):
@@ -572,11 +592,15 @@ def build(session):
 
     bag.watch(session.ctx, _on_data_rev, "data_rev")
 
+    # hidden pages skip the render and catch up via on_show (W3h);
+    # the undo/strip clearing above stays ungated — stale locators must
+    # die even while the page is hidden
+    render_g = gate_hidden(_render)
     rail_rev = debounce(session.bus.param.rev, delay_ms=300, bag=bag)
-    bag.watch(rail_rev, _render, "rev")
-    bag.watch(session.ctx, _render, "data_rev")
+    bag.watch(rail_rev, render_g, "rev")
+    bag.watch(session.ctx, render_g, "data_rev")
     for f in (line_f, bu_f):
-        bag.watch(f, _render, "value")
+        bag.watch(f, render_g, "value")
     _render()
 
     sidebar = pn.Column(
@@ -601,6 +625,7 @@ def build(session):
                      note_list([_NOTE_LEVERS, _NOTE_CHAIN]),
                      fine_print,
                      sizing_mode="stretch_both")
+    render_g.attach(main)
     return {"main": main, "sidebar": sidebar, "bag": bag,
             "table": table, "holder": holder, "flash": flash,
             "filters": {"line": line_f, "bu": bu_f},
